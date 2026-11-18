@@ -1172,6 +1172,12 @@ with tempfile.TemporaryDirectory() as scratch:
     # The dark theme on a terminal whose background isn't herdr's: the frame is that
     # background and the sheets keep their step from it.
     shoot("02-code-other-terminal", [], CODE_FILE, background="282c34")
+
+    # More tabs than the strip holds: the wheel over it moves it a tab a notch, the counts at
+    # its ends following, and the tab in front stays in front.
+    many = ["README.md", "docs/PLAN.md", "Cargo.toml", CODE_FILE]
+    shoot("m4-tabs-strip", [["until", "‹"], ["wait", 0.4]], *many, size="84x40")
+    shoot("m4-tabs-wheel", [["until", "‹"], ["wheel", 45, 0, -3], ["wait", 0.6]], *many, size="84x40")
     shoot("03-page", [], PAGE_FILE)
     shoot("04-menu-page", [["right", 60, 12]], PAGE_FILE)
     shoot("05-menu-code", [["right", 60, 12]], CODE_FILE)

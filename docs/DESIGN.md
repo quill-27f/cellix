@@ -1094,7 +1094,12 @@ Under 80 columns, about what Claude Code leaves Cellix beside its chat, the layo
 for that width rather than squeezed. The five panel icons lead the side pane's header, as
 VS Code's panel shows its views, with the one showing named and no tab of its own. The top
 right keeps one icon that shows or hides the pane. Tabs out of view are
-counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs.
+counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs. The wheel over the file's strip of tabs moves it sideways, a tab a notch, when they don't all
+fit, as VS Code's does, with the counts at its ends following; the tab in front stays in
+front and may go out of view, until another is chosen, which brings the strip to it. With
+every tab in view the wheel there does nothing. The side pane keeps every tab in view, cut
+short as it must, so there the wheel only steps from tab to tab where the tab in front shows
+alone with its chevron, as moving the strip would bring the next into view.
 A side pane whose tabs don't all fit before the icons at the top right keeps every tab in
 the row. The one in front, a tab in the shape every tab has, hugs its measured name and its ×, with none
 of the slack a tab has when there's room, since that slack is what would cut its neighbours.

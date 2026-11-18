@@ -1523,6 +1523,9 @@ pub struct App {
     /// What the person named tabs of the side pane, as the last run left them, until the
     /// sessions they name are joined again.
     kept_names: std::collections::BTreeMap<String, String>,
+    /// Where the wheel turned the strip of tabs to, as (its first tab, the tab in front then),
+    /// which holds while that tab stays in front.
+    strip_first: std::cell::Cell<Option<(usize, usize)>>,
     /// The step spinners stand at, in place of the clock's, for a test to choose.
     #[cfg(test)]
     pub(crate) turn_at: Option<u8>,
@@ -1652,6 +1655,7 @@ impl App {
             agent_program: None,
             #[cfg(test)]
             turn_at: None,
+            strip_first: std::cell::Cell::new(None),
             kept_names: std::collections::BTreeMap::new(),
             spell: None,
             spell_on: cfg!(not(test)) && settings.spell_check != Some(false),
@@ -1801,6 +1805,8 @@ impl App {
 
     fn set_active(&mut self, index: usize) {
         self.panes[self.focus] = index;
+        // A tab chosen brings the strip of tabs back to it, wherever the wheel had turned it.
+        self.strip_first.set(None);
         // A file brought to the front stands where the Task page was.
         self.task_shown = false;
         let path = self.editors.get(index).and_then(|e| e.buffer.path());
@@ -9673,6 +9679,31 @@ impl App {
             return false;
         }
         if y == area.y {
+            // The side pane keeps every tab in view, cut short as it must, so the wheel has
+            // nothing to move there, but where only the tab in front shows, it steps through
+            // them, as moving the strip would bring the next into view.
+            if matches!(
+                mouse.kind,
+                MouseKind::ScrollUp
+                    | MouseKind::ScrollDown
+                    | MouseKind::ScrollLeft
+                    | MouseKind::ScrollRight
+            ) {
+                if self.dock.picking(self.title_of(area)) {
+                    let on = matches!(mouse.kind, MouseKind::ScrollDown | MouseKind::ScrollRight);
+                    let tabs = self.dock.every_tab();
+                    let front = tabs.iter().position(|(.., front)| *front);
+                    let next = match (front, on) {
+                        (Some(at), true) => (at + 1 < tabs.len()).then_some(at + 1),
+                        (Some(at), false) => at.checked_sub(1),
+                        (None, _) => None,
+                    };
+                    if let Some(next) = next {
+                        self.show_pane_tab(tabs[next].0);
+                    }
+                }
+                return true;
+            }
             if mouse.kind == MouseKind::Right
                 && let Some(TabHit::Tab(index) | TabHit::Close(index)) =
                     self.dock.hit(self.title_of(area), x)
@@ -13521,6 +13552,20 @@ impl App {
             return;
         }
         let in_sidebar = self.sidebar_area().is_some_and(|a| a.contains(x, y));
+        // The wheel over the strip of tabs moves it sideways when they don't all fit, as
+        // VS Code's does, and does nothing when they do.
+        let wheel = matches!(
+            mouse.kind,
+            MouseKind::ScrollUp
+                | MouseKind::ScrollDown
+                | MouseKind::ScrollLeft
+                | MouseKind::ScrollRight
+        );
+        if wheel && !in_sidebar && self.tabs_area().contains(x, y) && !self.plan_in_view() {
+            let on = matches!(mouse.kind, MouseKind::ScrollDown | MouseKind::ScrollRight);
+            self.turn_tab_strip(on);
+            return;
+        }
         if self.settings_page.is_some() && !in_sidebar {
             self.settings_mouse(mouse);
             return;
@@ -14892,6 +14937,25 @@ impl App {
         self.tab_strip().0
     }
 
+    /// Moves the strip of tabs a tab on, or back, when they don't all fit: the tab in front
+    /// stays in front, and may go out of view, as it does in VS Code.
+    fn turn_tab_strip(&mut self, on: bool) {
+        let (tabs, before, after) = self.tab_strip();
+        let Some(&(first, ..)) = tabs.first() else {
+            return;
+        };
+        let next = match (on, before.is_some(), after.is_some()) {
+            (true, _, true) => first + 1,
+            (false, true, _) => first - 1,
+            _ => return,
+        };
+        let active = match self.task_tab() {
+            Some(task) if self.task_shown() => task,
+            _ => self.active().min(self.editors.len().saturating_sub(1)),
+        };
+        self.strip_first.set(Some((next, active)));
+    }
+
     /// What a "‹ 3 more" or "2 more ›" at the end of the tabs says, for tabs out of view.
     fn more_label(count: usize, before: bool) -> String {
         if before {
@@ -14943,7 +15007,9 @@ impl App {
         if widths.iter().sum::<u16>() <= area.w {
             return (place(0, count, 0), None, None);
         }
-        for first in 0..=active {
+        // The strip from its `first` tab on: as many whole tabs as fit, with a chip at each
+        // end for those out of view, and where it ends.
+        let from = |first: usize| {
             let left = if first > 0 {
                 self.more_width(first, true)
             } else {
@@ -14961,15 +15027,29 @@ impl App {
                 end -= 1;
                 used -= widths[end];
             }
+            let tabs = place(first, end, left);
+            let chip = |x: u16, w: u16| Rect::new(x, area.y, w.saturating_sub(1), 1);
+            let before = (first > 0).then(|| (chip(area.x, left), first));
+            let after = (end < count).then(|| {
+                let width = self.more_width(count - end, false);
+                (chip(area.x + used, width), count - end)
+            });
+            ((tabs, before, after), end)
+        };
+        // Turned by the wheel, it stays where it was turned to until another tab is chosen.
+        if let Some((first, then)) = self.strip_first.get()
+            && then == active
+            && first < count
+        {
+            let (strip, end) = from(first);
+            if end > first {
+                return strip;
+            }
+        }
+        for first in 0..=active {
+            let (strip, end) = from(first);
             if end > active {
-                let tabs = place(first, end, left);
-                let chip = |x: u16, w: u16| Rect::new(x, area.y, w.saturating_sub(1), 1);
-                let before = (first > 0).then(|| (chip(area.x, left), first));
-                let after = (end < count).then(|| {
-                    let width = self.more_width(count - end, false);
-                    (chip(area.x + used, width), count - end)
-                });
-                return (tabs, before, after);
+                return strip;
             }
         }
         // Too narrow for anything but the tab in front, which gets what there is.
@@ -18591,6 +18671,8 @@ mod agents_list_tests;
 mod motion_tests;
 #[cfg(test)]
 mod shell_tab_tests;
+#[cfg(test)]
+mod strip_tests;
 #[cfg(test)]
 mod theme_tests;
 #[cfg(test)]

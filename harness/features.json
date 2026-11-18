@@ -5710,5 +5710,19 @@
     "title": "The dark theme is herdr's graphite: its frame, sheets, menus, washes, text, blue and meaning colours, and its terminal's sixteen",
     "test": "a_dark_window_wears_herdrs_graphite",
     "passes": true
+  },
+  {
+    "id": "tab-strip-wheel",
+    "milestone": 15,
+    "title": "The wheel over the file's strip of tabs moves it sideways a tab a notch when they don't all fit, the counts at its ends following and the tab in front staying in front; with every tab in view it does nothing",
+    "test": "the_wheel_over_the_tabs_moves_them_sideways_when_they_dont_all_fit",
+    "passes": true
+  },
+  {
+    "id": "pane-tabs-wheel",
+    "milestone": 15,
+    "title": "The wheel over the side pane's tabs steps from tab to tab where only the tab in front shows, and does nothing while every tab is in view",
+    "test": "the_wheel_over_the_side_panes_tabs_steps_through_them_when_one_shows",
+    "passes": true
   }
 ]

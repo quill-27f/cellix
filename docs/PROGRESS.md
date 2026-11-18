@@ -3027,3 +3027,13 @@ Found while integrating 0.11.0: about 25,500 session folders (118 MB) had built 
 - `harness/x check` and `harness/x test` (so `verify` too) now give each run a cache folder of its own under `/tmp` (`XDG_CACHE_HOME`; `/tmp` because a socket's path must fit in about a hundred bytes), and when the run ends they stop any session host left running there and remove the folder.
 - The PTY harness's per-project caches go under that folder when the run has one, so they're cleared with it.
 - Not done: the folders already in the person's cache are theirs to clear (asked); running `cargo test` by hand, outside `harness/x`, still uses the real cache.
+
+## The wheel over a strip of tabs (2026-11-18)
+
+Item 16 of the herdr round.
+
+- As in VS Code: when the file's tabs don't all fit, the wheel over the strip moves it sideways, a tab a notch, down and right onward and up and left back, the "‹ 2 more" and "3 more ›" at its ends following (`App::turn_tab_strip`). The tab in front stays in front and may go out of view; choosing another tab brings the strip to it again (`strip_first` holds while the tab in front is the one it was turned with). With every tab in view the wheel there does nothing, and no longer reaches the file under it.
+- The side pane keeps every tab in view, cut short as it must, so there the wheel only steps from tab to tab where the pane shows the tab in front alone with its chevron, as moving the strip would bring the next into view; with every tab there it does nothing.
+- Tests: `the_wheel_over_the_tabs_moves_them_sideways_when_they_dont_all_fit`, `the_wheel_over_the_side_panes_tabs_steps_through_them_when_one_shows`.
+- Tour: `m4-tabs-strip` and `m4-tabs-wheel`, four files in a window 84 columns wide.
+- Unverified: a trackpad's flood of sideways events in a real terminal moves the strip a tab an event, which may be quick; the wheel's ramp isn't applied to it.
