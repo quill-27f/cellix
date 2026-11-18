@@ -18985,7 +18985,10 @@ mod tests {
     use super::*;
     /// How long a test waits on work done in the background: git, a PDF read, a build. The
     /// shared machine this runs on can be loaded enough that a few seconds isn't enough.
-    const BACKGROUND: std::time::Duration = std::time::Duration::from_secs(30);
+    // Only how long a test will wait for work done on another thread before calling it lost:
+    // a test passes as soon as the work is there. Two minutes, since on a machine at a load of
+    // 25 the library's tests took 670 s where they take 40, and half a minute ran out.
+    const BACKGROUND: std::time::Duration = std::time::Duration::from_secs(120);
     use cellix_input::{Mods, MouseEvent};
     use cellix_render::Paint;
     use std::fs;
@@ -19069,7 +19072,7 @@ mod tests {
                 let _ = sender.send(text.clone());
             }
         });
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         let mut text = String::new();
         while !text.contains("said: ") && std::time::Instant::now() < deadline {
             if let Ok(more) = said.recv_timeout(std::time::Duration::from_millis(100)) {
@@ -29186,7 +29189,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
 
     /// Waits for the Preview to finish reading, as a frame would.
     fn preview_read(app: &mut App) {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         loop {
             let view = app.dock.pdf.as_ref().unwrap();
             if view.pages_ready() > 0 || view.error.is_some() {
@@ -29282,7 +29285,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             app.handle(mouse(MouseKind::Left, plus, screen_area.y));
             app.handle(mouse(MouseKind::Up, plus, screen_area.y));
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let deadline = std::time::Instant::now() + BACKGROUND;
         while !app.dock.pdf.as_ref().unwrap().wide(screen_area.w) {
             assert!(
                 std::time::Instant::now() < deadline,
