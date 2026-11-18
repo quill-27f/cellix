@@ -186,7 +186,8 @@ fn the_plus_stays_after_an_agents_tab_and_another() {
     }
     app.overlay = Overlay::None;
 
-    // Only when the tabs, each cut to its least, leave it no room does it give way.
+    // Only when the tabs, each cut to its mark, leave it no room does it give way, to the
+    // tab in front alone with its chevron, whose list starts the same things.
     let gone = (16..60).rev().find(|width| {
         app.dock.width = Some(*width);
         app.handle(Event::Resize(150, 44));
@@ -195,7 +196,7 @@ fn the_plus_stays_after_an_agents_tab_and_another() {
     });
     assert!(gone.is_some(), "some width is too narrow for it");
     let row = title(&app);
-    assert_ne!(app.dock.fit(row), Fit::Whole);
+    assert_eq!(app.dock.fit(row), Fit::Front);
     let grid = screen(&app);
     let drawn = words(&grid, row.y)
         .into_iter()
@@ -256,6 +257,139 @@ fn names_are_cut_further_before_the_plus_gives_way() {
     let text = screen(&app).text();
     assert!(app.dock.plus_shows(title(&app)), "{text}");
     assert!(text.contains("ress + for another"), "{text}");
+}
+
+/// The columns a session's tab stands in, as clicks find them.
+fn tab_span(app: &App, row: cellix_render::Rect, index: usize) -> (u16, u16) {
+    let hits = (row.x..row.right()).filter(
+        |x| matches!(app.dock.hit(row, *x), Some(TabHit::Tab(i) | TabHit::Close(i)) if i == index),
+    );
+    hits.fold((u16::MAX, 0), |(from, to), x| (from.min(x), to.max(x + 1)))
+}
+
+/// Whether the + is drawn after the tabs, where a click on it starts something.
+fn plus_drawn(app: &App, grid: &Grid, row: cellix_render::Rect) -> bool {
+    let plus = app.dock.plus_x(row);
+    let drawn = words(grid, row.y).into_iter().any(|(text, x, ..)| {
+        text == "+" && x >= f32::from(plus) + 1.0 && x < f32::from(plus) + 2.0
+    });
+    drawn && app.dock.hit(row, plus + 1) == Some(TabHit::New)
+}
+
+/// A row too short for every tab whole cuts those behind the one in front to their marks
+/// before the + or the button that maximizes the pane gives way: at every width the tabs
+/// are cut rather than listed, both are there, the longest name gives way first, and a name
+/// short of three letters goes, leaving its mark in the middle of its tab with the same air
+/// either side and a chip under the pointer that's exactly the mark and that air. Every tab
+/// has a mark, and marks tell tabs apart. The + went whenever the names had less than three
+/// letters each (167, 131, m1-agent-tabs-narrow, 173-peek-narrow), and a tab cut to its mark
+/// kept a chip five columns wide with the mark at its left, 16 px before it and 47 after (166).
+#[test]
+#[cfg(unix)]
+fn tabs_are_cut_to_their_marks_before_the_plus_gives_way() {
+    let (_dir, mut app) = project((150, 44));
+    for name in ["the documentation's navigation", "docs", "og tags"] {
+        app.open_agent(crate::agents::SHELL.1);
+        let last = app.dock.sessions.len() - 1;
+        app.dock.sessions[last].renamed = Some(name.to_string());
+    }
+    app.run(Command::ShowComments);
+    app.dock.active = Some(2);
+    app.dock.front = Front::Session;
+    let (mut cut, mut marks_only, mut longest_first) = (0, false, false);
+    let mut with_button = 0;
+    for width in (16..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let grid = screen(&app);
+        let row = title(&app);
+        let text = grid.row_text(row.y);
+        match app.dock.fit(row) {
+            Fit::Whole => continue,
+            Fit::Front => {
+                // Only where even the marks don't fit: the tab in front, its chevron, no +.
+                assert!(!app.dock.plus_shows(row), "{width}: {text}");
+                assert!(cut > 0, "cut short before listed");
+                break;
+            }
+            Fit::Cut => cut += 1,
+        }
+        assert!(plus_drawn(&app, &grid, row), "{width}: the + stays: {text}");
+        // The button that maximizes the pane stays while the marks leave it room: it gives
+        // way only before a tab would go into the list.
+        let maximize = app.dock.maximize_button(row);
+        if app.dock.maximize_shows(row) {
+            assert_eq!(
+                app.dock.hit(row, maximize + 1),
+                Some(TabHit::Maximize),
+                "{text}"
+            );
+            assert!(app.dock.plus_x(row) + 3 <= maximize, "{width}: {text}");
+            with_button += 1;
+        }
+        // The long name is cut while the short one beside it is still whole.
+        let names = words(&grid, row.y);
+        let long = names
+            .iter()
+            .any(|w| w.0 == "the documentation's navigation");
+        let short = names.iter().any(|w| w.0 == "docs");
+        longest_first |= !long && short;
+        // A tab whose name has gone is its mark alone, in its middle.
+        let (from, to) = tab_span(&app, row, 0);
+        let named = names.iter().any(|w| w.0.starts_with("the"));
+        if from >= to || named {
+            continue;
+        }
+        marks_only = true;
+        let (start, end) = (f32::from(from), f32::from(to));
+        let mark = icons(&grid, row.y, Icon::Terminal)
+            .into_iter()
+            .find(|(left, _)| *left >= start && *left < end)
+            .expect("cut to its mark");
+        // The prompt's ink starts 2.4 of its 24 in, and ends 2.4 before its box does.
+        let ink = 2.4 / 24.0 * (mark.1 - mark.0);
+        let (before, after) = ((mark.0 + ink - start) * 17.0, (end - mark.1 + ink) * 17.0);
+        assert!(
+            (before - after).abs() <= 3.0 && before >= 12.0,
+            "{width}: {before} px before its mark, {after} after: {text}"
+        );
+        // Under the pointer, a chip that's the mark and the same air either side.
+        mouse(&mut app, MouseKind::Move, from + 1, row.y);
+        let grid = screen(&app);
+        let (top, bottom) = (i32::from(row.y) * UNIT, i32::from(row.y + 1) * UNIT);
+        let chip = grid.paint.iter().find_map(|paint| match paint {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == app.theme().row_hover && bounds.y >= top && bounds.y < bottom => Some((
+                bounds.x as f32 / UNIT as f32,
+                (bounds.x + bounds.w) as f32 / UNIT as f32,
+            )),
+            _ => None,
+        });
+        let chip = chip.expect("a chip under the pointer");
+        let (lead, tail) = (
+            (mark.0 + ink - chip.0) * 17.0,
+            (chip.1 - mark.1 + ink) * 17.0,
+        );
+        assert!(
+            (lead - tail).abs() <= 2.0 && (14.0..=18.0).contains(&lead),
+            "{width}: the chip has {lead} px before the mark and {tail} after"
+        );
+        assert!(
+            chip.0 >= start - 0.01 && chip.1 <= end + 0.01,
+            "inside its tab"
+        );
+        mouse(&mut app, MouseKind::Move, 0, 40);
+    }
+    assert!(cut > 3, "{cut} widths cut the tabs short");
+    assert!(
+        with_button * 2 > cut,
+        "the button stays at most: {with_button} of {cut}"
+    );
+    assert!(longest_first, "the longest name gives way first");
+    assert!(marks_only, "some width cuts a tab to its mark");
 }
 
 /// A tab is as wide as what it paints: its name whole, with no letter cut and no "…" while

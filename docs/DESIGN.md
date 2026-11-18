@@ -1462,23 +1462,28 @@ A side pane whose tabs don't all fit before the icons at the top right keeps eve
 the row. The one in front, a tab in the shape every tab has, hugs its measured name and its ×, with none
 of the slack a tab has when there's room, since that slack is what would cut its neighbours.
 Those behind it stand as names alone, half a column of air either side, whole while they
-fit and then cut short with a "…", the longest giving way first; two of them side by side have
-a hairline between them, centred in the cell that parts them, so what one is doing at its end
-is never read as the next one's. The + keeps its place after them: the names are cut further
-before it gives way, and it goes only where the tabs, each cut to its least, leave it no room
-(the icons beside it start the same things). It gave way whenever any name was cut, which left
-a row of agents with nothing to start another from beside it (0.11.0's recheck: m1-agent-tabs,
-131, 132). The button that maximizes the pane doesn't give way: it
-keeps three columns at the end of the pane's part of the row, and the names are cut that much
-sooner (decided on 2026-11-16: it gave way with the +, and inside Claude Code, where Cellix has
-at most 45% of the window and its side pane opens 40 columns wide, the user had no way in
-sight to give the pane the window). It goes in one case only, a row whose tabs fit at their
-least without it and not with it, since every tab staying in sight comes first; a double click
-on a tab maximizes there as anywhere. A tab behind has no ×, so a click anywhere on it
-brings it forward, and a cut name is a hover away. Only when that would leave them under
-three letters and the "…" each (five columns) does the row show the tab in front alone, with
-a chevron that lists every tab and what + would start: two letters don't tell Comments from
-Codex. The icons stand three columns
+fit and then cut short with a "…", the longest giving way first (the last of two alike); two of
+them side by side have a hairline between them, centred in the cell that parts them, so what
+one is doing at its end is never read as the next one's. Short of three letters and the "…", a
+tab behind is cut to its mark, and what its program is doing beside it: the mark in the tab's
+middle with the same air either side, about 16 px to its ink, in three columns, or five with
+its state, and under the pointer a chip that's exactly the mark and that air (it kept a chip
+five columns wide with the mark at its left, 16 px before it and 47 after). Every tab has a
+mark, and marks tell tabs apart, as herdr's narrow tabs do; letters come back, the first of
+those cut first, as room allows. On cells a view's tab, a name elsewhere, is cut to the
+letter its icon has at the top right. The + keeps its place after the tabs while any tab is
+cut rather than listed, and the button that maximizes the pane its three columns at the end
+of the pane's part of the row: the names are cut to their marks before either gives way. The
++ gave way whenever the names had less than three letters each, which left a row of agents
+with nothing to start another from beside it (0.11.0's final review: 167, 131,
+m1-agent-tabs-narrow, 173-peek-narrow), and the button with it, though inside Claude Code,
+where Cellix has at most 45% of the window and its side pane opens 40 columns wide, the user
+had no other way in sight to give the pane the window (decided on 2026-11-16). The button
+goes in one case only, a row whose tabs fit at their marks with the + only without it, since
+every tab staying in sight comes first; a double click on a tab maximizes there as anywhere.
+A tab behind has no ×, so a click anywhere on it brings it forward, and a cut name is a hover
+away. Only when even the marks and the + don't fit does the row show the tab in front alone,
+with a chevron that lists every tab and what + would start. The icons stand three columns
 apart on their row's own ground, and nothing runs under them.
 A program's tab in the side pane has its mark before its name, where a file's tab has its icon
 and at its size: Cellix's own marks, never a vendor's logo. Claude Code's is an eight-line
@@ -1508,8 +1513,8 @@ idle before it, and the tab grows by the state's width when its agent starts (de
 been kept so a tab didn't move as its agent started and stopped). Behind the tab in front, in
 a row too short for every tab
 whole, a program's tab keeps its mark and what it's doing at either end, and its name between
-them only where three letters and the "…" have room: three letters didn't tell Comments from
-Codex, and the marks do. Where there are pictures the Agents tab has the mark its icon at the
+them only where three letters and the "…" have room; with less, the mark and the state stand
+side by side in its middle: three letters didn't tell Comments from Codex, and the marks do. Where there are pictures the Agents tab has the mark its icon at the
 top right has, and is cut short as an agent's tab is, its mark kept.
 The page's menu folds formatting and inserting into Format › and Insert ›, and the agents
 panel gives each agent one row under two lines of how-to. At every width a page keeps a

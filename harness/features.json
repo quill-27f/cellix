@@ -6417,5 +6417,12 @@
     "title": "cellix comments --waiting, which the Claude Code mod counts and sends by, lists a page's comments",
     "test": "pty_comments_waiting_lists_a_pages_comments",
     "passes": true
+  },
+  {
+    "id": "pane-tabs-cut-to-marks",
+    "milestone": 15,
+    "title": "A narrow side pane cuts the tabs behind to their marks, centred in a chip of their own, before the + or the maximize button gives way",
+    "test": "tabs_are_cut_to_their_marks_before_the_plus_gives_way",
+    "passes": true
   }
 ]

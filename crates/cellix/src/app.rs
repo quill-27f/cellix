@@ -10756,8 +10756,6 @@ impl App {
             x - ACTION_MARGIN
         });
         self.dock.tabs_end.set(end);
-        let slack = if held.is_some() { ACTION_MARGIN } else { 0 };
-        self.dock.tabs_slack.set(slack);
         self.dock.inbox_count.set(self.inbox_listed().len());
         self.dock.tabs_flush.set(self.dock_under());
         let maximized = self.maximized == Some(Maximized::Pane);
@@ -33277,23 +33275,27 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             Some("Comments"),
             "its whole name is a hover away"
         );
-        // Every tab is in the row, each cut one ending in "…", and nothing reaches the icons.
+        // Every tab is in the row, each cut one ending in "…" or cut to its mark, and nothing
+        // reaches the icons.
         let row = grid.row_text(area.y);
         let before = (first_icon - area.x) as usize;
         let strip: String = row.chars().skip(area.x as usize).take(before).collect();
         // The pane's first column is the frame's, between the two sheets, and the tabs
         // start after it, so the row has a column less to give than it had.
-        // The button that maximizes the pane keeps its place after them: it gave way with
-        // the +, and a pane this narrow, as Cellix's is inside Claude Code, couldn't be
-        // maximized by anything in sight.
+        // The + and the button that maximizes the pane keep their places after them: a tab
+        // behind is cut to its mark first, the terminal to its prompt here, as the last of two
+        // names alike gives way first. The + went whenever the names had less than three
+        // letters each (0.11.0's final review), and the button with it, and a pane this
+        // narrow, as Cellix's is inside Claude Code, couldn't be maximized by anything in sight.
         // The icons end the row now that the button that quits is at the foot, a column
         // from the window's edge, so the tabs have the other column it took.
-        assert_eq!(strip.trim_end(), "  Comm… Agents ×  Term… ⤢", "{row}");
+        assert_eq!(strip.trim_end(), "  Comm… Agents ×  >  +  ⤢", "{row}");
         for x in area.x..first_icon {
             let hit = app.dock.hit(title, x);
-            let gone = [TabHit::New, TabHit::Pick];
-            assert!(hit.is_none_or(|hit| !gone.contains(&hit)), "{hit:?} at {x}");
+            assert_ne!(hit, Some(TabHit::Pick), "no chevron at {x}");
         }
+        let plus = app.dock.plus_x(title);
+        assert_eq!(app.dock.hit(title, plus + 1), Some(TabHit::New), "{row}");
         let maximize: Vec<u16> = (area.x..first_icon)
             .filter(|x| app.dock.hit(title, *x) == Some(TabHit::Maximize))
             .collect();
@@ -33316,8 +33318,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             None,
             "it shows in full"
         );
-        // Agents is a name alone now, with no chip and no × of its own.
-        assert!((5..=7).contains(&place(Front::Agents).w), "{tabs:?}");
+        // Agents is behind now, cut to its mark here, with no chip and no × of its own.
+        assert!((3..=7).contains(&place(Front::Agents).w), "{tabs:?}");
         let agents = place(Front::Agents);
         for x in agents.x..agents.right() {
             assert_eq!(app.dock.hit(title, x), Some(TabHit::View(Front::Agents)));
@@ -33335,12 +33337,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(app.dock.showing(Front::Session), "the terminal is in front");
         let row = screen(&app).row_text(area.y);
         assert!(row.contains("Terminal"), "whole now: {row}");
-        // One that has ended points at what's there to start another, since no + is drawn,
-        // in words short enough for a pane this narrow.
+        // One that has ended points at the +, which stays.
         app.dock.sessions[0].exited = true;
         let text = screen(&app).text();
         assert!(
-            text.contains("Terminal ended. Start another above."),
+            text.contains("Terminal ended. Press + for another."),
             "{text}"
         );
     }
@@ -33376,17 +33377,18 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(close.len() <= 3, "and its 10 px after it: {close:?}");
         let tabs = app.dock.view_tabs_for_test(area);
         let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap().2;
-        // Comments behind it keeps three letters and its "…" at least: the button that
-        // maximizes the pane has its four columns at the row's end, and the + its three after
-        // the tabs, which the names are cut further for (it gave way whenever one was cut).
-        assert!(
-            comments.w >= 5,
-            "Comments keeps three letters: {comments:?}"
-        );
+        // Comments behind it keeps its mark at least, three columns: the button that
+        // maximizes the pane has its columns at the row's end, and the + its three after the
+        // tabs, which the names are cut to their marks for (it gave way whenever the names had
+        // less than three letters each).
+        assert!(comments.w >= 3, "Comments keeps its mark: {comments:?}");
+        let plus = app.dock.plus_x(title);
+        assert!(plus >= comments.right(), "{plus} after {comments:?}");
+        assert_eq!(app.dock.hit(title, plus + 1), Some(TabHit::New));
         let maximize = app.dock.maximize_button(title);
         assert_eq!(app.dock.hit(title, maximize), Some(TabHit::Maximize));
-        assert!(maximize >= comments.right() && maximize + 3 < first_icon);
-        // With a third tab, each one behind keeps room for three letters and the "…".
+        assert!(maximize >= plus + 3 && maximize + 3 < first_icon);
+        // With a third tab, each one behind keeps its mark, and the + its place.
         app.run(Command::ListAgents);
         let _ = screen(&app);
         assert_eq!(
@@ -33394,15 +33396,16 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             Fit::Cut,
             "still a row of tabs, not a list"
         );
+        assert!(app.dock.plus_shows(title));
         let tabs = app.dock.view_tabs_for_test(area);
         let width = |view: Front| tabs.iter().find(|tab| tab.0 == view).unwrap().2.w;
         // In front it hugs its mark, its name and its ×.
         assert!(width(Front::Agents) <= 11, "{tabs:?}");
-        assert!(width(Front::Comments) >= 5, "{tabs:?}");
+        assert!(width(Front::Comments) >= 3, "{tabs:?}");
         let terminal = (area.x..first_icon)
             .filter(|x| app.dock.hit(title, *x) == Some(TabHit::Tab(0)))
             .count();
-        assert!(terminal >= 5, "the terminal's stub is {terminal} columns");
+        assert!(terminal >= 3, "the terminal's stub is {terminal} columns");
     }
 
     #[test]
@@ -33467,11 +33470,16 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(app.dock.showing(Front::Session), "the terminal is in front");
         let row = screen(&app).row_text(area.y);
         assert!(row.contains(&shell), "{row}");
-        // A finished session's note never points at a + that isn't drawn.
+        // A finished session's note never points at a + that isn't drawn: named short, the
+        // tab in front leaves the others room at their marks, and the + is back after them.
         app.dock.sessions[0].exited = true;
         app.dock.sessions[0].name = "x".into();
-        let text = screen(&app).text();
-        assert!(text.contains("x ended. Use ⌄ for another."), "{text}");
+        let grid = screen(&app);
+        let row = grid.row_text(area.y);
+        assert!(app.dock.plus_shows(app.title_of(area)), "{row}");
+        assert!(row.contains('+'), "{row}");
+        let text = grid.text();
+        assert!(text.contains("x ended. Press + for another."), "{text}");
         // Wide enough, every tab shows, and the + after them.
         app.handle(Event::Resize(260, 40));
         let grid = screen(&app);

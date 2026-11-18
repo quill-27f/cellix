@@ -74,13 +74,17 @@ const CONTEXT_AIR: f32 = 0.9;
 const CONTEXT_SIZE: u8 = 85;
 /// Columns for the chevron on the tab in front that lists every tab, when they don't all fit.
 const PICK_WIDTH: u16 = 2;
-/// The fewest columns a tab behind the one in front is cut to: three letters and the "…"
-/// that says there's more, with half a column of air either side. Two letters don't tell
-/// Comments from Codex. Under that, the tabs go into a list.
-const CUT_LEAST: u16 = 5;
+/// The fewest letters a tab behind the one in front shows of a name cut short, before its "…":
+/// two don't tell Comments from Codex. Short of room for them, the tab is cut to its mark.
+const CUT_LETTERS: usize = 3;
 /// The air a tab behind the one in front has either side of its name, in cells: about 8 px.
 /// Its chip under the pointer is exactly its name and that air.
 const CUT_AIR: f32 = 0.5;
+/// The air a tab cut to its mark has either side of it, in cells: 14 px to the mark's box and
+/// about 16 to its ink, so three columns hold the mark centred, and five the mark and what its
+/// program is doing. Its chip under the pointer is exactly that. A tab is cut this far before
+/// the + after the tabs gives way, since marks tell tabs apart.
+const MARK_AIR: f32 = 0.8;
 /// What the tab in front has beside its name when the row is short, in cells: the lead a
 /// tab's name always has, 12 px to its ×, the ×, and as much air after it as before the mark.
 /// With room, a tab has more than this; without, the slack is what would cut its neighbours.
@@ -2040,10 +2044,6 @@ pub struct Dock {
     pub inbox_count: Cell<usize>,
     /// The column tabs stop at, for what stands past them.
     pub tabs_end: Cell<u16>,
-    /// Columns kept clear between that and the icons past it, which names with no chip
-    /// around them may use when the row is too short even for the button that maximizes the
-    /// pane: an icon has air of its own inside its cell.
-    pub tabs_slack: Cell<u16>,
     /// Whether the tabs start flush, under the file's, with no line beside them.
     pub tabs_flush: Cell<bool>,
     /// Rows the pane was dragged to, standing under the file.
@@ -2416,11 +2416,13 @@ impl Dock {
             // Every view's tab has a mark, as every session's has: the Agents tab the one its
             // icon at the top right has, Comments its bubble, the inbox its bell, so a narrow
             // pane cuts each short as it does an agent's, its mark kept. The inbox's had none.
-            // On cells each is its name, as it was.
+            // On cells each is its name, as it was, until it's cut to its mark: the letter its
+            // icon has at the top right.
             let icon = pictures.then(|| view_icon(view));
             Face {
                 text,
                 icon,
+                mark: view_icon(view),
                 context: None,
                 state: None,
             }
@@ -2428,6 +2430,7 @@ impl Dock {
         let sessions = self.sessions.iter().map(|session| Face {
             text: session.label(),
             icon: session.has_icon(pictures).then(|| session.icon()),
+            mark: session.icon(),
             context: session.context(),
             state: session.mark(),
         });
@@ -2525,9 +2528,7 @@ impl Dock {
     /// that has ended: it never points at a + or a chevron that isn't drawn.
     pub fn another(&self, area: Rect) -> &'static str {
         match self.fit(area) {
-            Fit::Whole => "press + for another",
-            Fit::Cut if self.plus_shows(area) => "press + for another",
-            Fit::Cut => "start another above",
+            Fit::Whole | Fit::Cut => "press + for another",
             Fit::Front => "use ⌄ for another",
         }
     }
@@ -2558,32 +2559,55 @@ impl Dock {
     /// Columns a tab behind the one in front takes to show its whole name, with no × and
     /// half a column of air either side, and an agent's mark and state either end of it.
     fn stub(&self, face: &Face) -> u16 {
+        self.stub_of(&face.text, face)
+    }
+
+    /// Columns a tab behind takes to show `text` of its name. On cells a mark or a state
+    /// keeps a column clear between it and the name, which the name's own column of air
+    /// doesn't count: one short, a whole name came out cut ("Term…").
+    fn stub_of(&self, text: &str, face: &Face) -> u16 {
         if self.in_cells() {
-            let extra = f32::from(Self::cell_extra(face));
-            return (self.text_width(&face.text) + CUT_AIR * 2.0 + extra).ceil() as u16;
+            let marked = face.icon.is_some() || face.state.is_some();
+            let extra = Self::cell_extra(face) + u16::from(marked);
+            return text.chars().count() as u16 + 1 + extra;
         }
         let side = |on: bool| if on { CUT_SIDE } else { 0.0 };
         let sides = side(face.icon.is_some()) + side(face.state.is_some());
-        (self.text_width(&face.text) + CUT_AIR * 2.0 + sides).ceil() as u16
+        (self.text_width(text) + CUT_AIR * 2.0 + sides).ceil() as u16
+    }
+
+    /// Columns a tab behind needs to show any of its name: three letters and the "…", or the
+    /// whole name where that's shorter. With less, it's cut to its mark.
+    fn named_least(&self, face: &Face) -> u16 {
+        self.stub_of(&least_cut(&face.text), face)
+            .min(self.stub(face))
+    }
+
+    /// Columns a tab behind takes cut to its mark: the mark, and what its program is doing
+    /// beside it, with `MARK_AIR` either side. It's the least any tab behind is cut to, and
+    /// the + after the tabs keeps its place while every tab behind has it.
+    fn least(&self, face: &Face) -> u16 {
+        if self.in_cells() {
+            // A column either side of the letter, and the state's after another.
+            return if face.state.is_some() { 5 } else { 3 };
+        }
+        // A sliver over a whole column is the float's, not the mark's.
+        (marks_wide(face.state) + MARK_AIR * 2.0 - 0.01).ceil() as u16
     }
 
     /// What each tab gets, views and then sessions, and how they stand. When they don't all
     /// fit with the + after them, the one in front keeps its whole name, in a chip that
     /// hugs it, and those behind it stand as names alone: whole while there's room, and
-    /// then cut short with a "…", the longest giving way first. When that would leave them
-    /// under `CUT_LEAST` columns each, only the one in front shows, with a chevron that
-    /// lists every tab.
+    /// then cut short with a "…", the longest giving way first, and short of three letters,
+    /// cut to their marks. The + stays after them all the while. Only when the marks
+    /// themselves don't fit does the one in front show alone, with a chevron that lists
+    /// every tab.
     /// Whether the tab at `index`, views first, is a session's with no tab of its own.
     fn untabbed(&self, index: usize) -> bool {
         let session = index.checked_sub(self.views().len());
         session
             .and_then(|at| self.sessions.get(at))
             .is_some_and(|s| !s.tabbed)
-    }
-
-    /// How many tabs the row has: the views', and the sessions' that have one.
-    fn shown_tabs(&self) -> usize {
-        self.views().len() + self.sessions.iter().filter(|s| s.tabbed).count()
     }
 
     fn fitted(&self, area: Rect) -> (Vec<u16>, Fit) {
@@ -2597,17 +2621,22 @@ impl Dock {
         if end == 0 || widths.iter().sum::<u16>() + NEW_WIDTH <= room {
             return (widths, Fit::Whole);
         }
-        // Without the +, the button stands right at that end, with no column before it, and
-        // the names run up to it. Every tab staying in sight comes before the button, though:
-        // where the tabs fit at their least only without it, they have the row as they had,
-        // up to the icons' own cells, and it goes.
+        // Cut short, the + stands after the tabs and the button right at the row's end, with
+        // no column before it, and the names have what's between. Neither gives way to a name:
+        // a + that went whenever a name was cut left a row of agents with nothing to start
+        // another from (m1-agent-tabs, 131, 132, 167), so a tab behind is cut to its mark
+        // first, as herdr's are. Where even the marks fit only without the button, it goes,
+        // since every tab staying in sight comes first; the + stays while any tab does.
         let front = self.front_index().unwrap_or(0);
-        let behind = self.shown_tabs().saturating_sub(1) as u16;
         let faces = self.faces();
+        let behind: Vec<usize> = (0..faces.len())
+            .filter(|index| *index != front && !self.untabbed(*index))
+            .collect();
+        let least = |index: usize| self.least(&faces[index]);
         let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
-        let room = end.saturating_sub(start + MAXIMIZE_SHORT);
-        let short = self.cut_room(area);
-        if kept + behind * CUT_LEAST > short {
+        let rest = self.cut_room(area).checked_sub(kept);
+        let Some(rest) = rest.filter(|_| self.cut_fits(area)) else {
+            let room = end.saturating_sub(start + MAXIMIZE_SHORT);
             for (index, width) in widths.iter_mut().enumerate() {
                 *width = if index == front {
                     (*width + PICK_WIDTH).min(room)
@@ -2616,92 +2645,86 @@ impl Dock {
                 };
             }
             return (widths, Fit::Front);
-        }
-        for (index, (width, face)) in widths.iter_mut().zip(&faces).enumerate() {
+        };
+        let stubs: Vec<u16> = faces.iter().map(|face| self.stub(face)).collect();
+        let named: Vec<u16> = faces.iter().map(|face| self.named_least(face)).collect();
+        for (index, width) in widths.iter_mut().enumerate() {
             *width = if index == front {
                 kept
+            } else if self.untabbed(index) {
+                // A session with no tab of its own takes no columns, cut or whole.
+                0
             } else {
-                self.stub(face)
+                stubs[index]
             };
         }
-        let rest = short - kept;
-        let taken = |cap: u16, widths: &[u16]| -> u16 {
-            let behind = widths
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| *index != front);
-            behind.map(|(_, width)| (*width).min(cap)).sum()
-        };
-        let mut cap = widths.iter().copied().max().unwrap_or(0);
-        while cap > CUT_LEAST && taken(cap, &widths) > rest {
-            cap -= 1;
+        let taken = |widths: &[u16]| -> u16 { behind.iter().map(|index| widths[*index]).sum() };
+        // The widest gives a column at a time, the last of equals first; one that would be
+        // left short of three letters is cut to its mark.
+        while taken(&widths) > rest {
+            let widest = (behind.iter().copied())
+                .filter(|index| widths[*index] > least(*index))
+                .max_by_key(|index| widths[*index]);
+            let Some(at) = widest else { break };
+            let less = widths[at] - 1;
+            widths[at] = if less < named[at] { least(at) } else { less };
         }
-        // What's left over goes a column each to the first of those cut.
-        let mut spare = rest.saturating_sub(taken(cap, &widths));
-        for (index, width) in widths.iter_mut().enumerate() {
-            if index != front && *width > cap {
-                let more = u16::from(spare > 0);
-                spare -= more;
-                *width = cap + more;
-            }
-        }
-        // A session with no tab of its own takes no columns, cut or whole.
-        for (index, width) in widths.iter_mut().enumerate() {
-            if self.untabbed(index) {
-                *width = 0;
-            }
+        // What's left over gives letters back, a column at a time, to the first of those
+        // whose names are cut.
+        let mut spare = rest.saturating_sub(taken(&widths));
+        while spare > 0 {
+            let cut = (behind.iter().copied())
+                .find(|index| widths[*index] >= named[*index] && widths[*index] < stubs[*index]);
+            let Some(at) = cut else { break };
+            widths[at] += 1;
+            spare -= 1;
         }
         (widths, Fit::Cut)
     }
 
-    /// The columns tabs cut short have between them. The + after them keeps its place
-    /// whenever they leave it room at their least: a name is cut further before it gives
-    /// way, since a + that went whenever a name was cut left a row with nothing to start
-    /// another from (m1-agent-tabs, 131, 132).
+    /// The columns tabs cut short have between them: the row up to the button that maximizes
+    /// the pane, or where they fit only without it, up to the icons, less the + after them.
     fn cut_room(&self, area: Rect) -> u16 {
-        let start = self.tabs_start(area);
-        let end = self.tabs_end.get();
-        if !self.cut_tabs_leave_the_button(area) {
-            return end.saturating_sub(start) + self.tabs_slack.get();
-        }
-        let room = end.saturating_sub(start + MAXIMIZE_SHORT);
-        if self.cut_keeps_the_plus(area) {
-            room - NEW_WIDTH
+        let button = if self.cut_keeps_the_button(area) {
+            MAXIMIZE_SHORT
         } else {
-            room
-        }
+            0
+        };
+        self.row_room(area).saturating_sub(button + NEW_WIDTH)
     }
 
-    /// Whether the tabs, each cut to its least, leave room for the + after them as well as
-    /// the button that maximizes the pane.
-    fn cut_keeps_the_plus(&self, area: Rect) -> bool {
+    /// The columns the pane's part of the row has before the icons at the top right.
+    fn row_room(&self, area: Rect) -> u16 {
+        (self.tabs_end.get()).saturating_sub(self.tabs_start(area))
+    }
+
+    /// Columns the tabs take cut as far as they go: the one in front hugging its name and
+    /// its ×, and each behind it cut to its mark.
+    fn cut_least(&self) -> u16 {
         let front = self.front_index().unwrap_or(0);
         let faces = self.faces();
         let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
-        let behind = self.shown_tabs().saturating_sub(1) as u16;
-        let room = (self.tabs_end.get()).saturating_sub(self.tabs_start(area) + MAXIMIZE_SHORT);
-        kept + behind * CUT_LEAST + NEW_WIDTH <= room
+        let behind = (faces.iter().enumerate())
+            .filter(|(index, _)| *index != front && !self.untabbed(*index))
+            .map(|(_, face)| self.least(face));
+        kept + behind.sum::<u16>()
     }
 
-    /// Whether the + after the tabs is drawn: always while they're whole, and while they're
-    /// cut short and leave it room.
+    /// Whether the tabs, each cut to its mark, leave room for the + after them.
+    fn cut_fits(&self, area: Rect) -> bool {
+        self.cut_least() + NEW_WIDTH <= self.row_room(area)
+    }
+
+    /// Whether they leave room for the button that maximizes the pane as well.
+    fn cut_keeps_the_button(&self, area: Rect) -> bool {
+        self.cut_least() + NEW_WIDTH + MAXIMIZE_SHORT <= self.row_room(area)
+    }
+
+    /// Whether the + after the tabs is drawn: whenever the row has tabs, whole or cut short,
+    /// and not where the tab in front shows alone with its chevron, whose list starts the
+    /// same things.
     pub fn plus_shows(&self, area: Rect) -> bool {
-        match self.fit(area) {
-            Fit::Whole => true,
-            Fit::Cut => self.cut_keeps_the_plus(area),
-            Fit::Front => false,
-        }
-    }
-
-    /// Whether the tabs, each cut to its least, leave the button that maximizes the pane its
-    /// columns at the row's end.
-    fn cut_tabs_leave_the_button(&self, area: Rect) -> bool {
-        let front = self.front_index().unwrap_or(0);
-        let faces = self.faces();
-        let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
-        let behind = self.shown_tabs().saturating_sub(1) as u16;
-        let room = (self.tabs_end.get()).saturating_sub(self.tabs_start(area) + MAXIMIZE_SHORT);
-        kept + behind * CUT_LEAST <= room
+        self.fit(area) != Fit::Front
     }
 
     /// Which tabs stand as names alone, views and then sessions: every one behind the tab
@@ -2820,9 +2843,10 @@ impl Dock {
         end.saturating_sub(MAXIMIZE_SHORT)
     }
 
-    /// Whether that button shows. It does but in one case: a row whose tabs, each cut to its
-    /// least, fit only without it. There a double click on a tab still maximizes the pane,
-    /// and dragging the pane a little wider brings the button back.
+    /// Whether that button shows. It does but where the tabs, each cut to its mark, fit with
+    /// the + only without it: tabs are cut to their marks before it gives way, and it gives
+    /// way before any tab goes into the chevron's list. There a double click on a tab still
+    /// maximizes the pane, and dragging the pane a little wider brings the button back.
     pub fn maximize_shows(&self, area: Rect) -> bool {
         let end = self.tabs_end.get();
         if end == 0 {
@@ -2830,9 +2854,9 @@ impl Dock {
         }
         match self.fit(area) {
             Fit::Whole => true,
+            Fit::Cut => self.cut_keeps_the_button(area),
             // One tab and its chevron: the rest of the row is free.
             Fit::Front => end >= self.tabs_start(area) + MAXIMIZE_SHORT,
-            Fit::Cut => self.cut_tabs_leave_the_button(area),
         }
     }
 
@@ -3194,14 +3218,15 @@ impl Dock {
                 bg: if on { theme.sidebar.bg } else { theme.tab.bg },
                 ..theme.tab
             };
-            let mark = face.icon.map(|icon| {
+            let marked = |icon: Icon| {
                 let colour = match session {
                     Some(session) if session.exited => theme.disabled,
                     Some(_) => icon_colour(icon, theme),
                     None => style.fg,
                 };
                 (icon, colour, initial(icon, &face.text))
-            });
+            };
+            let mark = face.icon.map(marked);
             let cut = cuts[index];
             // Two tabs behind the one in front, side by side, have a hairline between them, so
             // the state at the end of one is never read as the next one's, and the room a tab
@@ -3216,7 +3241,8 @@ impl Dock {
             }
             before = Some((tab.right(), on));
             if cut {
-                cut_tab(grid, tab, face, (style, hovered, mark), (measure, theme));
+                let marks = (mark, marked(face.mark));
+                cut_tab(grid, tab, face, (style, hovered, marks), (measure, theme));
                 continue;
             }
             // Where the views are icons, the one showing has a column and no tab to draw.
@@ -3397,6 +3423,9 @@ type ProgramMark = (Icon, Rgb, Option<char>);
 struct Face {
     text: String,
     icon: Option<Icon>,
+    /// The mark it's cut to where its name has no room, on cells too, where a view's tab is
+    /// otherwise its name alone.
+    mark: Icon,
     context: Option<String>,
     state: Option<TabMark>,
 }
@@ -3499,40 +3528,43 @@ fn cut_tab(
     grid: &mut Grid,
     tab: Rect,
     face: &Face,
-    (style, hovered, mark): (Style, bool, Option<ProgramMark>),
+    (style, hovered, (mark, cut_mark)): (Style, bool, (Option<ProgramMark>, ProgramMark)),
     (measure, theme): (&dyn cellix_render::Measure, &Theme),
 ) {
     let (x, right) = (f32::from(tab.x), f32::from(tab.right()));
     let icon = mark.is_some();
     let marked = face.state.is_some();
-    // A name alone, as a view's is: as much of it as the stub holds, with half a column of air
-    // either side, and under the pointer a chip that's that name and the air around it.
+    let high = 0.8;
+    let top = f32::from(tab.y) + (1.0 - high) / 2.0;
+    let chip = |grid: &mut Grid, from: f32, wide: f32| {
+        let chip = Bounds::cells(from, top, wide, high);
+        grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+    };
+    // As many letters as a name cut short shows at the least.
+    let least = least_cut(&face.text).chars().count();
+    let named = |text: &str| text == face.text || text.chars().count() >= least;
+    // A name alone, as a view's is on cells: as much of it as the stub holds, with half a
+    // column of air either side, and under the pointer a chip that's that name and the air
+    // around it.
     if !icon && !marked {
         let room = f32::from(tab.w) - CUT_AIR * 2.0;
         let text = crate::context::elide(&face.text, room, measure);
-        if hovered {
-            let font = cellix_render::Font::default();
-            let (wide, high) = (measure.width(&text, font) + CUT_AIR * 2.0, 0.8);
-            let top = f32::from(tab.y) + (1.0 - high) / 2.0;
-            let chip = Bounds::cells(x, top, wide, high);
-            grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+        if named(&text) {
+            if hovered {
+                let font = cellix_render::Font::default();
+                chip(grid, x, measure.width(&text, font) + CUT_AIR * 2.0);
+            }
+            let (from, cell) = (x + CUT_AIR, tab.x + 1);
+            grid.label_at(from, cell, tab.y, &text, style, tab.right(), 100);
+            return;
         }
-        grid.label_at(
-            x + CUT_AIR,
-            tab.x + 1,
-            tab.y,
-            &text,
-            style,
-            tab.right(),
-            100,
+        return marks_alone(
+            grid,
+            tab,
+            face,
+            (style, hovered, cut_mark),
+            (measure, theme),
         );
-        return;
-    }
-    if hovered {
-        let high = 0.8;
-        let top = f32::from(tab.y) + (1.0 - high) / 2.0;
-        let chip = Bounds::cells(x, top, f32::from(tab.w), high);
-        grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
     }
     // The name, between the mark and the state, where three letters and a "…" have room.
     let from = if icon {
@@ -3553,35 +3585,92 @@ fn cut_tab(
         to - from
     };
     let text = crate::context::elide(&face.text, room, measure);
-    let named = text == face.text || text.chars().count() >= 4;
-    if named {
-        // Painted, it runs to where its room ends, which isn't on a cell: stopped at the cell
-        // before, the "…" lost its last dot.
-        let end = if measure.in_cells() {
-            last
-        } else {
-            last.max(to.ceil() as u16)
-        };
-        grid.label_at(from, first, tab.y, &text, style, end, 100);
+    if !named(&text) {
+        return marks_alone(
+            grid,
+            tab,
+            face,
+            (style, hovered, cut_mark),
+            (measure, theme),
+        );
     }
-    // Either end of the name; with none, the two side by side in the tab's middle.
-    let (icon_at, mark_at) = if measure.in_cells() && !named {
-        (x + CUT_ICON, x + 3.0)
-    } else if named || !icon || measure.in_cells() {
-        (x + CUT_ICON, right - CUT_MARK)
+    if hovered {
+        chip(grid, x, f32::from(tab.w));
+    }
+    // Painted, it runs to where its room ends, which isn't on a cell: stopped at the cell
+    // before, the "…" lost its last dot.
+    let end = if measure.in_cells() {
+        last
     } else {
-        let pair = ICON_SIZE * 2.0 + CUT_AIR + MARK_WIDE;
-        let start = x + (f32::from(tab.w) - pair) / 2.0;
-        (start + ICON_SIZE, start + ICON_SIZE * 2.0 + CUT_AIR)
+        last.max(to.ceil() as u16)
     };
+    grid.label_at(from, first, tab.y, &text, style, end, 100);
+    // Either end of the name.
     if let Some(mark) = mark {
-        tab_icon(grid, mark, (icon_at, tab.x + 1), tab.y, style);
+        tab_icon(grid, mark, (x + CUT_ICON, tab.x + 1), tab.y, style);
     }
     if let Some(state) = face.state {
-        let at = mark_at - dot_lead(state, measure);
+        let at = right - CUT_MARK - dot_lead(state, measure);
         draw_mark_in(grid, ((at, at.floor() as u16), tab.y), state, style, theme);
     }
 }
+
+/// A tab behind cut to its mark, its name having no room for three letters: the mark, and
+/// what its program is doing beside it, in the tab's middle with the same air either side,
+/// and under the pointer a chip that's exactly them and that air. The mark stood at the left
+/// of a chip five columns wide, 16 px before it and 47 after (0.11.0's final review, 166).
+fn marks_alone(
+    grid: &mut Grid,
+    tab: Rect,
+    face: &Face,
+    (style, hovered, mark): (Style, bool, ProgramMark),
+    (measure, theme): (&dyn cellix_render::Measure, &Theme),
+) {
+    let x = f32::from(tab.x);
+    if measure.in_cells() {
+        // A column before the letter, and the state's a column after it.
+        tab_icon(grid, mark, (x + CUT_ICON, tab.x + 1), tab.y, style);
+        if let Some(state) = face.state {
+            draw_mark_in(grid, ((x + 3.0, tab.x + 3), tab.y), state, style, theme);
+        }
+        return;
+    }
+    let wide = marks_wide(face.state);
+    let start = x + (f32::from(tab.w) - wide) / 2.0;
+    if hovered {
+        let high = 0.8;
+        let top = f32::from(tab.y) + (1.0 - high) / 2.0;
+        let chip = Bounds::cells(start - MARK_AIR, top, wide + MARK_AIR * 2.0, high);
+        grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+    }
+    tab_icon(grid, mark, (start + ICON_SIZE, tab.x + 1), tab.y, style);
+    if let Some(state) = face.state {
+        let at = start + ICON_SIZE * 2.0 + CUT_AIR - dot_lead(state, measure);
+        draw_mark_in(grid, ((at, at.floor() as u16), tab.y), state, style, theme);
+    }
+}
+
+/// The least of a name a tab cut short shows: three letters and the "…".
+fn least_cut(text: &str) -> String {
+    let letters: String = text.chars().take(CUT_LETTERS).collect();
+    format!("{}…", letters.trim_end())
+}
+
+/// How wide a tab's mark is painted, with what its program is doing beside it, in cells: a
+/// spinner the width of its square, a dot about half of that, from where a ring's ink would
+/// start to as far past its own ink.
+fn marks_wide(state: Option<TabMark>) -> f32 {
+    let state = match state {
+        None => 0.0,
+        Some(TabMark::Working) => CUT_AIR + MARK_WIDE,
+        Some(_) => CUT_AIR + MARK_WIDE * DOT_SHARE,
+    };
+    ICON_SIZE * 2.0 + state
+}
+
+/// How much of a spinner's square a dot's ink and the air either side of it take: the ring's
+/// ink starts 1.4 of its 24 parts in, and a dot's is 12 parts across from there.
+const DOT_SHARE: f32 = (1.4 + 12.0 + 1.4) / 24.0;
 
 /// How much sooner a dot starts than a spinner would, in cells, so its ink stands where the
 /// spinner's ring would begin: a dot is half the ring's width in the same square, and stood
