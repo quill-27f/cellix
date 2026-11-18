@@ -20163,6 +20163,8 @@ mod link_tests;
 #[cfg(test)]
 mod motion_tests;
 #[cfg(test)]
+mod page_look_tests;
+#[cfg(test)]
 mod pane_tab_tests;
 #[cfg(test)]
 mod report_tests;

@@ -4866,9 +4866,12 @@ impl Editor {
                 };
                 grid.put_str(left - PAGE_MARGIN + 1, y, "◆", mark, left);
             }
-            // Xcode shows a heading's level in the margin, beside the caret.
+            // Xcode shows a heading's level in the margin, beside the caret. Not beside a
+            // tall heading waiting to fit, below: there it stood in the status bar.
             let commented = marks.comments.contains(&(row.line + 1));
-            if proportional && focused && index == caret_row && row.heading > 0 && !commented {
+            let waits = proportional && row.tall && y + 2 >= area.bottom();
+            let marked = row.heading > 0 && !commented && !waits;
+            if proportional && focused && index == caret_row && marked {
                 let dim = cellix_render::Style {
                     fg: theme.gutter.fg,
                     ..theme.text
@@ -4876,9 +4879,11 @@ impl Editor {
                 self.draw_heading_mark(grid, row, (left - PAGE_MARGIN, left, y), dim.fg);
             }
             if row.rule && proportional {
-                // As long as a rule is, or as the page has room for.
-                let room = page_end.saturating_sub(left + 1) as f32;
-                let line = Bounds::cells(left as f32, y as f32 + 0.5, room.min(60.0), 0.0);
+                // One line across the text's column, as wide as its words are set. Its dashes
+                // are the cell tier's; drawn as well, they were a second, darker line over the
+                // first, each stopping at a different place short of the column's edge.
+                let room = self.page_width(area) as f32;
+                let line = Bounds::cells(left as f32, y as f32 + 0.5, room, 0.0);
                 grid.hairline(line, theme.popup_border);
             }
             if row.quote {
@@ -5015,7 +5020,10 @@ impl Editor {
             Tone::Inserted => theme.inserted(),
             Tone::Deleted | Tone::Failed => theme.deleted(),
             Tone::Margin(_) => theme.gutter.fg,
+            Tone::Note => theme.text.fg,
+            Tone::NoteMark => theme.accent,
         };
+        let noted = |tone: Tone| matches!(tone, Tone::Note | Tone::NoteMark);
         let found = |at: Option<usize>| {
             at.is_some_and(|at| self.found.iter().any(|f| at >= f.0 && at < f.1))
         };
@@ -5074,9 +5082,16 @@ impl Editor {
         }
         // Cells carry the text for the cell tier, and for tests. Pixels come from paint.
         for (index, g) in row.glyphs.iter().enumerate().filter(|(_, g)| !hidden(g)) {
+            // A reviewer's note stands on a comment's tint, as a comment's words do: on
+            // cells; with pixels its pill is painted.
+            let ground = if noted(g.tone) && !proportional {
+                theme.tint
+            } else {
+                bg
+            };
             let style = cellix_render::Style {
                 fg: fg_of(g.tone),
-                bg: mark(index).filter(|_| !proportional).unwrap_or(bg),
+                bg: mark(index).filter(|_| !proportional).unwrap_or(ground),
                 bold: g.font.bold,
                 italic: g.font.italic,
                 underline: g.underline || flagged(g.at),
@@ -5161,6 +5176,30 @@ impl Editor {
                 grid.panel(pill, 8, Some(theme.highlighter()), None);
             }
         }
+        // A reviewer's note, its ◆ and its words, on one pill of a comment's tint.
+        let mut index = 0;
+        while index < row.glyphs.len() {
+            let shown = |g: &Glyph| noted(g.tone) && !hidden(g);
+            if !shown(&row.glyphs[index]) {
+                index += 1;
+                continue;
+            }
+            let end = (index..row.glyphs.len())
+                .find(|at| !shown(&row.glyphs[*at]))
+                .unwrap_or(row.glyphs.len());
+            let first = row.glyphs[index];
+            let width: f32 = row.glyphs[index..end].iter().map(|g| g.advance).sum();
+            // Its room before it, but not past the text's edge where it runs on to a row.
+            let from = (first.x - 0.25).max(0.0);
+            let pill = Bounds::cells(
+                origin + from,
+                text_y + 0.05,
+                first.x - from + width + 0.25,
+                0.9,
+            );
+            grid.panel(pill, 8, Some(theme.tint), None);
+            index = end;
+        }
         // A table's selection is drawn under its lines, with its box.
         if row.table.is_none() {
             let (top, tall) = self.selection_rows(row, y);
@@ -5191,7 +5230,8 @@ impl Editor {
                 grid.panel(spot, 0, Some(colour), None);
             }
         }
-        for run in &runs {
+        // A rule's dashes are its line on cells; with pixels it's drawn as one.
+        for run in runs.iter().filter(|_| !row.rule) {
             let g = row.glyphs[run.start];
             let text: String = row.glyphs[run.clone()].iter().map(|g| g.ch).collect();
             let (x, width) = (origin + g.x, width_of(run));

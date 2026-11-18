@@ -61,6 +61,9 @@ pub enum Tone {
     Failed,
     /// An equation's number, moved this many 64ths of a row from the middle of its row.
     Margin(i8),
+    /// A reviewer's note in the text (`{>>note<<}`), and the comment's ◆ it's shown after.
+    Note,
+    NoteMark,
 }
 
 /// The kinds of GitHub's callouts.
@@ -805,14 +808,7 @@ fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mu
                 out,
             )
         } else if rest.starts_with(&['{', '>', '>']) {
-            critic(
-                rest,
-                &['<', '<', '}'],
-                toned(Tone::Dim, Some(85)),
-                at,
-                context,
-                out,
-            )
+            note(rest, at, look, context, out)
         } else if rest.starts_with(&['{', '~', '~']) {
             replacement(rest, look, at, context, out)
         } else if rest.starts_with(&['~', '~']) {
@@ -883,6 +879,49 @@ fn critic(
     let end = (3..rest.len()).find(|i| rest[*i..].starts_with(close))?;
     inline(&rest[3..end], at + 3, look, context, out);
     Some(end + close.len())
+}
+
+/// The size a reviewer's note is set at, of the words round it: the interface's small words.
+const NOTE_SIZE: u8 = 90;
+
+/// `{>>note<<}`: a reviewer's note in the text, shown as a comment is, after the comment's ◆
+/// and on its tint, with room between it and the words before it. Until 0.11.0's review it
+/// was small grey words against the period before them, which read as a typo.
+fn note(
+    rest: &[char],
+    at: usize,
+    look: Look,
+    context: &Context,
+    out: &mut Vec<Glyph>,
+) -> Option<usize> {
+    let end = (3..rest.len()).find(|i| rest[*i..].starts_with(&['<', '<', '}']))?;
+    // Two spaces' room, which the tint's own edge takes a little of.
+    let spaces = out.iter().rev().take_while(|g| g.ch == ' ').count();
+    if !out.is_empty() {
+        out.extend(decoration(
+            &" ".repeat(2usize.saturating_sub(spaces)),
+            Tone::Text,
+        ));
+    }
+    let small = Font {
+        size: NOTE_SIZE,
+        ..look.font
+    };
+    let mark = Font {
+        mono: true,
+        bold: false,
+        italic: false,
+        ..small
+    };
+    let tone = |tone, font| Look {
+        tone,
+        font,
+        underline: false,
+    };
+    out.push(glyph('◆', None, tone(Tone::NoteMark, mark)));
+    out.push(glyph(' ', None, tone(Tone::Note, small)));
+    inline(&rest[3..end], at + 3, tone(Tone::Note, small), context, out);
+    Some(end + 3)
 }
 
 /// `{~~old~>new~~}`: what's going, then what's coming.
@@ -1873,7 +1912,7 @@ fn cell_outputs(
                     rows.push(row);
                 }
                 if lines.len() > MOST {
-                    let more = format!("{} more lines", lines.len() - MOST);
+                    let more = crate::lines_word(lines.len() - MOST).replacen(' ', " more ", 1);
                     rows.push(note_row(&more, line, at, context));
                 }
             }

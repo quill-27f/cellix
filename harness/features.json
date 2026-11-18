@@ -6473,5 +6473,33 @@
     "title": "With the start out of view, the selection's buttons stand under or beside its end, as clear",
     "test": "the_selection_bar_under_or_beside_the_end_keeps_clear_too",
     "passes": true
+  },
+  {
+    "id": "page-rule-one-line",
+    "milestone": 15,
+    "title": "A horizontal rule is one hairline across the text's column, in one colour",
+    "test": "a_rule_is_one_line_across_the_text_column",
+    "passes": true
+  },
+  {
+    "id": "reviewer-note-as-comment",
+    "milestone": 15,
+    "title": "A reviewer's note in the text stands apart, after the comment's mark and on its tint",
+    "test": "a_reviewers_note_stands_apart_with_the_comment_mark",
+    "passes": true
+  },
+  {
+    "id": "preamble-one-line",
+    "milestone": 15,
+    "title": "A one-line preamble says 1 line",
+    "test": "a_one_line_preamble_says_one_line",
+    "passes": true
+  },
+  {
+    "id": "heading-mark-waits",
+    "milestone": 15,
+    "title": "A big heading waiting to fit at the page's foot draws no mark in the status bar",
+    "test": "a_heading_waiting_to_fit_draws_no_mark_under_the_page",
+    "passes": true
   }
 ]

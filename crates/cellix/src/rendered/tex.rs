@@ -1318,7 +1318,7 @@ pub(super) fn layout(lines: &[(usize, &str)], width: f32, context: &Context, row
             if context.extras.preamble {
                 page.source(0, found.saturating_sub(1));
             } else if found > 0 {
-                page.label(&format!("▸ Preamble, {found} lines"), 0);
+                page.label(&format!("▸ Preamble, {}", crate::lines_word(found)), 0);
                 if let Some(row) = page.rows.last_mut() {
                     row.target = Some(Target::Preamble);
                 }

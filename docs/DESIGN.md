@@ -728,9 +728,14 @@ on its own thread after a pause in typing. Words added to the dictionary go in
 
 Pages read more than CommonMark: strikethrough, `==highlight==`, `H~2~O`, `x^2^`, footnotes, GitHub
 callouts such as `> [!NOTE]`, and CriticMarkup for tracked changes. All of it is still plain text in
-the file, and it reaches the web page and the PDF. Track Changes keeps edits as suggestions in the
-text itself, as CriticMarkup or the `changes` package, so they travel with the file and any tool,
-agents included, can read them.
+the file, and it reaches the web page and the PDF. A reviewer's note in the text (`{>>note<<}`) is
+shown as a comment is, two spaces after the words before it, after the comment's ◆ and on a
+comment's tint, in the small words; until 0.11.0's review it stood against the period before it in
+small grey words and read as a typo. A horizontal rule is one hairline across the text's column, as
+wide as its words are set; its dashes are the cell tier's (in 0.11.0 they were drawn over a shorter
+hairline too, a line that changed colour part way and stopped short in a wide pane). Track Changes
+keeps edits as suggestions in the text itself, as CriticMarkup or the `changes` package, so they
+travel with the file and any tool, agents included, can read them.
 
 A suggestion is settled where it stands. While the caret is in one, or the pointer is on one,
 Reject and Accept stand over its first row from where it starts, Review's two words for the same
