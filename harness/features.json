@@ -5738,5 +5738,26 @@
     "title": "Ctrl+click on a live agent's name in a terminal's text looks at it: a helper opens in peek over that tab, one with a tab comes to the front; other words, as file:line, are as they were",
     "test": "a_ctrl_click_on_an_agents_name_in_a_terminal_looks_at_it",
     "passes": true
+  },
+  {
+    "id": "reviewer-agent",
+    "milestone": 15,
+    "title": "Review with... starts an agent from a menu of them on the changes Review compares, as reviewer, with the Reviewer prompt; what it suggests shows in Review under its line, with Keep and Dismiss",
+    "test": "an_agent_reviews_the_changes_and_what_it_finds_shows_in_review",
+    "passes": true
+  },
+  {
+    "id": "reviewer-role",
+    "milestone": 15,
+    "title": "Cellix ships a Reviewer role in the +'s menu: it reads the changes, changes nothing, and leaves each finding with cellix suggest",
+    "test": "the_built_in_reviewer_reads_the_changes_and_leaves_suggestions",
+    "passes": true
+  },
+  {
+    "id": "review-with-palette",
+    "milestone": 15,
+    "title": "Agent: Review Changes with... in the palette opens Review on the changes and drops the menu of agents from its button",
+    "test": "the_palette_reviews_with_an_agent_from_review",
+    "passes": true
   }
 ]

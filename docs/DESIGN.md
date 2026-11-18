@@ -1447,8 +1447,9 @@ They're read when the menu opens, from `.cellix/roles/*.md` in the project, then
 `~/.config/cellix/roles/*.md`, then Cellix's own, which ship in the binary (`crates/cellix/roles`,
 one line in `roles::BUILT_IN` each); a name found sooner hides the same name later, so a project
 can replace a built-in one. A role's row has its agent's mark, its name and its description,
-quieter; one whose agent isn't installed is dimmed. Cellix ships Tester, which runs the
-project's tests the way its files say to and reports what failed, changing nothing.
+quieter; one whose agent isn't installed is dimmed. Cellix ships Reviewer, which reads the
+changes and leaves what it finds as suggested comments, and Tester, which runs the project's
+tests the way its files say to and reports what failed; neither changes anything.
 
 Picked, a role starts its agent in the pane, as the agent's own row would, with the role's body
 as its first prompt. That's given the way each agent takes a first prompt when it starts
@@ -1458,6 +1459,25 @@ whatever it asks first, and a new folder's trust question is the first thing Cla
 in a worktree. A prompt typed when the screen went quiet would have answered that question
 with its Enter. An agent Cellix doesn't know how to give a prompt to gets it on the clipboard
 instead, with a word saying so.
+
+### Review with an agent
+
+Review's list ends, a row under its files, with Review with…, a quiet button; the palette has
+Agent: Review Changes with… for where there's no list. Both drop a menu of the agents Cellix
+starts, those not installed dimmed. The one picked starts in the pane as the Reviewer role does,
+called reviewer while that name is free, its first prompt the role's with its first line saying
+which changes Review compares and the git command that shows them: since the last commit (`git
+diff HEAD`), since a turn's checkpoint, or one turn's own (`git diff <before> <after>`). A
+project's own Reviewer role is used in place of Cellix's; one whose first line doesn't name the
+changes is told them before the rest.
+
+The role tells it to change nothing and to leave each finding with `cellix suggest`, which makes
+a comment suggested by that agent. Review shows each under its line in the cards, after the
+person's own: "Suggested by Codex · Clarity" in the accent, as the Comments list says it, its
+words cut with an ellipsis, and Keep and Dismiss at the row's end. Those are words lit under the
+pointer, not chips: a note is one row, and a chip on it would stand within 8 px of its edges.
+Kept, it's the person's comment, and one on code goes with the review as theirs do; dismissed,
+it's resolved and gone. The Comments list's Keep and Dismiss do the same.
 
 ### Workspaces, in place of tmux
 

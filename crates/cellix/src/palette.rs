@@ -310,7 +310,7 @@ pub fn goes_by(title: &str, name: &str) -> bool {
 
 /// Every command the palette can list, as its category and its name. The list is shown by
 /// title, so a category's commands stand together.
-pub const COMMANDS: [(&str, Command); 123] = [
+pub const COMMANDS: [(&str, Command); 124] = [
     ("File: Save", Command::Save),
     ("Edit: Undo", Command::Undo),
     ("Edit: Redo", Command::Redo),
@@ -403,6 +403,7 @@ pub const COMMANDS: [(&str, Command); 123] = [
         "Agent: Review Previous Agent Turn",
         Command::ReviewPreviousTurn,
     ),
+    ("Agent: Review Changes with…", Command::ReviewWith),
     ("Agent: Undo Agent Turn", Command::UndoTurn),
     ("Agent: Show Agent Task", Command::ShowAgentTask),
     ("Git: Commit Staged Changes", Command::Commit),

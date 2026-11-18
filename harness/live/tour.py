@@ -187,7 +187,7 @@ EXPECT = {
     "98-pane-drag-under": "loss.png",
 }
 # About how many scenes there are, to cut the tour into parts of a size.
-SCENES_IN_ALL = 218
+SCENES_IN_ALL = 221
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # Which commit the binary is, as far as git can say: the pictures are of that.
@@ -1024,6 +1024,35 @@ def team_scenes(scratch):
         shutil.rmtree(cache, ignore_errors=True)
 
 
+def reviewer_scenes(scratch):
+    """Review with an agent: the menu from Review's list, and what the agent suggests under
+    its line. Codex is a stand-in on PATH that leaves one finding through the real
+    `cellix suggest` as it starts, as the Reviewer role tells it to."""
+    tools = f"{scratch}/review-bin"
+    os.makedirs(tools)
+    with open(f"{tools}/codex", "w") as f:
+        f.write("#!/bin/sh\nprintf 'Codex (stand-in)\\n'\n"
+                f"'{binary}' suggest src/queue.rs 24 Clarity '/// Returned when the queue is full.' "
+                "'Say what a caller should do when it gets this.' >/dev/null 2>&1\n"
+                "printf 'Left 1 finding.\\n'\n"
+                "exec sleep 300\n")
+    os.chmod(f"{tools}/codex", 0o755)
+    menu = [["keys", "\u0007"], ["until", "Review with"], ["click", *ON("Review with")],
+            ["until", "Gemini CLI"], ["wait", 0.4]]
+    found = [*menu, ["click", *ON("Codex")], ["until", "Suggested by Codex"], ["wait", 1.0]]
+    scenes = [
+        ("175-review-with", menu, {}),
+        ("176-review-suggested", found, {}),
+        ("176-review-suggested-light", found, {"background": "eff1f5"}),
+    ]
+    for name, steps, extra in scenes:
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        shoot(name, steps, CODE_FILE, **{"size": "150x44", **extra}, env=env)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+
+
 def agents_by_urgency(scratch):
     """The Agents list by urgency, from agents that report through Cellix's real hook from
     outside the pane: one asking, one done and not yet looked at, one working, one idle."""
@@ -1173,6 +1202,7 @@ with tempfile.TemporaryDirectory() as scratch:
     waits(scratch)
     task_scenes(scratch)
     team_scenes(scratch)
+    reviewer_scenes(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)
     # The dark theme on a terminal whose background isn't herdr's: the frame is that

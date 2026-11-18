@@ -224,6 +224,8 @@ pub(crate) struct Team {
     /// How long a message waits after the person's last key, and for a prompt they've begun.
     pub(super) quiet: Duration,
     pub(super) draft: Duration,
+    /// The name the next agent started is to have, if it's free: the reviewer's.
+    pub(super) wanted: std::cell::RefCell<Option<String>>,
 }
 
 impl Default for Team {
@@ -243,6 +245,7 @@ impl Default for Team {
             always: false,
             quiet: QUIET,
             draft: DRAFT,
+            wanted: std::cell::RefCell::new(None),
         }
     }
 }
@@ -383,8 +386,16 @@ impl App {
             "command" => name_part(argv.first().map_or("command", String::as_str)),
             agent => agent.to_string(),
         };
+        // A name asked for, as the reviewer's, when it's free; numbered after it when not.
+        let free =
+            |name: &str| self.member_index(name).is_none() && !self.team.gone.contains_key(name);
+        let name = match self.team.wanted.take() {
+            Some(wanted) if free(&wanted) => wanted,
+            Some(wanted) => self.free_name(&wanted),
+            None => self.free_name(&base),
+        };
         Some(Member {
-            name: self.free_name(&base),
+            name,
             kind,
             parent: None,
             outlive: false,

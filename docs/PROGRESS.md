@@ -3069,3 +3069,15 @@ Item 14 of the herdr work (the a2a track).
 - The tour's terminal has a `ctrl` step, a click with Ctrl held, and its Claude Code stand-in now says which helper it asked.
 - Test: `a_ctrl_click_on_an_agents_name_in_a_terminal_looks_at_it`. Tour: `174-name-peek`, looked at: the helper's card over the lead's tab, live.
 - Not done: names aren't underlined under the pointer, as a link would be in VS Code's terminal; the click is found by trying it.
+
+## A reviewer agent, its findings in Review (2026-11-18)
+
+Item 8 of the herdr work (the a2a track).
+
+- Cellix ships a Reviewer role (`crates/cellix/roles/reviewer.md`), listed first under the +'s ROLES as the board's panel 3 has it: "reads the changes, leaves comments". It's told to read the changes with git, change nothing, start no one, and leave each finding with `cellix suggest`, its kind one Review's comments already sort by.
+- Review's list ends, a row under its files, with a quiet Review with… button, and the palette has Agent: Review Changes with… (`Command::ReviewWith`). Both drop a menu of the agents, those not installed dimmed. The one picked starts as the Reviewer role does, named reviewer while that's free (`Team::wanted`), its prompt's first line saying which changes Review compares: since the last commit, since a turn's checkpoint, or one turn's own (`Review::agent_range`).
+- What it suggests shows in Review's cards under its line, after the person's own comments: "Suggested by Codex · Clarity" in the accent, the words cut with an ellipsis, then Keep and Dismiss as words lit under the pointer, not chips, which on a one-row note would stand within 8 px of its edges. Kept, it's the person's comment, and one on code now goes with the review as theirs do, from the Comments list too; dismissed, it's resolved.
+- Tests: `an_agent_reviews_the_changes_and_what_it_finds_shows_in_review` (a stand-in for Codex proved to run, with what it was started with), `the_palette_reviews_with_an_agent_from_review`, `the_reviewer_is_told_which_changes`, `the_built_in_reviewer_reads_the_changes_and_leaves_suggestions`.
+- Tour: `175-review-with` (the menu), `176-review-suggested` and `-light`, where a stand-in Codex leaves a finding through the real `cellix suggest`; `14-start-menu` with Reviewer in it. Looked at; the first picture had the button as a square block against the last file and a gap of nine columns before the finding's words, both fixed.
+- A test fixed: `a_commands_title_has_room_on_the_keyboard_page_or_ends_in_an_ellipsis` took any name ending in "…" for one cut short, so "Review Changes with…", whole on the Keyboard page, failed it. A name that is a command's own, ellipsis and all, now counts as whole; one cut short still has to be the start of a command's name.
+- Not done: no real agent has been run as the reviewer; the Reviewer started from the + takes its agent's numbered name, not reviewer; a long finding is cut on its row, whole in the Comments list.

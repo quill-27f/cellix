@@ -271,6 +271,8 @@ pub enum Command {
     AcceptAllChanges,
     RejectAllChanges,
     ReviewPreviousTurn,
+    /// Starts an agent reviewing the changes, from a menu of the agents.
+    ReviewWith,
     UndoTurn,
     /// The Task page: the agent work here as a timeline.
     ShowAgentTask,

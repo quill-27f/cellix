@@ -11,7 +11,10 @@ use cellix_agent::context::front_matter;
 
 /// Cellix's own roles, each as the file it would be: its name, and its text. Another is a
 /// file under `roles/` and a line here.
-const BUILT_IN: &[(&str, &str)] = &[("tester", include_str!("../roles/tester.md"))];
+const BUILT_IN: &[(&str, &str)] = &[
+    ("reviewer", include_str!("../roles/reviewer.md")),
+    ("tester", include_str!("../roles/tester.md")),
+];
 
 /// Where a role was found.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,7 +204,11 @@ mod tests {
             roles.iter().map(|r| (r.name.as_str(), r.source)).collect();
         assert_eq!(
             names,
-            [("Tester", Source::Project), ("Planner", Source::Person)]
+            [
+                ("Tester", Source::Project),
+                ("Planner", Source::Person),
+                ("Reviewer", Source::BuiltIn)
+            ]
         );
         assert_eq!(roles[0].prompt, "Run make check.");
         // Without those, Cellix's own.
@@ -210,16 +217,34 @@ mod tests {
             .into_iter()
             .map(|r| r.name)
             .collect();
-        assert_eq!(built, ["Tester"]);
+        assert_eq!(built, ["Reviewer", "Tester"]);
     }
 
     #[test]
     fn the_built_in_tester_runs_the_tests_and_changes_nothing() {
         let empty = tempfile::tempdir().unwrap();
-        let tester = find(empty.path(), None).remove(0);
+        let roles = find(empty.path(), None);
+        let tester = roles.iter().find(|r| r.name == "Tester").unwrap();
         assert_eq!(tester.source, Source::BuiltIn);
         assert!(!tester.description.is_empty());
         assert!(tester.prompt.contains("test"), "{}", tester.prompt);
         assert!(tester.prompt.contains("Don't change"), "{}", tester.prompt);
+    }
+
+    #[test]
+    fn the_built_in_reviewer_reads_the_changes_and_leaves_suggestions() {
+        let empty = tempfile::tempdir().unwrap();
+        let roles = find(empty.path(), None);
+        let reviewer = roles.iter().find(|r| r.name == "Reviewer").unwrap();
+        assert_eq!(reviewer.description, "reads the changes, leaves comments");
+        assert!(reviewer.agent.is_none(), "the first agent installed");
+        let prompt = &reviewer.prompt;
+        assert!(prompt.starts_with("Review the changes"), "{prompt}");
+        assert!(prompt.contains("`git diff HEAD`"), "{prompt}");
+        assert!(prompt.contains("read-only"), "{prompt}");
+        assert!(
+            prompt.contains("cellix suggest <file> <line> <kind>"),
+            "{prompt}"
+        );
     }
 }

@@ -1,4 +1,4 @@
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -18,6 +18,13 @@ use cellix_review::{
 use crate::theme::Theme;
 
 const LIST_WIDTH: u16 = 24;
+/// The list's button that starts an agent reviewing what's listed.
+pub const REVIEW_WITH: &str = "Review with…";
+/// What a suggestion under its line answers with.
+const KEEP: &str = "Keep";
+const DISMISS: &str = "Dismiss";
+/// Between who suggests and what, in cells: about 13 px.
+const SUGGESTION_GAP: f32 = 1.5;
 const NUMBER_WIDTH: u16 = 5;
 /// How far a card's top edge reaches into the gap above it, and how far its header's
 /// words and buttons are raised, in rows: air of about 11 px above and below the buttons.
@@ -65,6 +72,23 @@ pub enum Hit {
     NextFile,
     /// The × at the end of the title: back to the file that was open.
     Close,
+    /// Review with…, its menu dropping from the place given.
+    ReviewWith((u16, u16)),
+    /// A suggestion's Keep or Dismiss, by its comment's id.
+    KeepSuggestion(u32),
+    DismissSuggestion(u32),
+}
+
+/// An agent's suggested comment, as Review shows it under its line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Suggested {
+    pub id: u32,
+    pub file: String,
+    pub line: usize,
+    /// The agent that left it.
+    pub by: String,
+    pub kind: String,
+    pub text: String,
 }
 
 /// A row of the stacked layout.
@@ -74,6 +98,8 @@ enum Stacked<'a> {
     Header(usize),
     Line(&'a Side, RowKind),
     Note(&'a str),
+    /// An agent's suggestion, by its place in `suggested`.
+    Suggested(usize),
     /// After a file's last change, what's next: the next file, or that it's all been seen.
     End,
 }
@@ -86,6 +112,9 @@ enum ListRow {
     Commit,
     Test(usize),
     File(usize),
+    /// A row of air before a button.
+    Space,
+    ReviewWith,
 }
 
 /// Something fixed to read, rather than the working tree against HEAD or a turn: nothing in
@@ -141,6 +170,8 @@ pub struct Review {
     pub title_room: Cell<u16>,
     /// The list's width: the sidebar's, so every sidebar is the same.
     pub list_width: Cell<u16>,
+    /// What agents have suggested, set before it's drawn or pressed.
+    pub suggested: RefCell<Vec<Suggested>>,
     /// A file to show once the changes have been read.
     wanted: Option<PathBuf>,
     root: PathBuf,
@@ -342,6 +373,7 @@ impl Review {
             measure: None,
             close_at: Cell::new(u16::MAX),
             list_width: Cell::new(LIST_WIDTH),
+            suggested: RefCell::new(Vec::new()),
             wanted: None,
             fixed: None,
         };
@@ -407,6 +439,7 @@ impl Review {
             measure: None,
             close_at: Cell::new(u16::MAX),
             list_width: Cell::new(LIST_WIDTH),
+            suggested: RefCell::new(Vec::new()),
             wanted: None,
             fixed: None,
         };
@@ -747,7 +780,41 @@ impl Review {
         if self.staged > 0 {
             rows.push(ListRow::Commit);
         }
+        if !self.changes.is_empty() {
+            rows.push(ListRow::Space);
+            rows.push(ListRow::ReviewWith);
+        }
         rows
+    }
+
+    /// Where Review with… drops its menu from, as the list stands in `area`; None when the
+    /// list isn't shown or the button isn't on it.
+    pub fn review_with_at(&self, area: Rect) -> Option<(u16, u16)> {
+        let (list, _) = self.layout(area);
+        let list = list?;
+        let row = self
+            .list_rows()
+            .iter()
+            .position(|r| *r == ListRow::ReviewWith)?;
+        let y = list.y + row as u16;
+        (y < list.bottom()).then_some((list.x + 1, y + 1))
+    }
+
+    /// The first line of what a reviewing agent is told: which changes, and the git command
+    /// that shows them, as this compares them.
+    pub fn agent_range(&self) -> String {
+        let turn = self.base.and_then(|b| self.turns.get(b));
+        match (turn, &self.until) {
+            (Some(turn), Some(until)) => format!(
+                "Review the changes one agent turn made in this folder: see them with `git diff {} {until}`.",
+                turn.commit
+            ),
+            (Some(turn), None) => format!(
+                "Review the changes in this folder since an agent turn's checkpoint: see them with `git diff {}`, and `git status` for files that are new.",
+                turn.commit
+            ),
+            _ => "Review the changes in this folder since the last commit: see them with `git diff HEAD`, and `git status` for files that are new.".to_string(),
+        }
     }
 
     fn side_style<'a>(
@@ -778,9 +845,16 @@ impl Review {
             .current_path()
             .map(|p| p.to_string_lossy().into_owned());
         let mut rows = Vec::new();
+        let suggested = self.suggested.borrow();
         let note = |rows: &mut Vec<Stacked<'a>>, side: &Side| {
             let here = |c: &&Comment| Some(&c.file) == file.as_ref() && c.line == side.number;
             rows.extend(comments.iter().filter(here).map(|c| Stacked::Note(&c.text)));
+            // What an agent suggested there, after the person's own.
+            let theirs = |(_, s): &(usize, &Suggested)| {
+                Some(&s.file) == file.as_ref() && s.line == side.number
+            };
+            let found = suggested.iter().enumerate().filter(theirs);
+            rows.extend(found.map(|(i, _)| Stacked::Suggested(i)));
         };
         for row in &self.diff.rows {
             match row {
@@ -956,8 +1030,27 @@ impl Review {
                 })
             }
             Stacked::End => (self.selected + 1 < self.changes.len()).then_some(Hit::NextFile),
+            Stacked::Suggested(index) => {
+                let suggestion = self.suggested.borrow().get(*index)?.clone();
+                let (keep, dismiss) = self.suggestion_buttons(body);
+                if x >= keep && x < keep + KEEP.chars().count() as u16 {
+                    Some(Hit::KeepSuggestion(suggestion.id))
+                } else if x >= dismiss && x < dismiss + DISMISS.chars().count() as u16 {
+                    Some(Hit::DismissSuggestion(suggestion.id))
+                } else {
+                    None
+                }
+            }
             Stacked::Gap | Stacked::Note(_) => None,
         }
+    }
+
+    /// Where a suggestion's Keep and Dismiss stand, at the end of its row.
+    fn suggestion_buttons(&self, card: Rect) -> (u16, u16) {
+        let end = card.right().saturating_sub(4);
+        let dismiss = end.saturating_sub(DISMISS.chars().count() as u16);
+        let keep = dismiss.saturating_sub(KEEP.chars().count() as u16 + 2);
+        (keep, dismiss)
     }
 
     pub fn step_file(&mut self, delta: isize) {
@@ -1242,6 +1335,66 @@ impl Review {
         grid.label(end + 2, y, text, theme.sidebar, inset.right());
     }
 
+    /// An agent's suggestion under its line: as a comment is, who suggests it in the
+    /// accent, its kind and words, and Keep and Dismiss at its end.
+    fn draw_suggested(&self, grid: &mut Grid, card: Rect, y: u16, index: usize, theme: &Theme) {
+        let Some(suggestion) = self.suggested.borrow().get(index).cloned() else {
+            return;
+        };
+        grid.fill(Rect::new(card.x, y, card.w, 1), theme.text);
+        let inset = Rect::new(
+            card.x + NUMBER_WIDTH,
+            y,
+            card.w.saturating_sub(NUMBER_WIDTH + 2),
+            1,
+        );
+        grid.fill(inset, theme.sidebar);
+        grid.panel(
+            Bounds::inset(inset, 0.0, 0.04),
+            20,
+            Some(theme.sidebar.bg),
+            None,
+        );
+        let who = Style {
+            fg: theme.accent,
+            ..theme.sidebar
+        };
+        let (keep, dismiss) = self.suggestion_buttons(card);
+        let stop = keep.saturating_sub(2);
+        let by = match suggestion.kind.as_str() {
+            "" => format!("Suggested by {}", suggestion.by),
+            kind => format!("Suggested by {} · {kind}", suggestion.by),
+        };
+        let end = grid.label(inset.x + 1, y, &by, who, stop);
+        // Its words a gap after who, by what that measures where there are pictures, and cut
+        // with an ellipsis before Keep.
+        match &self.measure {
+            Some(measure) => {
+                let font = cellix_render::Font::default();
+                let x = f32::from(inset.x + 1) + measure.width(&by, font) + SUGGESTION_GAP;
+                let text = crate::context::elide(&suggestion.text, f32::from(stop) - x, &**measure);
+                grid.label_at(x, x.floor() as u16, y, &text, theme.sidebar, stop, 100);
+            }
+            None => {
+                grid.label(end + 2, y, &suggestion.text, theme.sidebar, stop);
+            }
+        }
+        // Words, lit under the pointer, as a row's own actions are: a chip here would stand
+        // within 8 px of the card's lines.
+        for (x, words) in [(keep, KEEP), (dismiss, DISMISS)] {
+            let wide = words.chars().count() as u16;
+            let over = self
+                .hover
+                .get()
+                .is_some_and(|(hx, hy)| hy == y && hx >= x && hx < x + wide);
+            let style = Style {
+                fg: if over { theme.text.fg } else { theme.accent },
+                ..theme.sidebar
+            };
+            grid.label(x, y, words, style, x + wide + 1);
+        }
+    }
+
     fn draw_cards(&self, grid: &mut Grid, body: Rect, theme: &Theme, comments: &[Comment]) {
         let rows = self.stacked(comments);
         let top = body.y + 1;
@@ -1275,6 +1428,7 @@ impl Review {
                     self.draw_hunk_header(grid, body, (y, y == top), *hunk, theme)
                 }
                 Stacked::Note(text) => self.draw_note(grid, body, y, text, theme),
+                Stacked::Suggested(index) => self.draw_suggested(grid, body, y, *index, theme),
                 Stacked::Line(side, kind) => {
                     let bg = match kind {
                         RowKind::Removed => theme.removed,
@@ -1362,11 +1516,15 @@ impl Review {
         let (list, body) = self.layout(area);
         if list.is_some_and(|l| x < l.right()) {
             return match self.list_rows().get((y - area.y) as usize)? {
-                ListRow::Heading(_) => None,
+                ListRow::Heading(_) | ListRow::Space => None,
                 ListRow::Base(base) => Some(Hit::Base(*base)),
                 ListRow::Commit => Some(Hit::Commit),
                 ListRow::Test(index) => Some(Hit::Test(*index)),
                 ListRow::File(index) => Some(Hit::File(*index)),
+                ListRow::ReviewWith => {
+                    let list = list?;
+                    Some(Hit::ReviewWith((list.x + 1, y + 1)))
+                }
             };
         }
         self.hit_cards(list.is_some(), body, x, y, comments)
@@ -1430,6 +1588,16 @@ impl Review {
                 };
                 let text = format!("[Commit {} staged]", self.staged);
                 grid.button(list.x + 1, y, &text, "Commit", theme.button, style);
+            }
+            ListRow::Space => {}
+            ListRow::ReviewWith => {
+                let fill = theme.quiet_button(theme.sidebar.bg);
+                let style = Style {
+                    fg: theme.text.fg,
+                    ..theme.sidebar
+                };
+                let cells = self.cells_of(REVIEW_WITH);
+                grid.button(list.x + 1, y, &cells, REVIEW_WITH, fill, style);
             }
             ListRow::Test(index) => {
                 let run = &self.tests[*index];

@@ -66,6 +66,7 @@ use crate::source::{Hit as SourceHit, Source as SourceControl};
 mod available;
 mod gitops;
 mod peek;
+mod reviewer;
 mod start;
 mod team;
 mod worktree;
@@ -6543,6 +6544,7 @@ impl App {
             Looked::Review => {
                 if let Some(review) = &self.review {
                     let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
+                    review.suggested.replace(self.suggestions());
                     review.draw(grid, stretch(self.main_area()), None, theme, &comments);
                 }
             }
@@ -8058,6 +8060,7 @@ impl App {
                     review.previous_turn();
                 }
             }
+            Command::ReviewWith => self.review_with_menu(),
             Command::UndoTurn => self.prompt_undo_turn(),
             Command::ShowAgentTask => self.show_task_page(),
             Command::Commit => self.ask("Commit message", PromptAction::Commit),
@@ -11605,19 +11608,8 @@ impl App {
                 }
                 self.save_threads();
             }
-            ThreadHit::Keep(id) => {
-                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
-                    thread.suggested_by.clear();
-                }
-                self.save_threads();
-                self.say("Kept as your comment");
-            }
-            ThreadHit::Dismiss(id) => {
-                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
-                    thread.resolved = true;
-                }
-                self.save_threads();
-            }
+            ThreadHit::Keep(id) => self.keep_suggestion(id),
+            ThreadHit::Dismiss(id) => self.dismiss_suggestion(id),
             ThreadHit::Resolve(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
                     thread.resolved = true;
@@ -12896,11 +12888,16 @@ impl App {
     fn click_review(&mut self, x: u16, y: u16) {
         let clicks = self.count_click(x, y);
         let area = self.main_area();
+        let suggested = self.suggestions();
         let Some(review) = &mut self.review else {
             return;
         };
+        review.suggested.replace(suggested);
         let comments = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
         match review.hit(area, x, y, &comments) {
+            Some(Hit::ReviewWith(at)) => self.show_review_with_menu(at),
+            Some(Hit::KeepSuggestion(id)) => self.keep_suggestion(id),
+            Some(Hit::DismissSuggestion(id)) => self.dismiss_suggestion(id),
             Some(Hit::File(index)) => review.select(index),
             Some(Hit::AcceptProposal) => self.accept_proposal(),
             Some(Hit::RejectProposal) => self.ask(REJECT_ASK, PromptAction::RejectProposal),
@@ -14390,6 +14387,7 @@ impl App {
             MenuAction::ReviewWorktree(path) => self.review = Some(self.new_review(path)),
             MenuAction::RemoveWorktree(path) => self.ask_remove_worktree(path),
             MenuAction::StartRole(program, prompt) => self.start_role(program, &prompt),
+            MenuAction::ReviewWith(program) => self.review_with(program),
             // The menu opens these itself.
             MenuAction::Submenu => {}
             MenuAction::ImageWidth(percent) => {
@@ -15361,6 +15359,7 @@ impl App {
             let area = self.main_area();
             // Beside Source Control, Review's list is on the file's sheet and Source Control
             // on the frame, so the sheet's own edge is what's between them.
+            review.suggested.replace(self.suggestions());
             review.draw(grid, area, self.hover, theme, &comments);
             self.draw_sheet_edges(grid);
             self.draw_status(grid);

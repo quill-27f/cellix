@@ -101,6 +101,8 @@ pub enum Action {
     Start(&'static str),
     /// Starts an agent with a role's prompt as its first.
     StartRole(&'static str, String),
+    /// Starts this agent reviewing the changes.
+    ReviewWith(&'static str),
     /// Reviews what changed in a worktree, as a click on its row does.
     ReviewWorktree(PathBuf),
     /// Asks to take a worktree away.

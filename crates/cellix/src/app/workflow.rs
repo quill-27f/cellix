@@ -800,12 +800,14 @@ mod tests {
                     ' ',
                     "a cell clear before the keys: {name}"
                 );
+                // A name of its own may end in an ellipsis, as one that opens a menu does:
+                // whole, it isn't cut.
                 match name.strip_suffix('…') {
-                    Some(stem) => {
+                    Some(stem) if !known.contains(&name.as_str()) => {
                         assert!(known.iter().any(|name| name.starts_with(stem)), "{name}");
                         cut += 1;
                     }
-                    None => assert!(known.contains(&name.as_str()), "{name} is cut short"),
+                    _ => assert!(known.contains(&name.as_str()), "{name} is cut short"),
                 }
                 shown.push(name);
             }

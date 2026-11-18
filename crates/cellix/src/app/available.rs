@@ -146,6 +146,7 @@ impl App {
             C::CompareWith => self.in_workspace(path),
             // Review does the committing.
             C::Commit => repo && self.review.is_some(),
+            C::ReviewWith => repo,
             C::PopStash | C::ApplyStash | C::PickStashToPop | C::DropStash => {
                 git(|now| now.stashes)
             }
