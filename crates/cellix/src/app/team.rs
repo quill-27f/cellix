@@ -838,8 +838,11 @@ impl App {
             outlive: start.outlive,
         };
         self.team.gone.remove(&start.name);
-        self.spawn_session(&display, &argv, &env, &start.folder, Some(member))
-            .map(|_| ())
+        let index = self.spawn_session(&display, &argv, &env, &start.folder, Some(member))?;
+        // A helper has no tab of its own: it stands under its agent in the Agents list, and
+        // is looked at there, over the pane.
+        self.dock.sessions[index].tabbed = start.parent.is_none();
+        Ok(())
     }
 
     /// Moves `pending` on as far as it can go now. Returns whether it's answered.
@@ -1352,7 +1355,11 @@ impl App {
             }
             let session = &mut self.dock.sessions[index];
             match &mut session.member {
-                Some(member) if member.outlive => member.parent = None,
+                // On its own now, it has a tab of its own.
+                Some(member) if member.outlive => {
+                    member.parent = None;
+                    session.tabbed = true;
+                }
                 _ if !session.exited => {
                     session.stop();
                     let name = session.called().unwrap_or_default().to_string();
@@ -1977,6 +1984,74 @@ mod tests {
         let helper = row_after(&grid, "WORKING", "reviewer");
         assert_eq!(helper, agent + 1, "{}", grid.text());
         assert!(!grid.text().contains("NEEDS YOU"), "{}", grid.text());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_helper_has_no_tab_and_peek_shows_it_live_over_the_pane() {
+        let (dir, mut app, fake) = project();
+        app.team.always = true;
+        let lead = lead(&mut app, &fake);
+        says(&mut app, "claude-1", AgentState::Working, "Working");
+        let started = call(&mut app, &lead, run(dir.path(), "reviewer", "codex", None));
+        shows_in(&mut app, "reviewer", "fake agent up");
+        says(&mut app, "reviewer", AgentState::Working, "Working");
+        assert_eq!(answered(&mut app, &started).code, code::OK);
+
+        // It has no tab of its own: the pane's row has the lead's and the list's.
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let pane = app.dock_area().unwrap();
+        let tabs = &grid.row_text(pane.y);
+        assert!(
+            tabs.contains("Claude Code") && !tabs.contains("Codex"),
+            "{tabs}"
+        );
+
+        // A press on its row opens it over the pane: who it is, what it's doing, who started
+        // it, Keep as Tab and ×, and its terminal, live.
+        let row = row_after(&grid, "WORKING", "reviewer");
+        let x = grid.row_text(row).find("reviewer").unwrap() as u16;
+        click(&mut app, (x, row));
+        let text = screen(&app).text();
+        assert!(text.contains("· from Claude Code"), "{text}");
+        assert!(text.contains("[Keep as Tab]"), "{text}");
+        assert!(text.contains("working"), "{text}");
+        assert!(text.contains("fake agent up"), "{text}");
+        // The keyboard is its while it's open.
+        for c in "hello".chars() {
+            app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+        }
+        app.handle(Event::Key(KeyEvent::plain(Key::Enter)));
+        shows_in(&mut app, "reviewer", "got: hello");
+        let deadline = Instant::now() + BACKGROUND;
+        while !screen(&app).text().contains("got: hello") {
+            assert!(Instant::now() < deadline, "{}", screen(&app).text());
+            app.poll();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        // A press outside it closes it, and nothing else happens.
+        click(&mut app, (2, 20));
+        assert!(app.peek.is_none());
+        assert!(!screen(&app).text().contains("Keep as Tab"));
+
+        // It opened over its agent's tab, which stays in front. Kept as a tab from there, it
+        // has one, in front.
+        assert_eq!(app.dock.active, Some(0));
+        app.run(Command::ListAgents);
+        let grid = screen(&app);
+        let row = row_after(&grid, "WORKING", "reviewer");
+        click(&mut app, (x, row));
+        assert!(app.peek.is_some());
+        let at = find(&screen(&app), "[Keep as Tab]");
+        click(&mut app, at);
+        assert!(app.peek.is_none());
+        let index = app.member_index("reviewer").unwrap();
+        assert!(app.dock.sessions[index].tabbed);
+        assert_eq!(app.dock.active, Some(index));
+        let grid = screen(&app);
+        assert!(grid.row_text(pane.y).contains("Codex"), "{}", grid.text());
     }
 
     /// Polls for `time`, and says `name` never showed `unwanted`.

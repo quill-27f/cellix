@@ -306,6 +306,18 @@ impl Grid {
         self.label_at(x as f32, x, y, text, style, max_x, 100)
     }
 
+    /// Takes away what was painted that starts inside `area`, for a surface of cells laid over
+    /// it: paint can't go under text, so cells can't cover it, and it would show through.
+    pub fn clear_paint_in(&mut self, area: Rect) {
+        let (left, right) = (i32::from(area.x) * UNIT, i32::from(area.right()) * UNIT);
+        let (top, bottom) = (i32::from(area.y) * UNIT, i32::from(area.bottom()) * UNIT);
+        self.paint.retain(|paint| {
+            let (from, _) = paint.reach();
+            let start = paint.top();
+            !(start >= top && start < bottom && from >= left && from < right)
+        });
+    }
+
     /// How much has been painted so far, to `lift_since` later.
     pub fn painted_so_far(&self) -> usize {
         self.paint.len()

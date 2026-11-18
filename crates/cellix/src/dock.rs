@@ -319,6 +319,9 @@ pub struct Session {
     pub typed: Typed,
     /// When Cellix last typed a message in and entered it, until the program says it took it.
     pub prompted: Option<std::time::Instant>,
+    /// Whether it has a tab of its own. A helper an agent started has none: it's looked at
+    /// from the Agents list, over the pane, until the person keeps it as a tab.
+    pub tabbed: bool,
     /// For a shell, the program in front of it by name, and since when: what its tab is
     /// called while it runs, once it has run a moment.
     running: Option<(String, std::time::Instant)>,
@@ -605,6 +608,7 @@ impl Session {
             member: None,
             typed: Typed::default(),
             prompted: None,
+            tabbed: true,
             running: None,
             shown_running: None,
             own_front: None,
@@ -1430,7 +1434,24 @@ impl Session {
     }
 
     pub fn draw(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool) {
-        grid.fill(area, pane_of(theme));
+        self.draw_on(grid, area, theme, (focused, theme.sidebar.bg));
+    }
+
+    /// `draw`, on `ground` where the program leaves its own background, as on a card.
+    pub fn draw_on(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        theme: &Theme,
+        (focused, ground): (bool, Rgb),
+    ) {
+        grid.fill(
+            area,
+            Style {
+                bg: ground,
+                ..pane_of(theme)
+            },
+        );
         let selection = self.ordered().filter(|(a, b)| a != b);
         let picked = |x: u16, y: u16| {
             selection.is_some_and(|(from, to)| (y, x) >= (from.1, from.0) && (y, x) <= (to.1, to.0))
@@ -1462,7 +1483,7 @@ impl Session {
                 continue;
             }
             let mut fg = self.color(cell.fg, theme, theme.text.fg);
-            let mut bg = self.color(cell.bg, theme, theme.sidebar.bg);
+            let mut bg = self.color(cell.bg, theme, ground);
             if cell.flags.contains(Flags::INVERSE) {
                 std::mem::swap(&mut fg, &mut bg);
             }
@@ -2022,6 +2043,12 @@ impl Dock {
             Some(active) if active >= index => Some(active.saturating_sub(1)),
             other => other,
         };
+        // Never one with no tab of its own: the nearest that has one, before it first.
+        if let Some(active) = self.active.filter(|a| !self.sessions[*a].tabbed) {
+            let before = (0..active).rev().find(|i| self.sessions[*i].tabbed);
+            let after = (active..self.sessions.len()).find(|i| self.sessions[*i].tabbed);
+            self.active = before.or(after);
+        }
         self.focused &= self.active.is_some();
         if self.front == Front::Session && self.active.is_none() {
             self.next_tab();
@@ -2213,7 +2240,7 @@ impl Dock {
             .chain(
                 self.sessions
                     .iter()
-                    .map(|session| self.session_width(session)),
+                    .map(|s| if s.tabbed { self.session_width(s) } else { 0 }),
             )
             .collect()
     }
@@ -2292,6 +2319,19 @@ impl Dock {
     /// then cut short with a "…", the longest giving way first. When that would leave them
     /// under `CUT_LEAST` columns each, only the one in front shows, with a chevron that
     /// lists every tab.
+    /// Whether the tab at `index`, views first, is a session's with no tab of its own.
+    fn untabbed(&self, index: usize) -> bool {
+        let session = index.checked_sub(self.views().len());
+        session
+            .and_then(|at| self.sessions.get(at))
+            .is_some_and(|s| !s.tabbed)
+    }
+
+    /// How many tabs the row has: the views', and the sessions' that have one.
+    fn shown_tabs(&self) -> usize {
+        self.views().len() + self.sessions.iter().filter(|s| s.tabbed).count()
+    }
+
     fn fitted(&self, area: Rect) -> (Vec<u16>, Fit) {
         let mut widths = self.wanted_widths();
         let end = self.tabs_end.get();
@@ -2308,7 +2348,7 @@ impl Dock {
         // where the tabs fit at their least only without it, they have the row as they had,
         // up to the icons' own cells, and it goes.
         let front = self.front_index().unwrap_or(0);
-        let behind = widths.len().saturating_sub(1) as u16;
+        let behind = self.shown_tabs().saturating_sub(1) as u16;
         let texts = self.tab_texts();
         let kept = (texts.get(front)).map_or(0, |text| self.hugging(text, self.extra(front)));
         let room = end.saturating_sub(start + MAXIMIZE_SHORT);
@@ -2355,6 +2395,12 @@ impl Dock {
                 *width = cap + more;
             }
         }
+        // A session with no tab of its own takes no columns, cut or whole.
+        for (index, width) in widths.iter_mut().enumerate() {
+            if self.untabbed(index) {
+                *width = 0;
+            }
+        }
         (widths, Fit::Cut)
     }
 
@@ -2364,7 +2410,7 @@ impl Dock {
         let front = self.front_index().unwrap_or(0);
         let texts = self.tab_texts();
         let kept = (texts.get(front)).map_or(0, |text| self.hugging(text, self.extra(front)));
-        let behind = texts.len().saturating_sub(1) as u16;
+        let behind = self.shown_tabs().saturating_sub(1) as u16;
         let room = (self.tabs_end.get()).saturating_sub(self.tabs_start(area) + MAXIMIZE_SHORT);
         kept + behind * CUT_LEAST <= room
     }
@@ -2422,6 +2468,7 @@ impl Dock {
             (PaneTab::View(view), name)
         });
         let sessions = (self.sessions.iter().enumerate())
+            .filter(|(_, session)| session.tabbed)
             .map(|(index, session)| (PaneTab::Session(index), session.label()));
         let all = views.chain(sessions).enumerate();
         all.map(|(index, (tab, name))| (tab, name, Some(index) == front))

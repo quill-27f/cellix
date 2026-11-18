@@ -1398,6 +1398,17 @@ round from its agent's mark, by the name it was given and the quiet word "helper
 its agent's section whatever it's doing itself (the reference board's panel 4). Before its hooks
 have said anything it's there all the same, doing what Cellix knows of it.
 
+A helper has no tab of its own, so the pane's row stays the person's: a press on its row opens
+it in peek, its live terminal on a card over the side pane, a cell in from it (a column at the
+sides, a row over and under), with what's behind dimmed (panel 5). The card's header, its first
+row, has its mark, its name in bold, the spinner while it works, what it's doing, "· from" its
+agent's tab, Keep as Tab and ×; a line under it, then the terminal, sized to the card. Keep as
+Tab is its words in the accent where there are pictures, not the board's chip, which on a
+one-row header would stand within 8 px of the line under it. The
+keyboard and pastes go to it while it's open; a press outside it or its × closes it, and the
+press does nothing else. Keep as Tab gives it a tab of its own, in front. A helper that outlives
+its agent gets one too.
+
 `cellix agent --skill` prints a short guide for agents, and the same guide ships as a skill with
 the Claude Code plugin, the Codex plugin and the Gemini CLI extension, which all read
 `skills/<name>/SKILL.md`; Gemini's GEMINI.md also points to it.

@@ -65,6 +65,7 @@ use crate::source::{Hit as SourceHit, Source as SourceControl};
 
 mod available;
 mod gitops;
+mod peek;
 mod start;
 mod team;
 mod worktree;
@@ -1533,6 +1534,8 @@ pub struct App {
     kernels: HashMap<PathBuf, Kernel>,
     /// The agents here as each other's, and their calls to each other under way.
     team: team::Team,
+    /// The helper looked at over the side pane, by the name it was given.
+    peek: Option<String>,
     /// Stands in for the kernel's runner in tests.
     kernel_command: Option<Vec<String>>,
     /// Checks spelling and grammar, started when a page first needs it.
@@ -1642,6 +1645,7 @@ impl App {
             kept_session: None,
             kernels: HashMap::new(),
             team: team::Team::default(),
+            peek: None,
             kernel_command: None,
             pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
@@ -2842,7 +2846,8 @@ impl App {
             | self.poll_pan_hint()
             | self.poll_finding()
             | self.see_front_tab()
-            | self.poll_team();
+            | self.poll_team()
+            | self.poll_peek();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -4437,6 +4442,9 @@ impl App {
             }
             _ => {}
         }
+        if self.peek_paste(text) {
+            return;
+        }
         if self.dock.draft.is_some() {
             // A picture's file dropped on the terminal arrives as its path.
             if let Some(path) = dropped_image(text) {
@@ -5489,6 +5497,10 @@ impl App {
             self.overlay = Overlay::None;
         }
         if self.settings_page.is_some() && self.settings_key(key) {
+            return;
+        }
+        // A helper looked at over the pane has the keyboard.
+        if self.peek_key(key) {
             return;
         }
         if self.task_key(key) {
@@ -8683,8 +8695,10 @@ impl App {
             let size = self.dock_screen().map_or((80, 24), |a| (a.w, a.h));
             if let Ok(mut session) = Session::join(&name, held, size, self.cell_size()) {
                 session.replaying = true;
-                // Known again by the name other agents reach it by.
+                // Known again by the name other agents reach it by, and a helper without a
+                // tab again.
                 session.member = crate::hold::job_beside(&socket).and_then(|job| job.member);
+                session.tabbed = session.member.as_ref().is_none_or(|m| m.parent.is_none());
                 self.dock.sessions.push(session);
                 names.push(name);
             }
@@ -9479,13 +9493,15 @@ impl App {
     fn fit_dock(&mut self) {
         if let Some(screen) = self.dock_screen() {
             let cell = self.cell_size();
-            for session in &mut self.dock.sessions {
+            // A helper with no tab has the size peek gives it, not the pane's.
+            for session in self.dock.sessions.iter_mut().filter(|s| s.tabbed) {
                 session.resize((screen.w, screen.h), cell);
             }
             if let (Some(view), Some(cell)) = (&mut self.dock.pdf, self.measure.cell_pixels()) {
                 view.fit((screen.w, screen.h), cell);
             }
         }
+        self.fit_peek();
     }
 
     /// Where the pane's edge would stand if it were let go with the pointer at (x, y), and
@@ -12184,6 +12200,13 @@ impl App {
             let name = id.strip_prefix(team::MEMBER_ROW)?;
             self.member_index(name)
         });
+        // A helper with no tab of its own is looked at over the pane.
+        let helper = tab.filter(|i| !self.dock.sessions[*i].tabbed);
+        if let Some(name) = helper.and_then(|i| self.dock.sessions[i].called()) {
+            let name = name.to_string();
+            self.open_peek(&name);
+            return;
+        }
         match tab {
             Some(index) => {
                 self.dock.active = Some(index);
@@ -13466,6 +13489,9 @@ impl App {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_consent(mouse) {
+            return;
+        }
+        if self.peek_mouse(mouse) {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_linger(mouse) {
@@ -15403,6 +15429,7 @@ impl App {
         } else {
             self.draw_offer(grid);
         }
+        self.draw_peek(grid);
         self.draw_consent(grid);
         self.draw_pane_actions(grid);
         self.draw_tab_drag(grid);
@@ -18388,6 +18415,10 @@ impl App {
             return None;
         }
         self.dock_area()?;
+        // A helper looked at over the pane is what's seen there.
+        if let Some(name) = &self.peek {
+            return self.member_index(name);
+        }
         let front = self.dock.front == Front::Session && !self.dock.listing();
         self.dock.active.filter(|_| front)
     }

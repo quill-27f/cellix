@@ -5724,5 +5724,12 @@
     "title": "The wheel over the side pane's tabs steps from tab to tab where only the tab in front shows, and does nothing while every tab is in view",
     "test": "the_wheel_over_the_side_panes_tabs_steps_through_them_when_one_shows",
     "passes": true
+  },
+  {
+    "id": "helper-peek",
+    "milestone": 15,
+    "title": "A helper has no tab of its own; a press on its row in the Agents list opens it live over the pane, over its agent's tab, with its header, Keep as Tab and x; the keyboard is its while open, and a press outside closes it",
+    "test": "a_helper_has_no_tab_and_peek_shows_it_live_over_the_pane",
+    "passes": true
   }
 ]

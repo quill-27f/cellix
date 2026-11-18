@@ -3047,3 +3047,15 @@ One `ui-expert` pass over the pictures of items 3, 6, 7 and 16. Fixed here:
 - The status bar's details turned the attention colour while "An agent needs you" showed: fixed meanwhile on `next` by another track.
 
 Not done, from the same review: the cell-tier pictures came out blank in the headless terminal (their text is right); in the light theme a tab in front and one behind are close in colour, and an idle agent's row isn't dimmer; the Agents list's hover band is 7 px from the pane's edge and "‹ 2 more" 2 px; the "2 more" chips have 14 px before their words and 24 after; a menu has 36 px under its last item; tabs cut short stand closer to each other than their parts do; the current tab can be turned out of view with nothing saying so. All but the first two were so before this round.
+
+## Peek: a helper over the pane, with no tab of its own (2026-11-18)
+
+Item 10 of the herdr work (the a2a track), with the rest of item 5: a helper an agent starts has no tab.
+
+- A helper's session has no tab (`Session::tabbed`): the strip gives it no columns, whole or cut, the list of every tab leaves it out, and closing a tab never leaves one in front. Its terminal keeps the size peek gives it, not the pane's. One that outlives its agent, or is kept, gets a tab.
+- A press on its row in the Agents list opens peek (`app/peek.rs`), as the reference board's panel 5 draws it: over its agent's tab, brought to the front, a card a cell in from the pane (a column at its sides, a row over and under); the header, its first row, has its mark, its name in bold, the spinner while it works, what it's doing, "· from" its agent's tab, Keep as Tab and ×, a line under it, then its live terminal, sized to the card. What's around it is dimmed. Keys and pastes go to it; a press outside or × closes it; Keep as Tab gives it a tab in front.
+- Where the board and the rules disagree, the rules won: the board's header is 36 px, here it's one row, so its words are in its middle; and its Keep as Tab is a chip, here its words in the accent, lit under the pointer, since a chip on a one-row header stands within 8 px of the line under it (a 0.66-row chip was tried and looked at: 5 px). On the cell tier it's a button as everywhere.
+- The card is cells, the terminal's too, with only its corners and lines painted, since paint can't go under text: a painted card hid the terminal under it (seen in the first picture). Paint that starts under the card, as the Agents list's words, is taken off (`Grid::clear_paint_in`). `Session::draw_on` draws a terminal on the card's colour.
+- What a peeked helper prints draws at once, as the tab in front's does (`shown_session`).
+- Test: `a_helper_has_no_tab_and_peek_shows_it_live_over_the_pane`. Tour: `173-peek`, `-light`, `-narrow`.
+- Not done: the card's header on the cell tier is only looked at in the test's text.
