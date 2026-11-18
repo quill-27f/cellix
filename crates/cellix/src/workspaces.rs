@@ -1258,7 +1258,8 @@ impl Workspaces {
             };
             label(grid, (word_x, y), &word, Style { fg: color, ..base }, right);
             let room = f32::from(right) - path_x;
-            let path = self.shortened(&tilde(workspace.app.workspace.root()), room);
+            let root = tilde(workspace.app.workspace.root());
+            let path = crate::palette::path_cut_at(&root, room, BAR_SIZE, &*self.measure());
             label(grid, (path_x, y), &path, dim, right);
         }
         let last = self.first_choice() + 2 * count.saturating_sub(1) as u16;
@@ -1308,29 +1309,6 @@ impl Workspaces {
         };
         let hint_x = (f32::from(right) - self.text_width(hint)).max(f32::from(quit.right() + 2));
         label(grid, (hint_x, y), hint, dim, right);
-    }
-
-    /// `text` with its middle taken out to fit `room` cells.
-    fn shortened(&self, text: &str, room: f32) -> String {
-        if self.text_width(text) <= room {
-            return text.to_string();
-        }
-        let chars: Vec<char> = text.chars().collect();
-        let mut keep = chars.len();
-        while keep > 4 {
-            keep -= 1;
-            let head = keep / 3;
-            let tail = keep - head;
-            let tried: String = chars[..head]
-                .iter()
-                .chain(std::iter::once(&'…'))
-                .chain(&chars[chars.len() - tail..])
-                .collect();
-            if self.text_width(&tried) <= room {
-                return tried;
-            }
-        }
-        "…".to_string()
     }
 }
 

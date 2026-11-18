@@ -1676,10 +1676,11 @@ impl Palette {
         let stop = end.max(0.0) as u16;
         let end = f32::from(stop);
         // A path too long for its row keeps its end, which names the file or the folder,
-        // and loses its middle. What was picked out in it no longer stands where it did.
+        // and loses the folders before it. What was picked out in it no longer stands where
+        // it did.
         let (words, hits) = match parts.path {
             true => {
-                let fitted = middle_out(&parts.words, end - x, measure);
+                let fitted = path_cut(&parts.words, end - x, measure);
                 let whole = fitted == parts.words;
                 (fitted, if whole { parts.hits.as_slice() } else { &[] })
             }
@@ -1705,7 +1706,7 @@ impl Palette {
         }
         let (aside, hits) = match parts.aside_path {
             true => {
-                let fitted = middle_out_at(&parts.aside, room, QUIET_SIZE, measure);
+                let fitted = path_cut_at(&parts.aside, room, QUIET_SIZE, measure);
                 let whole = fitted == parts.aside;
                 (
                     fitted,
@@ -1827,7 +1828,8 @@ struct Parts {
     words: String,
     /// Which letters of the words were typed.
     hits: Vec<usize>,
-    /// Whether the words are a path, which loses its middle when it's too long for the row.
+    /// Whether the words are a path, which loses the folders after its start when it's too long
+    /// for the row.
     path: bool,
     /// After the words and quieter: a file's folder, what a symbol sits in, what a task runs.
     aside: String,
@@ -1875,32 +1877,57 @@ fn runs(
     (at_px, at_cell)
 }
 
-/// `text` with characters taken from its middle until it fits `room` cells.
-pub fn middle_out(text: &str, room: f32, measure: &dyn Measure) -> String {
-    middle_out_at(text, room, INTERFACE_SIZE_PERCENT, measure)
+/// A path that fits `room` cells: whole, or cut at its left.
+pub fn path_cut(text: &str, room: f32, measure: &dyn Measure) -> String {
+    path_cut_at(text, room, INTERFACE_SIZE_PERCENT, measure)
 }
 
-/// The same for text at `size` percent of the interface font's.
-fn middle_out_at(text: &str, room: f32, size: u8, measure: &dyn Measure) -> String {
+/// The same for a path at `size` percent of the interface font's. Too long, it keeps where it
+/// starts from, `~` or the root, and its end, which names it, and loses the folders between
+/// behind a "…", the first of them first: `~/…/parent/name`. Past that its name loses its
+/// start. Cut in the middle by letters, the "…" fell somewhere different in each row of a
+/// list, and through a folder's name (0.11.0's final review: 103, 133, 138).
+pub fn path_cut_at(text: &str, room: f32, size: u8, measure: &dyn Measure) -> String {
     let font = Font {
         size,
         ..Font::default()
     };
-    if measure.width(text, font) <= room {
+    let fits = |tried: &str| measure.width(tried, font) <= room;
+    if fits(text) {
         return text.to_string();
     }
-    let chars: Vec<char> = text.chars().collect();
-    let mut keep = chars.len();
-    while keep > 2 {
-        keep -= 1;
-        let head = keep / 3;
-        let tail = keep - head;
-        let tried: String = chars[..head]
-            .iter()
-            .chain(std::iter::once(&'…'))
-            .chain(&chars[chars.len() - tail..])
+    let sep = if text.contains('\\') && !text.contains('/') {
+        '\\'
+    } else {
+        '/'
+    };
+    let (root, rest) = match text.strip_prefix('~') {
+        Some(rest) if rest.starts_with(sep) => (format!("~{sep}"), &rest[1..]),
+        _ => match text.strip_prefix(sep) {
+            Some(rest) => (sep.to_string(), rest),
+            None => (String::new(), text),
+        },
+    };
+    let parts: Vec<&str> = rest.split(sep).filter(|part| !part.is_empty()).collect();
+    let joined = |from: usize| parts[from..].join(&sep.to_string());
+    // The folders nearest the end, as many as fit after the root and the "…".
+    for from in 1..parts.len() {
+        let tried = format!("{root}…{sep}{}", joined(from));
+        if fits(&tried) {
+            return tried;
+        }
+    }
+    let name = parts.last().copied().unwrap_or(rest);
+    let tried = format!("…{sep}{name}");
+    if fits(&tried) {
+        return tried;
+    }
+    let letters: Vec<char> = name.chars().collect();
+    for from in 1..letters.len() {
+        let tried: String = std::iter::once('…')
+            .chain(letters[from..].iter().copied())
             .collect();
-        if measure.width(&tried, font) <= room {
+        if fits(&tried) {
             return tried;
         }
     }
@@ -2412,5 +2439,39 @@ mod tests {
         let by_name = fuzzy_score("app", "src/app.rs").unwrap();
         let by_dir = fuzzy_score("app", "app/src/main.rs").unwrap();
         assert!(by_name > by_dir);
+    }
+
+    /// A path too long for its room keeps where it starts from and its end, and loses the
+    /// folders between behind a "…", the first of them first, so the cut is always at its
+    /// left: `~/…/parent/name`. Cut by letters in its middle, the "…" fell somewhere different
+    /// in every row of a list, and through a folder's name (0.11.0's final review: 103, 133,
+    /// 138).
+    #[test]
+    fn a_long_path_is_cut_at_its_left_by_whole_folders() {
+        let cells = cellix_render::CellMeasure;
+        let cut = |text: &str, room: f32| path_cut(text, room, &cells);
+        assert_eq!(cut("~/dev/queue/src", 20.0), "~/dev/queue/src", "it fits");
+        assert_eq!(cut("~/dev/projects/queue/src", 14.0), "~/…/queue/src");
+        assert_eq!(
+            cut("~/dev/projects/queue/src", 22.0),
+            "~/…/projects/queue/src"
+        );
+        let deep = "/private/var/folders/0y/6fh1ymxj/T/tmp86msu/queue/src";
+        assert_eq!(cut(deep, 21.0), "/…/tmp86msu/queue/src");
+        assert_eq!(cut(deep, 20.0), "/…/queue/src");
+        assert_eq!(cut(deep, 12.0), "/…/queue/src");
+        // Relative, as a project's own paths are, it starts with the "…".
+        assert_eq!(cut("a/long/folder/that/goes/on", 12.0), "…/goes/on");
+        // Short of room for its name and a folder, the name alone, and then its end.
+        assert_eq!(cut("~/dev/queue/src", 6.0), "…/src");
+        assert_eq!(cut("~/dev/averyverylongname", 8.0), "…ongname");
+        // Every row of a list cut the same way: the end whole, the "…" at the left.
+        for row in ["~/dev/queue/src", "~/dev/infra/src", "~/dev/notes/src"] {
+            let shown = cut(row, 10.0);
+            assert!(
+                shown.starts_with("~/…/") && shown.ends_with("/src"),
+                "{shown}"
+            );
+        }
     }
 }

@@ -192,7 +192,7 @@ impl App {
                 |n| n.to_string_lossy().into_owned(),
             );
             grid.label_at(x as f32, x, row.y, &name, link, right, 95);
-            // A cell after the name as drawn, shortened from its middle to fit.
+            // A cell after the name as drawn, its first folders giving way to fit.
             let font = cellix_render::Font {
                 size: 95,
                 ..Default::default()
@@ -201,7 +201,7 @@ impl App {
             if let Some(parent) = path.parent() {
                 let folder = crate::recent::written(parent, home);
                 let folder =
-                    crate::palette::middle_out(&folder, f32::from(right) - from, &*self.measure);
+                    crate::palette::path_cut(&folder, f32::from(right) - from, &*self.measure);
                 grid.label_at(from, from as u16, row.y, &folder, quiet, right, 85);
             }
         }

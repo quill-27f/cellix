@@ -6550,5 +6550,26 @@
     "title": "A plan's words fill their room and stay by their heading",
     "test": "a_plans_words_fill_their_room_and_stay_by_their_heading",
     "passes": true
+  },
+  {
+    "id": "ui-font-quotes-code",
+    "milestone": 15,
+    "title": "The interface font is set with its contextual alternates off, so code it shows is quoted as written",
+    "test": "the_interface_font_quotes_code_as_written",
+    "passes": true
+  },
+  {
+    "id": "rows-cut-with-ellipsis",
+    "milestone": 15,
+    "title": "Review's Compare-with rows and Search's results are cut with an ellipsis clear of their band, and Compare-with rows start where the list's headings do",
+    "test": "compare_with_rows_line_up_and_are_cut_clear_of_their_band",
+    "passes": true
+  },
+  {
+    "id": "paths-cut-at-left",
+    "milestone": 15,
+    "title": "A path too long for its room loses whole folders after its start, the cut always at its left",
+    "test": "a_long_path_is_cut_at_its_left_by_whole_folders",
+    "passes": true
   }
 ]

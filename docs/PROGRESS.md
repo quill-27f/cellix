@@ -3576,3 +3576,13 @@ From the final review of 0.11.0 (fixchrome track, C12).
 - A plan's heading has no empty line under it, so it stands nearer what it heads than what's over it: it stood two rows from both.
 - Narrow, the step's place stands in the middle between the buttons that step (it stood 34 px from one and 90 from the other, by its cells), and their arrows are chevron icons in their middle (`Icon::ChevronLeft` is new, `ChevronRight` turned back), where the letters were 8 px across 68 px chips and stood low in them.
 - Tests: `a_plans_words_fill_their_room_and_stay_by_their_heading`, `the_task_pages_lines_and_step_control_are_even`.
+
+## Words quoted as written, and cut where the eye expects (2026-11-18)
+
+From the final review of 0.11.0 (track T, items 6, 7 and 10).
+
+- Inter's contextual alternates drew "->" as "→" wherever the interface font showed code: a hunk's header said "item: T) → Result" (13-review, 175, 176) and so did Search's results (12-search-switches). The interface font is set with them off, so what the person or an agent wrote is quoted as written; code in the code font is as it was.
+- Rows cut by the edge of what holds them: Review's Compare-with rows were cut through a letter 7 px past the picked row's band ("still pop", "produce", 153), and a Search result through "\textbf{3" (12-search-switches). Each is cut with a "…": Compare-with rows 16 px clear of the band, a result where the view's words end. Compare-with and the tests' rows started a column left of the headings and the files (28 and 45 px): they start where those do.
+- A path too long for its room lost its middle by letters, so the "…" fell in a different place in every row of a list and through a folder's name (103, 106, 133, 138). It keeps where it starts from, `~` or the root, and its end, and loses whole folders after the start: `~/…/parent/name`, the cut always at the left; past that the name loses its start. The palette's paths (Go to File, Open Recent, the folder finder), the welcome page's Recent and the list of workspaces running here all cut so.
+- Tests: `the_interface_font_quotes_code_as_written` (the "-" and ">" of "->" each have a width, in two of the interface's fonts), `a_long_result_line_ends_in_an_ellipsis`, `compare_with_rows_line_up_and_are_cut_clear_of_their_band`, `a_long_path_is_cut_at_its_left_by_whole_folders`; changed with the rule: the palette's test that a folder too long for its row loses its middle now has it lose its first folders.
+- Unverified: whether Inter's other contextual alternates (a colon raised between figures) were wanted anywhere; nothing in the tour showed one.

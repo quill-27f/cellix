@@ -21481,12 +21481,10 @@ mod tests {
         let (_, y) = find(&grid, "the_file_itself.rs");
         let row = grid.row_text(y);
         assert_eq!(lit(&app, "the_file_itself.rs"), "itself");
-        // A folder too long for the row loses its middle; the name is whole.
-        assert!(row.contains("the_file_itself.rs a/long/"), "{row}");
-        assert!(
-            row.contains('…') && row.trim_end().ends_with("/goes/on"),
-            "{row}"
-        );
+        // A folder too long for the row loses the folders after its start, the cut at its
+        // left; the name is whole.
+        assert!(row.contains("the_file_itself.rs …/"), "{row}");
+        assert!(row.trim_end().ends_with("/goes/on"), "{row}");
         key(&mut app, Key::Esc);
 
         // A command's letters too, and its keys stay at the row's far end.

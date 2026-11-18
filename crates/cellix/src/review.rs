@@ -18,6 +18,10 @@ use cellix_review::{
 use crate::theme::Theme;
 
 const LIST_WIDTH: u16 = 24;
+/// How far in from the list's sides a picked or pointed row's band is, and how far its words
+/// keep clear of the band's end, in cells: about 16 px.
+const BAND_INSET: f32 = 0.4;
+const BAND_CLEAR: f32 = 0.95;
 /// The list's button that starts an agent reviewing what's listed.
 pub const REVIEW_WITH: &str = "Review with…";
 /// What a suggestion under its line answers with.
@@ -1591,6 +1595,31 @@ impl Review {
         self.hit_cards(list.is_some(), body, x, y, comments)
     }
 
+    /// How wide `text` is at `size` percent of the interface's words, in cells.
+    fn list_width(&self, text: &str, size: u8) -> f32 {
+        let font = cellix_render::Font {
+            size,
+            ..cellix_render::Font::default()
+        };
+        match &self.measure {
+            Some(measure) => measure.width(text, font),
+            None => text.chars().count() as f32,
+        }
+    }
+
+    /// A row's words in the list, from column `x` and cut with a "…" short of `end`: run up to
+    /// the list's edge, they were cut through a letter 7 px past the picked row's band
+    /// (0.11.0's final review, 153).
+    fn list_words(&self, grid: &mut Grid, (x, y, end): (u16, u16, f32), text: &str, style: Style) {
+        let room = end - f32::from(x);
+        let shown = match &self.measure {
+            Some(measure) => crate::context::elide(text, room, &**measure),
+            None => crate::context::elide(text, room.floor(), &cellix_render::CellMeasure),
+        };
+        let stop = end.ceil() as u16;
+        grid.label_at(f32::from(x), x, y, &shown, style, stop, 100);
+    }
+
     fn draw_list_row(&self, grid: &mut Grid, list: Rect, y: u16, row: &ListRow, theme: &Theme) {
         let line = Rect::new(list.x, y, list.w, 1);
         let pick = |on: bool| {
@@ -1616,7 +1645,7 @@ impl Review {
             };
             let whole = Bounds::inset(line, 0.0, 0.0);
             grid.panel(whole, 0, Some(theme.sidebar.bg), None);
-            grid.panel(Bounds::inset(line, 0.4, 0.055), 18, Some(fill), None);
+            grid.panel(Bounds::inset(line, BAND_INSET, 0.055), 18, Some(fill), None);
         }
         match row {
             ListRow::Heading(text) => {
@@ -1640,7 +1669,9 @@ impl Review {
                         format!("{}  {}", turn.number, turn.label)
                     }
                 };
-                grid.label(list.x + 1, y, &text, style, list.right());
+                // Clear of the band's end as the words are of its start.
+                let end = f32::from(list.right()) - BAND_INSET - BAND_CLEAR;
+                self.list_words(grid, (list.x + 2, y, end), &text, style);
             }
             ListRow::Space => {}
             ListRow::Actions(commit, review) => {
@@ -1672,9 +1703,10 @@ impl Review {
                     fg: color,
                     ..theme.sidebar
                 };
-                grid.label_right(list.right().saturating_sub(1), y, mark, style, 85);
-                let end = list.right().saturating_sub(8);
-                grid.label(list.x + 1, y, &run.command, theme.sidebar, end);
+                let right = list.right().saturating_sub(2);
+                grid.label_right(right, y, mark, style, 85);
+                let end = f32::from(right) - self.list_width(mark, 85) - BAND_CLEAR;
+                self.list_words(grid, (list.x + 2, y, end), &run.command, theme.sidebar);
             }
             ListRow::File(index) => {
                 let style = pick(*index == self.selected);

@@ -6,7 +6,8 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use cosmic_text::{
-    Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style as FontStyle, Weight, fontdb,
+    Attrs, Buffer, Family, FeatureTag, FontFeatures, FontSystem, Metrics, Shaping,
+    Style as FontStyle, Weight, fontdb,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -44,6 +45,14 @@ pub(crate) fn family(font: Font) -> Family<'static> {
 
 pub(crate) fn attrs(font: Font) -> Attrs<'static> {
     let mut attrs = Attrs::new().family(family(font));
+    if !font.mono {
+        // Inter's contextual alternates draw "->" as "→" and "2x3" as "2×3", which misquotes
+        // code, paths and whatever else the interface shows of the person's own text: a hunk's
+        // header said "→ Result" (0.11.0's final review, 13-review, 12-search-switches).
+        let mut plain = FontFeatures::new();
+        plain.disable(FeatureTag::CONTEXTUAL_ALTERNATES);
+        attrs = attrs.font_features(plain);
+    }
     if font.bold {
         attrs = attrs.weight(Weight::SEMIBOLD);
     }
@@ -380,6 +389,28 @@ mod tests {
         // A letter from another script, an arrow and a check mark aren't emoji.
         for letter in ["中", "→", "✓", "é"] {
             assert!(!emoji_letter(letter), "{letter}");
+        }
+    }
+
+    /// What the interface shows of code is quoted as written: "->" is a hyphen and a ">", each
+    /// with a width of its own, never Inter's arrow standing in for both.
+    #[test]
+    fn the_interface_font_quotes_code_as_written() {
+        let m = FontMeasure::new(17, 37);
+        for font in [
+            Font::default(),
+            Font {
+                bold: true,
+                size: 92,
+                ..Font::default()
+            },
+        ] {
+            let text = "item: T) -> Result";
+            let advances = m.advances(text, font);
+            let arrow = text.find("->").unwrap();
+            for at in [arrow, arrow + 1] {
+                assert!(advances[at] > 0.0, "byte {at} has a width: {advances:?}");
+            }
         }
     }
 

@@ -982,7 +982,11 @@ fn row_of(
 
 /// `text` cut at its end with "…" until it fits `room` cells.
 pub(crate) fn elide(text: &str, room: f32, measure: &dyn Measure) -> String {
-    let font = Font::default();
+    elide_in(text, room, Font::default(), measure)
+}
+
+/// The same for text set in `font`.
+pub(crate) fn elide_in(text: &str, room: f32, font: Font, measure: &dyn Measure) -> String {
     if measure.width(text, font) <= room {
         return text.to_string();
     }

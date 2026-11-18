@@ -372,6 +372,11 @@ is skipped on pixel tiers and kept for the cell tier and tests.
 
 Fonts are embedded (Inter, JetBrains Mono, and Twemoji for emoji), because pixels are drawn
 on the remote host over SSH and servers rarely have fonts.
+Inter is set with its contextual alternates off, so what it shows of code and of what people
+and agents wrote is quoted as written: they drew "->" as "→", and a hunk's header and Search's
+results misquoted a function's signature (0.11.0's final review). A row of a list too long for
+it, Review's Compare-with or a Search result, is cut with a "…" clear of its band, never
+through a letter at the list's edge.
 
 Text is measured with the same fonts the rasterizer draws, through the `Measure` trait, so
 carets and wrapping use real glyph positions. The cell tier measures one column per
@@ -1399,7 +1404,11 @@ words stop two columns short of. What's set smaller is dropped a pixel to stand 
 baseline, and on the picked row's band it's halfway between the quiet colour and the words',
 since the quiet colour is too faint there and the words' own made a folder as loud as its name. A file is its icon in the colour the tree gives its type, its
 name, then the folder it's in, as VS Code lists one: the name is what's looked for and a long
-path used to lose it. A folder too long for the row loses its middle. A symbol is its kind's
+path used to lose it. A path too long for its room keeps where it starts from, `~` or the
+root, and its end, and loses whole folders after its start behind a "…", `~/…/parent/name`,
+the cut always at its left, here, in the welcome page's Recent and in the list of workspaces
+running here (`palette::path_cut`); past that its name loses its start. Cut by letters in its
+middle, the "…" fell somewhere different in every row and through a folder's name. A symbol is its kind's
 icon, its name, what it sits in, and its group or file; a command its name and its keys; a
 task its name and what it runs. The row's icon and words stand under the field's own. The
 letters that were typed are picked out in the accent and bold (`picked_out`): where they stand

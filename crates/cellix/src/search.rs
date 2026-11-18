@@ -485,6 +485,9 @@ impl Search {
         grid.panel(bounds, 12, Some(theme.find_match), None);
         grid.text_run((at, y as f32), limit, &hit, plain, font);
         at += span;
+        // What runs past the row is cut with a "…", where it was cut through a letter at the
+        // row's end ("\textbf{3", 0.11.0's final review, 12-search-switches).
+        let after = crate::context::elide_in(&after, limit - at, font, measure);
         grid.text_run((at, y as f32), limit, &after, plain, font);
     }
 }
@@ -553,5 +556,41 @@ mod switch_tests {
         let mut grid = Grid::new(40, 12, theme.sidebar);
         search.draw(&mut grid, area, None, &cellix_render::CellMeasure, &theme);
         assert!(!grid.spinning && !grid.text().contains("Searching"));
+    }
+
+    /// A result line too long for the view is cut with a "…" where its words end, where it was
+    /// cut through a letter at the view's edge ("\textbf{3", 0.11.0's final review,
+    /// 12-search-switches).
+    #[test]
+    fn a_long_result_line_ends_in_an_ellipsis() {
+        use cellix_render::{FontMeasure, Paint, UNIT};
+        let theme = Theme::default();
+        let search = Search::new(PathBuf::from("/nowhere"));
+        let measure = FontMeasure::new(17, 36);
+        let found = Match {
+            path: PathBuf::from("/nowhere/main.tex"),
+            line: 3,
+            column: 1,
+            len: 4,
+            text: "\\item Accuracy improves by \\textbf{3 points} on every benchmark".into(),
+        };
+        let area = Rect::new(0, 0, 24, 1);
+        let mut grid = Grid::new(30, 1, theme.sidebar);
+        search.draw_match(&mut grid, area, 0, &found, &measure, &theme);
+        let runs: Vec<(f32, String)> = (grid.paint.iter())
+            .filter_map(|p| match p {
+                Paint::Text { x, text, .. } => Some((*x as f32 / UNIT as f32, text.clone())),
+                _ => None,
+            })
+            .collect();
+        let (x, last) = runs.last().cloned().expect("what follows the match");
+        assert!(last.ends_with('…'), "{runs:?}");
+        let font = cellix_render::Font {
+            size: 92,
+            ..cellix_render::Font::default()
+        };
+        let end = x + cellix_render::Measure::width(&measure, &last, font);
+        let right = f32::from(area.right() - 1);
+        assert!(end <= right + 0.01, "{end} past {right}: {runs:?}");
     }
 }

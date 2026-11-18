@@ -764,6 +764,80 @@ mod tests {
         assert!(screen(&app).text().contains("TESTS  2 runs"));
     }
 
+    /// Review's Compare-with rows start where its headings and files do, and one too long for
+    /// the list is cut with a "…" that stands 16 px clear of the band behind a picked row,
+    /// where they started a column further left and ran 7 px past the band, cut through a
+    /// letter (0.11.0's final review, 153).
+    #[test]
+    fn compare_with_rows_line_up_and_are_cut_clear_of_their_band() {
+        use cellix_render::{Paint, UNIT};
+        let (_dir, mut app) = worked_on();
+        app.run(Command::ShowAgentTask);
+        wait_for(&mut app, "1 file +1 -0");
+        click_on(&mut app, MouseKind::Left, "1  Add a refund route");
+        click_on(&mut app, MouseKind::Left, "[Review Turn]");
+        let grid = screen(&app);
+        let text = grid.text();
+        let lines: Vec<&str> = text.lines().collect();
+        let column = |line: &str, words: &str| line[..line.find(words).unwrap()].chars().count();
+        let heading = lines
+            .iter()
+            .find(|l| l.contains("COMPARE WITH"))
+            .expect("the heading");
+        let second = lines
+            .iter()
+            .find(|l| l.contains("2  Reject"))
+            .expect("the second turn");
+        let first = lines
+            .iter()
+            .find(|l| l.contains("1  Add"))
+            .expect("the first turn");
+        // Its file under CHANGES, not the tab over the diff that names it too.
+        let mut changes = lines.iter().skip_while(|l| !l.contains("CHANGES"));
+        let file = changes.find(|l| l.contains("orders.rs")).expect("its file");
+        let left = column(heading, "COMPARE WITH");
+        assert_eq!(column(second, "2  Reject"), left, "{second}");
+        assert_eq!(column(first, "1  Add"), left, "{first}");
+        assert_eq!(column(file, "orders.rs"), left, "{file}");
+        // Where there are pictures, the words of every row end 16 px clear of the band a picked
+        // one has, cut with a "…" where they'd run on.
+        app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 36)));
+        let grid = screen(&app);
+        let y = (0..grid.height())
+            .find(|y| grid.row_text(*y).contains("1  Add"))
+            .expect("the picked turn");
+        let (top, bottom) = (i32::from(y) * UNIT, i32::from(y + 1) * UNIT);
+        let picked = app.theme.row_active;
+        let band = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == picked && bounds.y >= top && bounds.y < bottom => Some(*bounds),
+            _ => None,
+        });
+        let band = band.expect("the picked row's band");
+        let right = (band.x + band.w) as f32 / UNIT as f32;
+        let measure = cellix_render::FontMeasure::new(17, 36);
+        let rows: Vec<(f32, String)> = (grid.paint.iter())
+            .filter_map(|p| match p {
+                Paint::Text { x, text, .. }
+                    if text.starts_with("1  ") || text.starts_with("2  ") =>
+                {
+                    Some((*x as f32 / UNIT as f32, text.clone()))
+                }
+                _ => None,
+            })
+            .filter(|(x, _)| *x < right)
+            .collect();
+        assert_eq!(rows.len(), 2, "both turns: {rows:?}");
+        for (x, words) in &rows {
+            let end = x + cellix_render::Measure::width(&measure, words, Default::default());
+            let clear = (right - end) * 17.0;
+            assert!(clear >= 15.0, "{words:?}: {clear} px clear of the band");
+        }
+    }
+
     #[test]
     fn a_turn_is_reviewed_alone_and_undone_from_the_task_page() {
         let (dir, mut app) = worked_on();
