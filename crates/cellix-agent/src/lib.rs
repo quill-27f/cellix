@@ -115,6 +115,9 @@ pub enum Request {
     Threads(Sender<String>),
     /// Wants the comments no agent has seen, as JSON, and marks them seen.
     TakeThreads(Sender<String>),
+    /// Wants everything no agent has had yet, as JSON comments, and takes nothing: the
+    /// review's comments on code and the comments on documents, which are threads.
+    Waiting(Sender<String>),
     /// A plan is waiting. The connection stays open until `reply` is answered or dropped.
     Plan {
         path: PathBuf,
@@ -278,6 +281,15 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             let (reply, threads) = channel();
             ask(requests, Request::Threads(reply));
             Ok(threads
+                .recv_timeout(ANSWER_TIME)
+                .unwrap_or_else(|_| "[]".to_string()))
+        }
+        // What an agent would be handed with its next prompt, counted without handing it over:
+        // `comments` lists only the review's comments on code.
+        (Some("waiting"), None) => {
+            let (reply, waiting) = channel();
+            ask(requests, Request::Waiting(reply));
+            Ok(waiting
                 .recv_timeout(ANSWER_TIME)
                 .unwrap_or_else(|_| "[]".to_string()))
         }

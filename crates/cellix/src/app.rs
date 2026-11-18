@@ -12752,6 +12752,26 @@ impl App {
                     self.save_threads();
                 }
             }
+            // What waits for an agent, as comments: the review's on code, and every thread no
+            // agent has had, a document's comment or a kept suggestion. Read, not taken: the
+            // prompt hook still hands each over once. The mod counted only the review's, so
+            // inside Claude Code a page's comments started no turn and weren't counted.
+            Request::Waiting(reply) => {
+                let mut waiting = self.comments.lock().map(|c| c.clone()).unwrap_or_default();
+                waiting.extend(self.threads.iter().filter(|t| t.waiting()).map(|t| {
+                    // What's new on it: its last word, the person's, else the comment itself.
+                    let text = t.replies.last().map_or(&t.text, |r| &r.text);
+                    Comment {
+                        file: t.file.clone(),
+                        line: t.line,
+                        text: text.clone(),
+                        quote: t.anchor().to_string(),
+                        removed: false,
+                    }
+                }));
+                let json = serde_json::to_string(&waiting).unwrap_or_else(|_| "[]".to_string());
+                let _ = reply.send(json);
+            }
             Request::Threads(reply) => {
                 let open: Vec<&Thread> = self.threads.iter().filter(|t| !t.resolved).collect();
                 let json = serde_json::to_string(&open).unwrap_or_else(|_| "[]".to_string());

@@ -2372,3 +2372,47 @@ fn pty_an_agent_says_it_addressed_a_comment() {
         .args(["-f", &cache.path().display().to_string()])
         .status();
 }
+
+/// `cellix comments --waiting`, as the Claude Code mod runs it, against the real binary: a
+/// page's comment no agent has had is listed, as `cellix comments` (the review's on code
+/// alone) never listed it, and one already told isn't; asking takes nothing.
+#[test]
+#[cfg(unix)]
+fn pty_comments_waiting_lists_a_pages_comments() {
+    use std::process::{Command, Stdio};
+    let dir = project();
+    let root = dir.path().canonicalize().unwrap();
+    std::fs::write(root.join("notes.md"), "# Notes\n\nThe cache goes first.\n").unwrap();
+    std::fs::create_dir_all(root.join(".cellix")).unwrap();
+    let threads = r#"[
+      {"id":1,"file":"notes.md","line":3,"quote":"cache","text":"Why first?"},
+      {"id":2,"file":"notes.md","line":3,"quote":"first","text":"Told already.","told":0}
+    ]"#;
+    std::fs::write(root.join(".cellix/threads.json"), threads).unwrap();
+    // Short, since a socket's path has to fit in about a hundred bytes.
+    let cache = tempfile::tempdir_in("/tmp").unwrap();
+    let mut screen = Screen::start_with(&root, &[], &[("XDG_CACHE_HOME", cache.path())]);
+    screen.wait_for("hello.txt");
+    let comments = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .arg("comments")
+            .args(args)
+            .current_dir(&root)
+            .env("XDG_CACHE_HOME", cache.path())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stderr).into_owned();
+        assert!(out.status.success(), "{said}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    assert_eq!(comments(&[]).trim(), "[]", "the review's alone");
+    let waiting = comments(&["--waiting"]);
+    assert!(waiting.contains("Why first?"), "{waiting}");
+    assert!(!waiting.contains("Told already."), "{waiting}");
+    assert_eq!(comments(&["--waiting"]), waiting, "read, not taken");
+    drop(screen);
+    let _ = Command::new("pkill")
+        .args(["-f", &cache.path().display().to_string()])
+        .status();
+}

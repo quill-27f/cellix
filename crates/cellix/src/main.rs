@@ -134,6 +134,7 @@ Usage: cellix [--wait] [files]
                             Suggests a comment the reviewer can keep or dismiss
   cellix plan <file>        Holds a plan for review, and prints the verdict
   cellix comments [--take]  Review comments, as JSON
+  cellix comments --waiting Everything no agent has had yet, a document's comments too
   cellix open <file>        Opens a file in the running Cellix
   cellix setup [claude|codex|gemini|opencode|copilot|cursor]
                             Connects an agent
@@ -428,6 +429,7 @@ fn main() -> ExitCode {
         }
         ["pane-send", input] => return client(&format!("pane {input}"), None),
         ["comments", "--take", rest @ ..] => return client("take", rest.first().copied()),
+        ["comments", "--waiting", rest @ ..] => return client("waiting", rest.first().copied()),
         ["comments", rest @ ..] => return client("comments", rest.first().copied()),
         ["--help" | "-h" | "help"] => {
             print!("{USAGE}");

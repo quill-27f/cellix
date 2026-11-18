@@ -2106,7 +2106,12 @@ input channel.
 Cellix runs one local socket per workspace, and each integration is a thin adapter.
 Comments reach an agent through `cellix comments [--take]` as JSON. With `--wait` they are
 also appended to the file as a "Review comments" section, because `$VISUAL` only returns
-the file.
+the file. `cellix comments` lists the review's comments on code alone; `cellix comments
+--waiting` lists everything an agent hasn't had, a document's comments and kept suggestions
+too, and takes nothing, so the prompt hook still hands each over once. The Claude Code mod
+counts "N comments waiting", and /cellix-send and Send start a turn, by `--waiting` (falling
+back to `comments` with a Cellix from before it). It read `comments`, so a page's comments
+weren't counted and /cellix-send said none were waiting.
 
 - `$VISUAL`: `cellix --wait <file>` covers Ctrl+G in Claude Code and equivalents elsewhere.
 - Review return path: comments are delivered as structured data over the socket and

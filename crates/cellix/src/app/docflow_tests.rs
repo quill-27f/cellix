@@ -853,3 +853,66 @@ fn a_comments_kind_is_picked_from_chips_as_it_is_written() {
     });
     assert!(!chips, "no chips on a reply:\n{}", grid.text());
 }
+
+/// What waits for an agent, as `cellix comments --waiting` gives it: everything the prompt
+/// hook would hand over.
+fn waiting(app: &mut App) -> String {
+    let (sender, answer) = std::sync::mpsc::channel();
+    app.serve(Request::Waiting(sender));
+    answer.recv().unwrap()
+}
+
+/// What waits for an agent, which the Claude Code mod counts and sends a turn for: the
+/// review's comments on code, a page's comment and a suggestion kept on a page, each once,
+/// and none already told. Reading it takes nothing, so the prompt hook still hands each over
+/// once. The mod read `cellix comments`, the review's alone, so a page's comments weren't
+/// counted and sending them inside Claude Code started no turn.
+#[test]
+fn what_waits_lists_a_pages_comments_and_kept_suggestions_without_taking_them() {
+    let (dir, mut app) = page("The cache goes first.\n\nThe tests run last.\n");
+    comment(&mut app, "cache", "Told already.");
+    assert!(take_threads(&mut app).contains("Told already."));
+    comment(&mut app, "tests", "Which ones?");
+    let (made, number) = std::sync::mpsc::channel();
+    app.serve(Request::Suggest {
+        file: "note.md".into(),
+        line: 1,
+        kind: "Evidence".into(),
+        quote: "goes first".into(),
+        text: "Cite the timing.".into(),
+        author: "Claude".into(),
+        made,
+    });
+    let suggested = number.recv().unwrap();
+    assert!(
+        !waiting(&mut app).contains("Cite the timing."),
+        "not the agent's own"
+    );
+    app.keep_suggestion(suggested);
+    let code = dir.path().join("lib.rs");
+    fs::write(&code, "fn main() {}\n").unwrap();
+    app.open(&code).unwrap();
+    app.run(Command::AddComment);
+    typed(&mut app, "Return early here.");
+    enter(&mut app);
+    let listed = waiting(&mut app);
+    let comments: Vec<serde_json::Value> = serde_json::from_str(&listed).unwrap();
+    let texts: Vec<&str> = comments.iter().filter_map(|c| c["text"].as_str()).collect();
+    assert_eq!(
+        texts,
+        ["Return early here.", "Which ones?", "Cite the timing."],
+        "{listed}"
+    );
+    assert_eq!(waiting(&mut app), listed, "read, not taken");
+    let taken = take_threads(&mut app);
+    assert!(
+        taken.contains("Which ones?") && taken.contains("Cite the timing."),
+        "{taken}"
+    );
+    assert!(
+        !taken.contains("Return early"),
+        "the review's go by `take`: {taken}"
+    );
+    let after: Vec<serde_json::Value> = serde_json::from_str(&waiting(&mut app)).unwrap();
+    assert_eq!(after.len(), 1, "only the review's comment waits now");
+}

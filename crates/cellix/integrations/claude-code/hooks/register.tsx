@@ -72,8 +72,12 @@ async function openPane($: Engine) {
   await $.ui.open({ id: PANE, title: 'Cellix', focus: true, rows: INLINE_ROWS, columns: DOCK_COLUMNS })
 }
 
-/** The review comments waiting in Cellix, or nothing if no Cellix serves this folder. */
+/** The comments waiting in Cellix for an agent, or nothing if no Cellix serves this folder:
+ * the review's on code and those on documents, which `cellix comments` alone leaves out. A
+ * Cellix from before `--waiting` answers it with an error, and has only the review's. */
 async function pending($: Engine): Promise<Comment[] | undefined> {
+  const waiting = await $.process.run([program, 'comments', '--waiting']).catch(() => undefined)
+  if (waiting?.exitCode === 0) return JSON.parse(waiting.stdout) as Comment[]
   const done = await $.process.run([program, 'comments']).catch(() => undefined)
   return done?.exitCode === 0 ? (JSON.parse(done.stdout) as Comment[]) : undefined
 }

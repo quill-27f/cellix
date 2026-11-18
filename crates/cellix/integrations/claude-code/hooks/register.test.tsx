@@ -16,6 +16,55 @@ test('sending comments starts a turn, which the prompt hook fills', async ($, on
   expect(submitted).toEqual(['Address the review comments I left in Cellix.'])
 })
 
+/** A comment on a page and a suggestion kept on one, which Cellix keeps as threads: only
+ * `cellix comments --waiting` lists them, where `cellix comments` has the review's alone. */
+const ON_PAGES = [
+  { file: 'notes.md', line: 3, text: 'Why first?' },
+  { file: 'notes.md', line: 9, text: 'Name the benchmarks.' },
+]
+
+test("sending covers a page's comments, which only --waiting lists", async ($, on) => {
+  const submitted: string[] = []
+  const asked: string[] = []
+  const clock = mock.clock(on)
+  on('process.run', async (_, e) => {
+    asked.push(e.argv.join(' '))
+    const stdout = e.argv.includes('--waiting') ? JSON.stringify(ON_PAGES) : '[]'
+    return { value: { exitCode: 0, stdout, stderr: '' } }
+  })
+  on('prompt.submit', async (_, e) => {
+    submitted.push(e.text)
+    return { text: e.text }
+  })
+  const result = await $.command.run({ command: 'cellix-send', args: '' })
+  expect(result.text).toBe('Sending 2 comments to Claude.')
+  await clock.advance(1)
+  expect(submitted).toEqual(['Address the review comments I left in Cellix.'])
+  expect(asked).toContain('cellix comments --waiting')
+  // Listed too, as they're counted.
+  const listed = await $.command.run({ command: 'cellix-comments', args: '' })
+  expect(listed.text).toBe('notes.md:3: Why first?\nnotes.md:9: Name the benchmarks.')
+})
+
+test('a Cellix from before --waiting still has its review comments counted and sent', async ($, on) => {
+  const submitted: string[] = []
+  const clock = mock.clock(on)
+  on('process.run', async (_, e) => {
+    if (e.argv.includes('--waiting')) {
+      return { value: { exitCode: 1, stdout: '', stderr: 'cellix: unknown request\n' } }
+    }
+    return { value: { exitCode: 0, stdout: JSON.stringify(WAITING), stderr: '' } }
+  })
+  on('prompt.submit', async (_, e) => {
+    submitted.push(e.text)
+    return { text: e.text }
+  })
+  const result = await $.command.run({ command: 'cellix-send', args: '' })
+  expect(result.text).toBe('Sending 1 comment to Claude.')
+  await clock.advance(1)
+  expect(submitted).toEqual(['Address the review comments I left in Cellix.'])
+})
+
 test('with nothing waiting, sending says so and starts no turn', async ($, on) => {
   mock.clock(on)
   on('process.run', async () => ({ value: { exitCode: 0, stdout: '[]', stderr: '' } }))
