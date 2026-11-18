@@ -17477,7 +17477,7 @@ impl App {
                     let colour = if problem.severity == 1 {
                         theme.deleted()
                     } else {
-                        theme.attention
+                        theme.warning()
                     };
                     let mark = Style {
                         fg: colour,
@@ -18083,7 +18083,9 @@ impl App {
             grid.row_bands = Some((y, vec![from, x.saturating_sub(1)]));
         }
         let needs_you = waiting > 0 && message.is_empty() && self.neovim_line.is_empty();
-        let bar = if needs_you {
+        // Only what says an agent needs you takes the attention colour: the file's details
+        // at the other end stay the bar's own.
+        let said = if needs_you {
             let dot = Bounds::cells(x as f32, y as f32 + 0.34, 0.45, 0.32);
             grid.panel(dot, 16, Some(self.theme.attention), None);
             x += 1;
@@ -18094,7 +18096,7 @@ impl App {
         } else {
             bar
         };
-        grid.label_at(x as f32, x, y, left, bar, right_x.saturating_sub(1), 90);
+        grid.label_at(x as f32, x, y, left, said, right_x.saturating_sub(1), 90);
         // A status item's width from the bell, as the items are from each other.
         let right_end = if bell.is_some() {
             end
@@ -18589,6 +18591,8 @@ mod agents_list_tests;
 mod motion_tests;
 #[cfg(test)]
 mod shell_tab_tests;
+#[cfg(test)]
+mod theme_tests;
 #[cfg(test)]
 mod view_tests;
 #[cfg(test)]

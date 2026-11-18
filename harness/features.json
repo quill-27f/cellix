@@ -5703,5 +5703,12 @@
     "title": "A helper stands under the agent that started it in the Agents list, a step in, by the name it was given with the word helper, in its agent's section, before its hooks say anything too",
     "test": "a_helper_stands_under_the_agent_that_started_it_in_the_agents_list",
     "passes": true
+  },
+  {
+    "id": "herdr-dark-theme",
+    "milestone": 15,
+    "title": "The dark theme is herdr's graphite: its frame, sheets, menus, washes, text, blue and meaning colours, and its terminal's sixteen",
+    "test": "a_dark_window_wears_herdrs_graphite",
+    "passes": true
   }
 ]

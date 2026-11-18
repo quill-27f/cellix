@@ -22,6 +22,8 @@ binary, out = sys.argv[1], os.path.abspath(sys.argv[2])
 here = os.path.dirname(os.path.abspath(__file__))
 os.makedirs(out, exist_ok=True)
 CTRL = lambda c: chr(ord(c) - 96)
+# A dark terminal's background: herdr's frame, #101114, which the dark theme stands on.
+DARK = "101114"
 # Where each view's icon is, across the top of the sidebar: three columns each from one in.
 SEARCH, OUTLINE, REVIEW = (5, 0), (8, 0), (11, 0)
 # The command palette, opened with Ctrl+Shift+P or F1 and waited for, then a command typed
@@ -461,7 +463,7 @@ def chart(path, width=1600, height=900):
         f.write(chunk(b"IDAT", zlib.compress(raw, 6)) + chunk(b"IEND", b""))
 
 
-def shoot(name, steps, *args, size="120x40", background="1e1e2e", cwd=None, env=None, timeout=70,
+def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None, timeout=70,
           expect=None):
     """Runs one scene and writes `<name>.png` and `<name>.txt`, with `steps` run first. With
     `expect`, only once the screen says it."""
@@ -959,7 +961,7 @@ def agent_tabs(scratch):
         cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
         env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
         size = extra.pop("size", "150x44")
-        background = extra.pop("background", "1e1e2e")
+        background = extra.pop("background", DARK)
         env.update(extra)
         shoot(name, steps, CODE_FILE, size=size, env=env, background=background)
         subprocess.run(["pkill", "-9", "-f", cache])
@@ -1167,6 +1169,9 @@ with tempfile.TemporaryDirectory() as scratch:
     team_scenes(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)
+    # The dark theme on a terminal whose background isn't herdr's: the frame is that
+    # background and the sheets keep their step from it.
+    shoot("02-code-other-terminal", [], CODE_FILE, background="282c34")
     shoot("03-page", [], PAGE_FILE)
     shoot("04-menu-page", [["right", 60, 12]], PAGE_FILE)
     shoot("05-menu-code", [["right", 60, 12]], CODE_FILE)

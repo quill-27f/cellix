@@ -100,21 +100,21 @@ fn shifted(color: Rgb, by: (i16, i16, i16)) -> Rgb {
 /// VS Code's Modern themes, since that's the look people already know. Surfaces are quiet
 /// and the blue is kept for what's active.
 impl Theme {
-    /// Text a tracked change adds.
+    /// Text a tracked change adds: dark, the green of what's added.
     pub fn inserted(&self) -> Rgb {
         if self.is_light() {
             Rgb(0x1a, 0x7f, 0x37)
         } else {
-            Rgb(0x56, 0xd3, 0x64)
+            self.git_added
         }
     }
 
-    /// Text a tracked change takes away.
+    /// Text a tracked change takes away: dark, the red of what's removed.
     pub fn deleted(&self) -> Rgb {
         if self.is_light() {
             Rgb(0xcf, 0x22, 0x2e)
         } else {
-            Rgb(0xf8, 0x51, 0x49)
+            self.error
         }
     }
 
@@ -153,21 +153,22 @@ impl Theme {
     }
 
     /// A folded region's chip: lighter than both the text and the caret's line, so it shows
-    /// on either.
+    /// on either. Dark, white at 14% over the sheet, as herdr lays its strongest wash.
     pub fn fold_chip(&self) -> Rgb {
         if self.is_light() {
             Rgb(0xdc, 0xe0, 0xe8)
         } else {
-            Rgb(0x42, 0x42, 0x66)
+            mix(self.text.bg, Rgb(255, 255, 255), 36.0 / 255.0)
         }
     }
 
-    /// The ring around the caret's matching brackets, on the pixel tiers.
+    /// The ring around the caret's matching brackets, on the pixel tiers: dark, part way from
+    /// the sheet to the ring round what has focus.
     pub fn bracket_ring(&self) -> Rgb {
         if self.is_light() {
             Rgb(0x9d, 0xb3, 0xe6)
         } else {
-            Rgb(0x6b, 0x74, 0xa8)
+            mix(self.text.bg, self.focus, 0.45)
         }
     }
 
@@ -232,8 +233,8 @@ impl Theme {
     /// padding, which is the terminal's background, can't show as a seam around the rail and
     /// the status bar. Light, that puts the rest a step or two paler than Latte on a Latte
     /// terminal; the seam was the worse of the two (decided with the user on 2026-11-09).
-    /// Text colours stay, since they're chosen for contrast and a nearby background doesn't
-    /// change that.
+    /// Text colours stay, but in the dark theme the quiet ones on a ground that came up toward
+    /// them are brought toward the words' own colour until they read as well as they did.
     pub fn on_background(mut self, background: Rgb) -> Self {
         let base = self.activity.bg;
         let by = (
@@ -241,6 +242,7 @@ impl Theme {
             i16::from(background.1) - i16::from(base.1),
             i16::from(background.2) - i16::from(base.2),
         );
+        let dark = !self.is_light();
         // The rail and the status bar are the terminal's own colour, so its window padding
         // can't show as a seam around them.
         let (text_was, sidebar_was, popup_was) = (self.text.bg, self.sidebar.bg, self.popup);
@@ -296,7 +298,64 @@ impl Theme {
         ] {
             *color = shifted(*color, on_popup);
         }
+        // Dark, herdr's frame is darker than most terminals, so the sheets come well up from
+        // where they were: the washes on them come with them, or an added line would be
+        // darker than the sheet it's on, and quiet words keep the contrast they had on their
+        // own ground. The light theme's stay where Latte has them.
+        if !dark {
+            return self;
+        }
+        for color in [
+            &mut self.selection,
+            &mut self.found,
+            &mut self.find_match,
+            &mut self.added,
+            &mut self.removed,
+            &mut self.added_word,
+            &mut self.removed_word,
+            &mut self.moved,
+        ] {
+            *color = shifted(*color, on_text);
+        }
+        let words = self.text.fg;
+        let (frame_was, frame) = (base, self.activity.bg);
+        let (text_now, popup_now) = (self.text.bg, self.popup);
+        let kept = |color: Rgb, was: Rgb, now: Rgb| {
+            let wanted = contrast(color, was);
+            (0..=20)
+                .map(|step| mix(color, words, step as f32 / 20.0))
+                .find(|lifted| contrast(*lifted, now) >= wanted)
+                .unwrap_or(words)
+        };
+        for color in [
+            &mut self.gutter.fg,
+            &mut self.tab.fg,
+            &mut self.breadcrumb.fg,
+            &mut self.comment,
+            &mut self.disabled,
+            &mut self.ignored,
+        ] {
+            *color = kept(*color, text_was, text_now);
+        }
+        for color in [
+            &mut self.activity.fg,
+            &mut self.status.fg,
+            &mut self.workspaces.fg,
+        ] {
+            *color = kept(*color, frame_was, frame);
+        }
+        self.popup_dim = kept(self.popup_dim, popup_was, popup_now);
         self
+    }
+
+    /// A warning, beside an error in the deleted colour. Dark, graphite's yellow, quieter than
+    /// its red; light, the attention colour, as it was.
+    pub fn warning(&self) -> Rgb {
+        if self.is_light() {
+            self.attention
+        } else {
+            self.git_modified
+        }
     }
 
     /// A built-in theme by name. Unknown names get the default.
@@ -444,27 +503,47 @@ impl Theme {
 }
 
 impl Default for Theme {
-    /// The dark theme: three surfaces a step apart (the frame, the panels, the sheet), three
-    /// weights of text, one blue, and Catppuccin Mocha's colours for code and for meaning.
+    /// The dark theme: herdr's graphite, the default dark look of herdr's desktop app, from
+    /// herdr-app's `settings.rs` and checked against herdr.dev. Two surfaces, the frame and the
+    /// sheet, with what's raised over them; three weights of text; one blue; herdr's colours for
+    /// meaning and Catppuccin Mocha's for code.
     fn default() -> Self {
-        let sheet = Rgb(43, 43, 66);
-        let frame = Rgb(30, 30, 46);
-        let panel = Rgb(36, 36, 56);
-        let raised = Rgb(51, 51, 77);
-        let text = Rgb(205, 214, 244);
-        let second = Rgb(166, 173, 200);
-        let third = Rgb(147, 153, 178);
-        let line = Rgb(58, 58, 86);
-        let strong_line = Rgb(80, 80, 111);
-        let blue = Rgb(137, 180, 250);
-        let chosen = Rgb(57, 66, 107);
-        let green = Rgb(166, 227, 161);
-        let peach = Rgb(250, 179, 135);
-        let red = Rgb(243, 139, 168);
-        let yellow = Rgb(249, 226, 175);
+        // herdr's chrome (its sidebar, tab strip and status bar): the sheet 32% toward black.
+        let frame = Rgb(0x10, 0x11, 0x14);
+        // herdr's canvas, between its panes: 16% toward black.
+        let panel = Rgb(0x13, 0x15, 0x18);
+        // Graphite's background, what herdr's panes stand on.
+        let sheet = Rgb(0x17, 0x19, 0x1d);
+        // herdr's popover, a menu's ground: 6% toward white.
+        let raised = Rgb(0x25, 0x27, 0x2b);
+        // A text box is sunk a step under the frame, as it was before herdr's colours.
+        let sunk = Rgb(0x0d, 0x0e, 0x11);
+        let text = Rgb(0xee, 0xee, 0xef);
+        // herdr's muted. Its dim, 0.38 of the way, is 3.3 to 1 on the sheet, so what has to be
+        // read is a little brighter, and dim is for what can't be done.
+        let second = mix(sheet, text, 0.6);
+        let third = mix(sheet, text, 0.55);
+        let dim = mix(sheet, text, 0.38);
+        // The site's blue for what's active; the code's accent rings what has focus.
+        let blue = Rgb(0x76, 0xa8, 0xff);
+        let ring = Rgb(0x96, 0xb2, 0xd7);
+        // Meaning: done and added, herdr's blocked for what needs you, graphite's yellow and
+        // red for what changed and what's removed or failed.
+        let green = Rgb(0x4c, 0xc4, 0x8c);
+        let blocked = Rgb(0xf0, 0x70, 0x5f);
+        let yellow = Rgb(0xd8, 0xbe, 0x87);
+        let red = Rgb(0xdc, 0x8c, 0x95);
+        // Code keeps Catppuccin Mocha's hues: each reads at 7 to 1 or better here.
         let mauve = Rgb(203, 166, 247);
-        // What's under the pointer: the text's colour, an eighth of the way over its ground.
-        let hover = |ground: Rgb| mix(ground, text, 0.08);
+        let leaf = Rgb(166, 227, 161);
+        let straw = Rgb(249, 226, 175);
+        let peach = Rgb(250, 179, 135);
+        // herdr lays white over whatever is under it, at these strengths of 255.
+        let white = Rgb(255, 255, 255);
+        let hover = |ground: Rgb| mix(ground, white, 14.0 / 255.0);
+        let selected = |ground: Rgb| mix(ground, white, 23.0 / 255.0);
+        let hairline = |ground: Rgb| mix(ground, white, 24.0 / 255.0);
+        let strong = |ground: Rgb| mix(ground, white, 36.0 / 255.0);
         Self {
             text: style(text, sheet),
             // The side pane is a sheet as the file is, and so is the ground of every tab.
@@ -474,55 +553,58 @@ impl Default for Theme {
             tab: style(second, sheet),
             tab_active: style(text, sheet),
             gutter: style(third, sheet),
-            selection: chosen,
-            found: mix(sheet, yellow, 0.28),
+            selection: Rgb(0x39, 0x44, 0x54),
+            // Quieter than the selection, which marks the match Find is on.
+            found: mix(sheet, yellow, 0.18),
             row_hover: hover(sheet),
             page_hover: hover(sheet),
             popup_hover: hover(raised),
-            row_active: chosen,
+            row_active: selected(sheet),
             accent: blue,
-            tint: Rgb(54, 60, 92),
-            accept_tint: Rgb(44, 66, 66),
-            attention: peach,
+            tint: mix(sheet, blue, 0.16),
+            accept_tint: mix(sheet, green, 0.15),
+            attention: blocked,
             keyword: mauve,
-            string: green,
+            string: leaf,
             comment: third,
             function: blue,
-            kind: yellow,
+            kind: straw,
             number: peach,
-            // Deeper than a wash of Mocha's green and red, which on this blue sheet came
-            // out grey: a line added has to read as green at a glance.
-            added: Rgb(50, 72, 70),
-            removed: Rgb(78, 54, 66),
-            added_word: Rgb(60, 102, 86),
-            removed_word: Rgb(116, 62, 72),
-            moved: Rgb(38, 46, 70),
+            // Stronger than herdr's 9% washes, which read as grey: a line added has to read
+            // as green at a glance.
+            added: mix(sheet, green, 0.2),
+            removed: mix(sheet, blocked, 0.2),
+            added_word: mix(sheet, green, 0.36),
+            removed_word: mix(sheet, blocked, 0.36),
+            moved: mix(sheet, blue, 0.1),
             activity: style(third, frame),
             status: style(second, frame),
             workspaces: style(second, frame),
             breadcrumb: style(second, sheet),
             line: hover(sheet),
             number_active: text,
-            guide: line,
-            scrollbar: strong_line,
+            guide: hairline(sheet),
+            scrollbar: strong(sheet),
             error: red,
             heading: text,
-            git_modified: peach,
+            git_modified: yellow,
             git_added: green,
-            input: Rgb(28, 28, 42),
+            input: sunk,
             find_match: mix(sheet, yellow, 0.45),
-            code_bg: Rgb(34, 34, 52),
-            minimap_view: Rgb(72, 74, 110),
-            border: line,
-            focus: blue,
+            // A page's code block is sunk to the frame's depth.
+            code_bg: frame,
+            minimap_view: strong(sheet),
+            border: hairline(sheet),
+            focus: ring,
             popup: raised,
             popup_dim: second,
-            disabled: Rgb(122, 122, 150),
-            ignored: Rgb(122, 122, 150),
-            popup_border: strong_line,
-            pick: chosen,
+            disabled: dim,
+            ignored: dim,
+            popup_border: hairline(raised),
+            pick: selected(raised),
             button: blue,
-            button_text: Rgb(17, 17, 27),
+            // herdr writes on its blue in the sheet's colour.
+            button_text: sheet,
         }
     }
 }
@@ -535,6 +617,21 @@ fn mix(from: Rgb, to: Rgb, by: f32) -> Rgb {
         channel(from.1, to.1),
         channel(from.2, to.2),
     )
+}
+
+/// How far apart two colours are to the eye, as WCAG counts it: 1 to 21.
+fn contrast(a: Rgb, b: Rgb) -> f32 {
+    let channel = |c: u8| {
+        let c = f32::from(c) / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let light = |c: Rgb| 0.2126 * channel(c.0) + 0.7152 * channel(c.1) + 0.0722 * channel(c.2);
+    let (a, b) = (light(a), light(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
 #[cfg(test)]
@@ -621,6 +718,11 @@ mod tests {
         );
         assert_eq!(theme.popup_hover, latte.popup_hover);
         assert_eq!(theme.input, latte.input);
+        // Its words and washes are Latte's, whatever the dark theme does with its own.
+        assert_eq!(theme.gutter.fg, latte.gutter.fg);
+        assert_eq!(theme.status.fg, latte.status.fg);
+        assert_eq!(theme.added, latte.added);
+        assert_eq!(theme.selection, latte.selection);
         // On the editor, code blocks and lines keep about the step they had in Latte.
         let step = |t: &Theme, wash: Rgb| brightness(t.text.bg) as i32 - brightness(wash) as i32;
         for (now, then) in [
@@ -648,28 +750,22 @@ mod tests {
         );
     }
 
-    /// How far apart two colours are to the eye, as WCAG counts it: 1 to 21.
-    fn contrast(a: Rgb, b: Rgb) -> f32 {
-        let channel = |c: u8| {
-            let c = f32::from(c) / 255.0;
-            if c <= 0.03928 {
-                c / 12.92
-            } else {
-                ((c + 0.055) / 1.055).powf(2.4)
-            }
-        };
-        let light = |c: Rgb| 0.2126 * channel(c.0) + 0.7152 * channel(c.1) + 0.0722 * channel(c.2);
-        let (a, b) = (light(a), light(b));
-        (a.max(b) + 0.05) / (a.min(b) + 0.05)
-    }
-
-    /// The dark theme's text and code read at 4.5 to 1 on the sheet, and its three surfaces
-    /// are the design's: the frame, the panels and the sheet.
+    /// The dark theme's text, code and meaning read at 4.5 to 1 on the sheet and on the
+    /// caret's line, its quiet words on the frame and on a menu, and its surfaces are the
+    /// design's: the frame, and the sheets on it.
     #[test]
     fn the_dark_theme_is_three_surfaces_and_text_that_reads_on_them() {
         let dark = Theme::default();
-        assert_eq!(dark.activity.bg, Rgb(30, 30, 46), "the frame");
-        assert_eq!(dark.text.bg, Rgb(43, 43, 66), "the sheet");
+        assert_eq!(dark.activity.bg, Rgb(0x10, 0x11, 0x14), "the frame");
+        assert_eq!(dark.text.bg, Rgb(0x17, 0x19, 0x1d), "the sheet");
+        assert!(
+            brightness(dark.popup) > brightness(dark.text.bg),
+            "a menu is raised"
+        );
+        assert!(
+            brightness(dark.input) < brightness(dark.text.bg),
+            "a box is sunk"
+        );
         assert_eq!(
             dark.sidebar.bg, dark.text.bg,
             "the side pane is a sheet too"
@@ -694,9 +790,18 @@ mod tests {
             ("number", dark.number),
             ("quiet text", dark.gutter.fg),
             ("a failure", dark.error),
+            ("the blue", dark.accent),
+            ("what needs you", dark.attention),
+            ("what's added", dark.git_added),
+            ("what changed", dark.git_modified),
         ] {
             let ratio = contrast(color, dark.text.bg);
             assert!(ratio >= 4.5, "{name} is {ratio:.2} to 1 on the sheet");
+            let ratio = contrast(color, dark.line);
+            assert!(
+                ratio >= 4.5,
+                "{name} is {ratio:.2} to 1 on the caret's line"
+            );
         }
         for (name, color) in [
             ("quiet text", dark.status.fg),
@@ -705,6 +810,193 @@ mod tests {
             let ratio = contrast(color, dark.activity.bg);
             assert!(ratio >= 4.5, "{name} is {ratio:.2} to 1 on the frame");
         }
+        for (name, color, ground) in [
+            ("a menu's words", dark.text.fg, dark.popup),
+            ("its quiet words", dark.popup_dim, dark.popup),
+            ("the picked row's", dark.text.fg, dark.pick),
+            ("a button's words", dark.button_text, dark.button),
+        ] {
+            let ratio = contrast(color, ground);
+            assert!(ratio >= 4.5, "{name} are {ratio:.2} to 1");
+        }
+    }
+
+    /// The dark theme is herdr's graphite, as herdr-app's `settings.rs` works it out from the
+    /// preset's palette and as herdr.dev shows it.
+    #[test]
+    fn the_dark_theme_is_herdrs_graphite() {
+        let dark = Theme::default();
+        let side = dark.on_frame();
+        assert_eq!(dark.activity.bg, Rgb(0x10, 0x11, 0x14), "herdr's chrome");
+        assert_eq!(side.sidebar.bg, dark.activity.bg, "under the sidebar too");
+        assert_eq!(dark.text.bg, Rgb(0x17, 0x19, 0x1d), "graphite's background");
+        assert_eq!(dark.popup, Rgb(0x25, 0x27, 0x2b), "herdr's popover");
+        assert_eq!(dark.text.fg, Rgb(0xee, 0xee, 0xef), "herdr's words");
+        assert_eq!(dark.status.fg, Rgb(0x98, 0x99, 0x9b), "herdr's muted");
+        assert_eq!(dark.disabled, Rgb(0x69, 0x6a, 0x6d), "herdr's dim");
+        assert_eq!(
+            dark.selection,
+            Rgb(0x39, 0x44, 0x54),
+            "graphite's selection"
+        );
+        assert_eq!(
+            dark.accent,
+            Rgb(0x76, 0xa8, 0xff),
+            "the blue herdr.dev turns in"
+        );
+        assert_eq!(
+            dark.focus,
+            Rgb(0x96, 0xb2, 0xd7),
+            "the ring round a focused pane"
+        );
+        assert_eq!(
+            dark.attention,
+            Rgb(0xf0, 0x70, 0x5f),
+            "blocked: one needs you"
+        );
+        assert_eq!(dark.git_added, Rgb(0x4c, 0xc4, 0x8c), "done, and added");
+        assert_eq!(dark.git_modified, Rgb(0xd8, 0xbe, 0x87), "changed");
+        assert_eq!(dark.error, Rgb(0xdc, 0x8c, 0x95), "removed or failed");
+        // herdr lays white over its ground: measured on herdr.dev as 9% behind a picked row
+        // and 9.4% for a hairline, and 5.5% under the pointer in herdr's code.
+        let over = |ground: Rgb, share: f32| mix(ground, Rgb(255, 255, 255), share);
+        let near = |a: Rgb, b: Rgb| {
+            a.0.abs_diff(b.0) <= 1 && a.1.abs_diff(b.1) <= 1 && a.2.abs_diff(b.2) <= 1
+        };
+        for (name, now, wanted) in [
+            ("a picked row", side.row_active, over(side.sidebar.bg, 0.09)),
+            (
+                "a pointed row",
+                side.row_hover,
+                over(side.sidebar.bg, 0.055),
+            ),
+            ("a hairline", dark.border, over(dark.text.bg, 0.094)),
+            ("a menu's line", dark.popup_border, over(dark.popup, 0.094)),
+            ("a menu's pick", dark.pick, over(dark.popup, 0.09)),
+            ("a menu's hover", dark.popup_hover, over(dark.popup, 0.055)),
+        ] {
+            assert!(near(now, wanted), "{name} is {now:?}, not {wanted:?}");
+        }
+    }
+
+    /// On a terminal whose background isn't herdr's, the frame is that background and every
+    /// surface keeps its step from herdr's frame.
+    #[test]
+    fn on_another_terminal_the_surfaces_keep_herdrs_steps() {
+        let dark = Theme::default();
+        let step = |theme: &Theme, color: Rgb| {
+            let base = theme.activity.bg;
+            (
+                i16::from(color.0) - i16::from(base.0),
+                i16::from(color.1) - i16::from(base.1),
+                i16::from(color.2) - i16::from(base.2),
+            )
+        };
+        let other = Rgb(0x28, 0x2c, 0x34);
+        let moved = dark.on_background(other);
+        assert_eq!(moved.activity.bg, other, "the frame is the terminal's");
+        assert_eq!(
+            moved.text.bg,
+            Rgb(0x2f, 0x34, 0x3d),
+            "the sheet 7, 8 and 9 over it"
+        );
+        assert_eq!(moved.popup, Rgb(0x3d, 0x42, 0x4b), "a menu 21 to 23");
+        for (name, now, then) in [
+            ("the sheet", moved.text.bg, dark.text.bg),
+            ("a menu", moved.popup, dark.popup),
+            ("a box", moved.input, dark.input),
+            ("a hairline", moved.border, dark.border),
+            ("a picked row", moved.row_active, dark.row_active),
+            ("a selection", moved.selection, dark.selection),
+            ("a line added", moved.added, dark.added),
+            ("a line removed", moved.removed, dark.removed),
+            ("a match", moved.found, dark.found),
+        ] {
+            assert_eq!(step(&moved, now), step(&dark, then), "{name}");
+        }
+        assert_eq!(moved.text.fg, dark.text.fg, "words keep their colours");
+        assert_eq!(moved.accent, dark.accent);
+        // Quiet words on a ground that came up toward them are lifted until they read as well
+        // as they did on herdr's.
+        for (name, (now, ground), (then, was)) in [
+            (
+                "a line's number",
+                (moved.gutter.fg, moved.text.bg),
+                (dark.gutter.fg, dark.text.bg),
+            ),
+            (
+                "a comment",
+                (moved.comment, moved.text.bg),
+                (dark.comment, dark.text.bg),
+            ),
+            (
+                "a tab behind",
+                (moved.tab.fg, moved.text.bg),
+                (dark.tab.fg, dark.text.bg),
+            ),
+            (
+                "the bar's words",
+                (moved.status.fg, moved.activity.bg),
+                (dark.status.fg, dark.activity.bg),
+            ),
+            (
+                "a menu's quiet words",
+                (moved.popup_dim, moved.popup),
+                (dark.popup_dim, dark.popup),
+            ),
+            (
+                "what can't be done",
+                (moved.disabled, moved.text.bg),
+                (dark.disabled, dark.text.bg),
+            ),
+        ] {
+            let (ratio, wanted) = (contrast(now, ground), contrast(then, was));
+            assert!(
+                ratio >= wanted,
+                "{name} is {ratio:.2} to 1, where it was {wanted:.2}"
+            );
+        }
+        // On black, everything only moves away from them, and nothing is lifted.
+        let black = dark.on_background(Rgb(0, 0, 0));
+        assert_eq!(black.gutter.fg, dark.gutter.fg);
+        assert_eq!(black.status.fg, dark.status.fg);
+    }
+
+    /// A terminal with only 256 colours maps each one Cellix writes to the nearest of its
+    /// own. Graphite's surfaces are nearly grey, so the frame, a sheet and a menu land on
+    /// three steps of its grey ramp, in their order.
+    #[test]
+    fn the_dark_surfaces_stay_apart_in_256_colours() {
+        let table: Vec<Rgb> = (16u8..=255)
+            .map(|index| match index {
+                16..=231 => {
+                    let level = |n: u8| if n == 0 { 0 } else { 55 + n * 40 };
+                    let n = index - 16;
+                    Rgb(level(n / 36), level(n / 6 % 6), level(n % 6))
+                }
+                _ => {
+                    let grey = 8 + (index - 232) * 10;
+                    Rgb(grey, grey, grey)
+                }
+            })
+            .collect();
+        let nearest = |c: Rgb| {
+            let far = |t: &Rgb| {
+                let d = |a: u8, b: u8| (i32::from(a) - i32::from(b)).pow(2);
+                d(c.0, t.0) + d(c.1, t.1) + d(c.2, t.2)
+            };
+            *table.iter().min_by_key(|t| far(t)).unwrap()
+        };
+        let dark = Theme::default();
+        let (frame, sheet, menu) = (
+            nearest(dark.activity.bg),
+            nearest(dark.text.bg),
+            nearest(dark.popup),
+        );
+        assert!(
+            brightness(frame) < brightness(sheet) && brightness(sheet) < brightness(menu),
+            "{frame:?} {sheet:?} {menu:?}"
+        );
     }
 
     fn brightness(color: Rgb) -> u32 {

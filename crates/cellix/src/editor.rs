@@ -278,13 +278,17 @@ fn display_width(c: char, column: usize, tab: usize) -> usize {
     }
 }
 
-/// The colour a callout's bar and title take.
+/// The colour a callout's bar and title take. Dark, Important and Warning are graphite's
+/// magenta and yellow: the light theme's purple was 3.8 to 1 on herdr's sheet.
 fn callout_colour(kind: Callout, theme: &Theme) -> Rgb {
+    let light = theme.is_light();
     match kind {
         Callout::Note => theme.accent,
         Callout::Tip => theme.inserted(),
-        Callout::Important => Rgb(0x88, 0x57, 0xe0),
-        Callout::Warning => Rgb(0xc0, 0x86, 0x10),
+        Callout::Important if light => Rgb(0x88, 0x57, 0xe0),
+        Callout::Important => Rgb(0xb5, 0xa2, 0xce),
+        Callout::Warning if light => Rgb(0xc0, 0x86, 0x10),
+        Callout::Warning => theme.warning(),
         Callout::Caution => theme.deleted(),
     }
 }

@@ -29,7 +29,7 @@ letter of the words, one column right and no rows down unless said, on the first
 says them, or the last with which as -1. It waits for the words as "until" does.
 
 Settings come from the environment: TERM_SIZE=170x46, TERM_CELL=17x36, TERM_PADDING=10x8,
-TERM_BG=1e1e2e. As Ghostty does, it takes a picture as a temporary file (`t=t`) from /tmp,
+TERM_BG=101114 (herdr's frame, which the dark theme stands on). As Ghostty does, it takes a picture as a temporary file (`t=t`) from /tmp,
 /dev/shm or its own TMPDIR, reads it and deletes it; TERM_FILES=0 makes it a terminal that
 doesn't. TERM_ROW is the height in pixels of a row of Cellix's own, where its rows are
 taller than a line: TERM_SIZE and every step's row are then in those rows, and this terminal
@@ -57,7 +57,7 @@ ROW = int(os.environ.get("TERM_ROW", CH))
 def lines(rows):
     """The terminal's lines that hold so many of Cellix's rows."""
     return -(-rows * ROW // CH)
-BG = bytes.fromhex(os.environ.get("TERM_BG", "1e1e2e"))
+BG = bytes.fromhex(os.environ.get("TERM_BG", "101114"))
 TEXT = os.environ.get("CELLIX_SCREEN_TEXT")
 
 

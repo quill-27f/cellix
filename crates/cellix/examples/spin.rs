@@ -47,7 +47,7 @@ fn main() {
         FontMeasure::new(CELL.0, ROW).with_type_row(CELL.1),
     ));
     let cells = app(std::rc::Rc::new(CellMeasure));
-    let accent = cellix_render::Rgb(0x89, 0xb4, 0xfa);
+    let accent = pixels.theme().accent;
     // Where each spinner stands: after the pane's tab's name, on the list's first row, and in
     // the status bar after its first words.
     let places = |app: &App| -> Vec<(&'static str, f32, u16)> {

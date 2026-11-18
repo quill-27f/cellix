@@ -125,24 +125,25 @@ pub const BROWSER: &str = "Browser";
 /// Pictures kept per session, oldest going first.
 const MAX_PICTURES: usize = 512;
 
-/// Light and dark versions of the sixteen colours, chosen to read on the sheet.
+/// Light and dark versions of the sixteen colours, chosen to read on the sheet. The dark ones
+/// are graphite's, herdr's default dark terminal colours.
 const DARK: [Rgb; 16] = [
-    Rgb(0x1e, 0x1f, 0x26),
-    Rgb(0xf3, 0x8b, 0xa8),
-    Rgb(0xa6, 0xe3, 0xa1),
-    Rgb(0xf9, 0xe2, 0xaf),
-    Rgb(0x89, 0xb4, 0xfa),
-    Rgb(0xcb, 0xa6, 0xf7),
-    Rgb(0x94, 0xe2, 0xd5),
-    Rgb(0xba, 0xc2, 0xde),
-    Rgb(0x6c, 0x70, 0x86),
-    Rgb(0xf3, 0x8b, 0xa8),
-    Rgb(0xa6, 0xe3, 0xa1),
-    Rgb(0xf9, 0xe2, 0xaf),
-    Rgb(0x89, 0xb4, 0xfa),
-    Rgb(0xcb, 0xa6, 0xf7),
-    Rgb(0x94, 0xe2, 0xd5),
-    Rgb(0xee, 0xee, 0xf4),
+    Rgb(0x45, 0x48, 0x4f),
+    Rgb(0xdc, 0x8c, 0x95),
+    Rgb(0xa6, 0xbd, 0x91),
+    Rgb(0xd8, 0xbe, 0x87),
+    Rgb(0x96, 0xb2, 0xd7),
+    Rgb(0xb5, 0xa2, 0xce),
+    Rgb(0x8c, 0xbd, 0xc3),
+    Rgb(0xd2, 0xd4, 0xd9),
+    Rgb(0x81, 0x87, 0x93),
+    Rgb(0xf0, 0xa5, 0xad),
+    Rgb(0xba, 0xd5, 0xa2),
+    Rgb(0xea, 0xd2, 0xa1),
+    Rgb(0xb0, 0xcb, 0xef),
+    Rgb(0xcb, 0xb7, 0xe6),
+    Rgb(0xa4, 0xd5, 0xdb),
+    Rgb(0xf0, 0xf0, 0xf2),
 ];
 const LIGHT: [Rgb; 16] = [
     Rgb(0x4c, 0x4f, 0x69),
@@ -3353,5 +3354,37 @@ mod tests {
         assert_eq!(indexed(16, &DARK), Rgb(0, 0, 0));
         assert_eq!(indexed(231, &DARK), Rgb(255, 255, 255));
         assert_eq!(indexed(232, &DARK), Rgb(8, 8, 8));
+    }
+
+    /// A dark terminal has graphite's sixteen colours, as herdr's panes do: what a program
+    /// prints in red and blue is drawn in graphite's, and a program that asks is told them.
+    #[test]
+    #[cfg(unix)]
+    fn a_dark_terminal_draws_graphites_sixteen_colours() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = "printf '\\033[31mred\\033[34mblue\\033[0m'; sleep 5".to_string();
+        let argv = ["sh".to_string(), "-c".to_string(), script];
+        let mut session =
+            Session::start("Test", &argv, &[], dir.path(), (80, 24), (10, 20)).unwrap();
+        let theme = Theme::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let grid = loop {
+            session.poll(&theme);
+            let mut grid = Grid::new(80, 24, theme.text);
+            session.draw(&mut grid, Rect::new(0, 0, 80, 24), &theme, false);
+            if grid.row_text(0).contains("redblue") {
+                break grid;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the program never printed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        };
+        assert_eq!(grid.cell(0, 0).style.fg, Rgb(0xdc, 0x8c, 0x95), "red");
+        assert_eq!(grid.cell(3, 0).style.fg, Rgb(0x96, 0xb2, 0xd7), "blue");
+        assert_eq!(asked_colour(2, &theme), Rgb(0xa6, 0xbd, 0x91), "green");
+        assert_eq!(asked_colour(15, &theme), Rgb(0xf0, 0xf0, 0xf2), "white");
+        session.stop();
     }
 }

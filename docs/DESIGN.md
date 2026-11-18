@@ -647,6 +647,7 @@ place in the list, since every worktree shares one list and agents push and pop 
 
 `theme` is `auto`, `dark` or `light`. `auto` is the default: Cellix asks the terminal for
 its background with OSC 11 and takes the matching theme, staying dark if nothing answers.
+Dark is herdr's graphite and light is Catppuccin Latte's surfaces (under Look).
 
 ## Quit, at the foot
 
@@ -836,16 +837,68 @@ as ◫ while the sidebar is hidden, since there the tabs have no button. Ctrl+B 
 Both themes are two surfaces: the frame (the views, the sidebar, the status bar) and the
 sheets on it (the file and the side pane, whatever it shows, a terminal too, each with its
 tabs). Cards, menus and dialogs are raised over those, and a text box is sunk. Text
-has three weights of colour and there is one blue. The dark theme has deep blue-grey surfaces
-of its own with Catppuccin Mocha's colours for code and for meaning (green added, peach
-changed or waiting, red removed or failed). The light one is Catppuccin Latte's surfaces, the
+has three weights of colour and there is one blue.
+
+The dark theme is herdr's: the default dark look of its desktop app, the preset it calls
+graphite, as herdr.dev shows it (the user's choice of 18 November 2026, "make the dark mode
+color the same with herdr"; it had deep blue-grey surfaces of its own until then). The colours
+are taken from herdr-app's `src/settings.rs`, where every role is worked out from graphite's
+palette, and checked against the live mock on herdr.dev; herdr is Apache-2.0 and only its
+colours are taken. The frame is herdr's chrome, #101114 (its sidebar, tab strip and status
+bar: graphite's background a third of the way to black). A sheet is graphite's background,
+#17191d, what herdr's panes stand on. What's raised, a menu, a card or a dialog, is herdr's
+popover, #25272b (6% toward white), with a line round it. A page's code block is sunk to the
+frame's depth and a text box a step under it, #0d0e11, as a box was before. Where herdr lays white over its ground, Cellix lays the same: a hover at
+5.5%, a picked or selected row at 9%, a hairline at 9.4% and a scrollbar at 14%. Text is
+#eeeeef; the second weight is herdr's muted, #98999b, six tenths of the way from the sheet to
+the text; the third is 0.55 of the way, #8d8e91, since herdr's dim (0.38, #696a6d) is 3.3 to 1
+on the sheet and what's read here stays at 4.5 to 1. Dim is kept for what can't be done and
+what git ignores. A selection is graphite's #394454. The blue is #76a8ff, the ring round a
+focused box #96b2d7. Meaning is herdr's: the spinner in the blue while an agent works, #f0705f
+when one needs you (herdr's blocked), green #4cc48c when one is done and for what's added,
+graphite's yellow #d8be87 for what changed and its red #dc8c95 for what's removed or failed. A
+warning in the problems list is the yellow, beside an error in the red: in #f0705f it read as
+worse than the error (the light theme keeps its peach and red). A page's Important and Warning
+callouts are graphite's magenta #b5a2ce and the yellow. Only the words at the foot that say an
+agent needs you take #f0705f; the file's details at the bar's other end stay its quiet colour
+(they took it too, which in a red read as errors). Matches Find isn't on are a wash of the
+yellow, 18% over the sheet, so the one it's on, in the selection's colour, is the one that
+stands out. A diff's lines are washes of that green and of #f0705f, a fifth of the way over the
+sheet and 0.36 for the words that changed: herdr's own washes, at 9%, read as grey beside a
+review. Code
+keeps Catppuccin Mocha's hues (mauve keywords, green strings, yellow types, peach numbers), each
+7 to 1 or better on the new sheet, with functions in the blue and comments in the third
+weight. A terminal in the side pane has graphite's sixteen colours, as herdr's panes have.
+
+Where `settings.rs` and the site disagree, the code is followed, but in one place. The code
+calls graphite's soft blue #96b2d7 the accent (it rings herdr's focused pane) and gives #76a8ff
+to an agent that's done, with yellow #e5c07b while one works; the site paints the spinner and
+its accents #76a8ff and a done agent green #4cc48c. Cellix's spinner is its one blue, and a done
+dot in it would be the spinner's colour, so it takes the site's set, and #96b2d7 does here what
+it does in herdr, ringing what has focus. herdr's canvas, #131518 in the 8 px between its
+panes, has no surface of its own: the column between Cellix's sheets is the frame.
+
+The light one is Catppuccin Latte's surfaces, unchanged by herdr's, the
 editor on base, the sidebars on mantle, the frame on crust and menus white; its text and code
 colours are Latte's hues deepened until each reads at 4.5 to 1, which Latte's own green,
 yellow and blue don't (the end-to-end design the user approved on 2026-11-12, which replaced
 "Latte's own colours for code" of 2026-11-09).
 On a terminal, both themes move together so the frame sits on the terminal's own background and
 its window padding shows no seam; a Latte terminal therefore shows the light theme a step paler
-than Latte (decided with the user on 2026-11-09). It's all drawn to the grid, so it holds on the cell tier. Activity icons span several cells:
+than Latte (decided with the user on 2026-11-09). So herdr's colours show as they are on a
+terminal whose background is herdr's frame, #101114. On any other dark background the frame is
+that background and every surface keeps its step from herdr's frame, the sheet 7, 8 and 9 above
+it in red, green and blue and a menu 21 to 23: on #282c34 the frame is #282c34, the sheet
+#2f343d and a menu #3d424b, and on black the sheet is #070809. The selection, Find's matches and
+a diff's washes move with the sheet, or on most terminals an added line would be darker than
+the sheet it's on. Text, the blue and the meaning colours stay as they are, but for the quiet
+words: where their ground came up toward them they're brought toward the words' own colour
+until they read as well as on herdr's (the third weight on #2f343d was 3.8 to 1). The light
+theme does none of this and stays as Latte has it. It's all drawn to the grid, so it holds on the cell tier, which
+writes every colour as 24-bit; a terminal that has only 256 colours maps them itself, and
+graphite's surfaces, being nearly grey, land on separate steps of its grey ramp in their order
+(the frame on 233, a sheet on 234, a menu on 235), where the blue-grey ones before them put the
+frame and the panels on one. Activity icons span several cells:
 shapes on the pixel tier and block art on cells, because a font glyph is too small beside a
 real IDE. The highlight behind a selected or hovered icon on the rail keeps 8 px or more from
 the icon on every side; it reaches into the rows either side, so the rail sits half a row lower,
