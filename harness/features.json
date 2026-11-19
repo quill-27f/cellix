@@ -4279,8 +4279,8 @@
   {
     "id": "kind-pills-quiet",
     "milestone": 12,
-    "title": "A comment kind with none is quiet and one with some is filled",
-    "test": "a_comment_kind_with_none_is_quiet_and_one_with_some_is_filled",
+    "title": "A comment kind with none is quiet and one with some is outlined, its kind in the words' colour",
+    "test": "a_comment_kind_with_none_is_quiet_and_one_with_some_is_outlined",
     "passes": true
   },
   {
@@ -6584,6 +6584,13 @@
     "milestone": 15,
     "title": "A button says what the palette calls it, and a verdict and an answer's count read the same on every card",
     "test": "a_cards_buttons_say_what_the_palette_calls_them",
+    "passes": true
+  },
+  {
+    "id": "chips-read-as-they-are",
+    "milestone": 15,
+    "title": "The kinds' pills are outlines with the picked one the accent's and the head saying the kind listed; Reject and Accept have no shadow between them",
+    "test": "the_kinds_pills_are_outlines_and_the_head_says_the_kind_listed",
     "passes": true
   }
 ]

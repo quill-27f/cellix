@@ -544,8 +544,13 @@ tint and edge are the lit card's alone (a suggestion was a shade of the accent, 
 card read as the same card). Words a comment was made on that are gone, "Words gone" and "Removed
 in version 2", are in the removed colour, as a diff's removed lines are, not the colour of what
 needs you. A press on a kind's pill
-lists only that kind's comments, the pill in the accent's colours, and another press lists them
-all; with none of that kind the pane says so and how to list them all. The pills count the
+lists only that kind's comments, the pill in the accent's colours with a × after its count, and
+another press lists them all; with none of that kind the pane says so and how to list them all.
+While a kind is listed alone the head says so, "Evidence · 1 of 4", in place of how many are
+whose (it said "3 of yours · 1 suggested" over the one card). Every other pill is an outline, its
+kind in the words' colour where there are comments of it and quiet where there are none, its
+count quiet: filled grey, the kinds with comments read as switched on, which only the picked one
+is. The pills count the
 reviewer's own comments: a suggestion not yet kept covers nothing, and was counted. With no
 comment open, the pane says to select text and press Comment, the button a selection shows,
 which names the keys as they're set; it named only Alt+C.
@@ -762,7 +767,9 @@ Reject and Accept stand over its first row from where it starts, Review's two wo
 thing, with Accept filled as it is there; under its last row when the first is the top of the page,
 which Next keeps it off. They keep to the page's reading column, and lean a little toward the
 suggestion in the row's air. They're the chips a selection's Comment and Ask Agent are, and give
-way to them while anything is selected. The one under the pointer comes first, and stays while the
+way to them while anything is selected; edged and filled, with no shadow, since the shadows of two
+side by side met in the gap between them as a band of grey and stood out past them with a hard
+top edge. The one under the pointer comes first, and stays while the
 pointer goes up to its chips across the row's other words. A press settles it as one edit to undo
 and says how many are left. Until 18 November 2026 Accept and Reject were only in the right-click
 menu and the palette, where they still are, with no key: the user asked for them at the change.

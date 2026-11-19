@@ -170,8 +170,10 @@ enum Line {
     Settle,
     /// The button that asks the agent to check the review, after how many comments are the
     /// reviewer's and how many the agent's, and how many files they're on when the list
-    /// covers every file.
-    Check(usize, usize, usize),
+    /// covers every file. With a kind's pill pressed, that kind and how many of it are open,
+    /// which the head says in place of the others: it said "3 of yours · 1 suggested" over the
+    /// one card listed.
+    Check(usize, usize, usize, Option<(&'static str, usize)>),
     /// Under Check My Review: the button that sends the comments no agent has had, how many.
     Deliver(usize),
     /// The heading over a file's comments, when the list covers every file: a comment on it
@@ -498,6 +500,24 @@ fn pill_width(text: &str, measure: &dyn Measure) -> f32 {
     measure.width(text, small()) + PILL_ROOM * 2.0
 }
 
+/// A kind's pill in the strip over the list: its kind and count, and when it's the kind listed
+/// alone, the × that says a press lists them all again.
+fn coverage_width(kind: &str, count: usize, picked: bool, measure: &dyn Measure) -> f32 {
+    let words = pill_width(&format!("{kind} {count}"), measure);
+    match (picked, measure.in_cells()) {
+        (false, _) => words,
+        // " ×" after its count.
+        (true, true) => words + 2.0,
+        (true, false) => words + CLEAR_ROOM,
+    }
+}
+
+/// Columns a picked kind's pill keeps after its count for its ×: half a column of air, then
+/// the ×'s strokes, the pill's own room after them.
+const CLEAR_ROOM: f32 = 1.0;
+/// How tall the square the × is drawn in is, in rows: its strokes take 11 of its 24.
+const CLEAR_ICON: f32 = 0.5;
+
 /// Columns either side of a pill's words, and between two pills.
 const PILL_ROOM: f32 = 1.0;
 const PILL_GAP: f32 = 1.0;
@@ -530,6 +550,39 @@ fn draw_pill(
     let tag = Style { fg: tone, ..inner };
     let at = x + PILL_ROOM;
     grid.label_at(at, at.floor() as u16, y, text, tag, right, SMALL);
+}
+
+/// The × in a picked kind's pill, its strokes starting half a column after the count that
+/// ends at `ends`, in the middle of its row; on cells, a "×" a cell after the count.
+fn draw_clear(
+    grid: &mut Grid,
+    (ends, cell, y): (f32, u16, u16),
+    (icon, color): (Icon, cellix_render::Rgb),
+    style: Style,
+    measure: &dyn Measure,
+) {
+    let painted = Style {
+        painted: true,
+        fg: color,
+        ..style
+    };
+    grid.put_str(cell, y, "\u{d7}", painted, cell + 1);
+    if measure.in_cells() {
+        return;
+    }
+    // The square's side in columns, as the painter sizes an icon by the words' line; its
+    // strokes start 6.5 of its 24 in.
+    let line = measure.cell_pixels().map_or(2.0, |(wide, tall)| {
+        tall as f32 / measure.row_air().max(1.0) / wide.max(1) as f32
+    });
+    let side = CLEAR_ICON * line;
+    let left = ends + CLEAR_ROOM / 2.0 - side * 6.5 / 24.0;
+    let top = f32::from(y) + (1.0 - CLEAR_ICON) / 2.0;
+    grid.paint.push(Paint::Icon {
+        bounds: Bounds::cells(left, top, side, CLEAR_ICON),
+        icon,
+        color,
+    });
 }
 
 /// `a` over `b`, `amount` of the way.
@@ -1550,7 +1603,10 @@ fn lay_out(
         places.sort();
         places.dedup();
         let files = if grouped { places.len() } else { 0 };
-        out.push(Line::Check(mine, open.len() - mine, files));
+        let filter = view
+            .kind
+            .map(|kind| (kind, open.iter().filter(|t| t.kind == kind).count()));
+        out.push(Line::Check(mine, open.len() - mine, files, filter));
         if let Some(waiting) = view.send.filter(|n| *n > 0) {
             out.push(Line::Deliver(waiting));
         }
@@ -1563,7 +1619,8 @@ fn lay_out(
         let mut row = Vec::new();
         let mut used = 0.0;
         for kind in KINDS {
-            let pill = pill_width(&format!("{kind} {}", count(kind)), measure) + PILL_GAP;
+            let picked = view.kind == Some(kind);
+            let pill = coverage_width(kind, count(kind), picked, measure) + PILL_GAP;
             if used + pill > width + 2.0 + PILL_GAP && !row.is_empty() {
                 out.push(Line::Coverage(std::mem::take(&mut row)));
                 used = 0.0;
@@ -1815,16 +1872,18 @@ pub fn age(at: u64, now: u64) -> Option<String> {
 }
 
 /// Where each kind's pill stands on its row, as its kind and the columns it starts and ends.
+/// `picked` is the kind listed alone, whose pill has room for its ×.
 fn pills(
     area: Rect,
     kinds: &[(&'static str, usize)],
+    picked: Option<&str>,
     measure: &dyn Measure,
 ) -> Vec<(&'static str, f32, f32)> {
     let mut x = f32::from(head(area, measure));
     kinds
         .iter()
         .map(|(kind, count)| {
-            let width = pill_width(&format!("{kind} {count}"), measure);
+            let width = coverage_width(kind, *count, picked == Some(*kind), measure);
             let at = x;
             x += width + PILL_GAP;
             (*kind, at, at + width)
@@ -2208,7 +2267,7 @@ pub fn hit(
         }
         Line::Coverage(kinds) => {
             let at = f32::from(x) + 0.5;
-            pills(area, kinds, measure)
+            pills(area, kinds, shown.4.kind, measure)
                 .into_iter()
                 .find(|(_, from, to)| at >= *from && at < *to)
                 .map(|(kind, ..)| Hit::Kind(kind))
@@ -2811,7 +2870,7 @@ pub fn draw(
                 // air from the card's edge and still more from the card before.
                 grid.lift_since(from, FILE_LIFT);
             }
-            Line::Check(mine, suggested, files) => {
+            Line::Check(mine, suggested, files, filter) => {
                 let from = grid.painted_so_far();
                 let (cells, x) = check_button(area, measure);
                 // Nothing is painted under the pane, so the button's corners need a ground.
@@ -2856,9 +2915,13 @@ pub fn draw(
                         BUTTON_TEXT,
                     );
                 }
-                let mut note = match suggested {
-                    0 => format!("{mine} of yours"),
-                    n => format!("{mine} of yours · {n} suggested"),
+                // With a kind's pill pressed, what's listed: that kind, and how many of all.
+                let mut note = match (filter, suggested) {
+                    (Some((kind, listed)), _) => {
+                        format!("{kind} · {listed} of {}", mine + suggested)
+                    }
+                    (None, 0) => format!("{mine} of yours"),
+                    (None, n) => format!("{mine} of yours · {n} suggested"),
                 };
                 match files {
                     0 => {}
@@ -2936,52 +2999,56 @@ pub fn draw(
                 grid.lift_since(from, CHECK_LIFT);
             }
             Line::Coverage(kinds) => {
-                // A pill for each kind: filled where there are comments of it, and only
-                // outlined and quiet where there are none, so the filled ones read first. The
-                // one whose comments alone are listed is the accent's, as a pick is.
-                for (kind, x, end) in pills(area, kinds, measure) {
+                // A pill for each kind, outlined: filled grey, those with comments read as
+                // switched on beside the empty ones. Its kind is in the words' colour where
+                // there are comments of it and quiet where there are none, so what isn't
+                // covered stands out, and its count is quiet in every one. The one whose
+                // comments alone are listed is the accent's, as a pick is, with a × that says
+                // a press lists them all again.
+                for (kind, x, end) in pills(area, kinds, view.kind, measure) {
                     let (x, end) = (x + view.lead, end + view.lead);
                     let count = kinds
                         .iter()
                         .find(|(k, _)| *k == kind)
                         .map_or(0, |(_, n)| *n);
-                    let text = format!("{kind} {count}");
-                    let width = end - x;
-                    let bounds = Bounds::cells(x, y as f32 + PILL.0, width, PILL.1);
-                    let missing = count == 0;
+                    let picked = view.kind == Some(kind);
+                    let bounds = Bounds::cells(x, y as f32 + PILL.0, end - x, PILL.1);
                     let on_it = hover.is_some_and(|h| {
                         let at = f32::from(h.0) + 0.5;
                         h.1 == y && at >= x && at < end
                     });
-                    if view.kind == Some(kind) {
-                        grid.panel(
-                            bounds,
-                            34,
-                            Some(mix(theme.accent, body.bg, 0.28)),
-                            Some(theme.accent),
-                        );
-                    } else if missing {
+                    if picked {
+                        let fill = mix(theme.accent, body.bg, 0.28);
+                        grid.panel(bounds, 34, Some(fill), Some(theme.accent));
+                    } else {
                         let fill = on_it.then(|| theme.quiet_button(body.bg));
                         grid.panel(bounds, 34, fill, Some(theme.popup_border));
-                    } else {
-                        let fill = theme.quiet_button(body.bg);
-                        let fill = if on_it {
-                            theme.quiet_button(fill)
-                        } else {
-                            fill
-                        };
-                        grid.panel(bounds, 34, Some(fill), None);
                     }
-                    let style = Style {
-                        fg: if missing {
-                            theme.gutter.fg
-                        } else {
-                            theme.text.fg
-                        },
+                    let quiet = Style {
+                        fg: theme.gutter.fg,
                         ..body
                     };
+                    let named = if count > 0 || picked || on_it {
+                        Style {
+                            fg: theme.text.fg,
+                            ..body
+                        }
+                    } else {
+                        quiet
+                    };
                     let at = x + PILL_ROOM;
-                    grid.label_at(at, at.floor() as u16, y, &text, style, right, SMALL);
+                    grid.label_at(at, at.floor() as u16, y, kind, named, right, SMALL);
+                    let number = count.to_string();
+                    let after = at + measure.width(&format!("{kind} "), small());
+                    let counted = if picked { named } else { quiet };
+                    let cell = at.floor() as u16 + kind.chars().count() as u16 + 1;
+                    grid.label_at(after, cell, y, &number, counted, right, SMALL);
+                    if picked {
+                        let cell = cell + number.chars().count() as u16 + 1;
+                        let ends = after + measure.width(&number, small());
+                        let clear = (Icon::Close, theme.text.fg);
+                        draw_clear(grid, (ends, cell, y), clear, named, measure);
+                    }
                 }
             }
             Line::Rewrite(_, row) => {

@@ -15,6 +15,9 @@ use tempfile::TempDir;
 use super::App;
 use crate::theme::Theme;
 
+/// The tour's terminal: columns of 17 px, rows of 50, words sized for a line of 36.
+const CELL: f32 = 17.0;
+
 fn airy(app: &mut App) {
     app.set_measure(Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
 }
@@ -157,6 +160,11 @@ fn show_comments(app: &mut App) {
     app.dock.show_comments();
 }
 
+/// Columns in units, as pixels.
+fn px(units: i32) -> f32 {
+    units as f32 * CELL / UNIT as f32
+}
+
 /// The comment cards painted in the side pane: panels with a ground, rounded as a card is,
 /// and more than two rows tall. With whether each one's edge is dashed.
 fn cards(app: &App, grid: &Grid) -> Vec<(Bounds, Rgb, Option<Rgb>, bool)> {
@@ -294,6 +302,79 @@ fn words_that_went_are_in_the_removed_colour() {
     }
 }
 
+/// Reject and Accept by a suggestion on a page are two buttons over it, edged and filled,
+/// with no shadow and nothing between them: their shadows met in the 16 px between them, a
+/// band of grey (#b0b0b0 on white), and stood out 12 px either side with a hard top edge.
+/// In both themes.
+#[test]
+fn reject_and_accept_by_a_suggestion_have_no_shadow_between_them() {
+    for light in [false, true] {
+        let (_dir, mut app) = page("# Notes\n\nKeep {++added++} and end.\n");
+        if light {
+            app.theme = Theme::named(Some("light"));
+        }
+        let (x, y) = on_page(&app, &screen(&app), "added");
+        click(&mut app, x + 2, y);
+        let grid = painted(&mut app);
+        let words_at = |name: &str| {
+            grid.paint.iter().find_map(|p| match p {
+                Paint::Text { x, y, text, .. } if text == name => Some((*x, *y)),
+                _ => None,
+            })
+        };
+        let reject = words_at("Reject").expect("Reject");
+        let accept = words_at("Accept").expect("Accept");
+        assert_eq!(reject.1, accept.1, "side by side");
+        // The panel each one's words stand on.
+        let under = |(x, y): (i32, i32)| {
+            grid.paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Panel {
+                        bounds,
+                        fill: Some(fill),
+                        border,
+                        shadow,
+                        ..
+                    } if bounds.x <= x
+                        && x < bounds.x + bounds.w
+                        && bounds.y <= y + UNIT / 2
+                        && y + UNIT / 2 < bounds.y + bounds.h
+                        && bounds.h < UNIT =>
+                    {
+                        Some((*bounds, *fill, *border, *shadow))
+                    }
+                    _ => None,
+                })
+                .expect("a chip under its words")
+        };
+        let (left, quiet, edge, left_shadow) = under(reject);
+        let (right, filled, _, right_shadow) = under(accept);
+        assert_eq!(filled, app.theme.button, "Accept is the filled one");
+        assert_eq!(quiet, app.theme.popup);
+        assert_eq!(edge, Some(app.theme.popup_border), "Reject is edged");
+        assert!(!left_shadow && !right_shadow, "no shadow under either");
+        // Nothing else painted on their row, between them or round them.
+        let (top, foot) = (left.y.min(right.y), left.y.max(right.y) + left.h);
+        let round = (left.x - UNIT, right.x + right.w + UNIT);
+        let others = grid.paint.iter().filter(|p| match p {
+            Paint::Panel { bounds, .. } => {
+                *bounds != left
+                    && *bounds != right
+                    && bounds.x < round.1
+                    && bounds.x + bounds.w > round.0
+                    && bounds.y < foot
+                    && bounds.y + bounds.h > top
+                    && bounds.h < 2 * UNIT
+            }
+            _ => false,
+        });
+        assert_eq!(others.count(), 0, "nothing between or round them");
+        let gap = px(right.x - (left.x + left.w));
+        assert!(gap >= 7.0, "{gap} px between them");
+    }
+}
+
 /// An agent answers a comment with `text`, as `cellix reply` sends it.
 fn answer(app: &mut App, id: u32, text: &str) {
     let (found, _) = std::sync::mpsc::channel();
@@ -380,4 +461,127 @@ fn the_card_over_the_page_says_a_verdict_as_the_pane_does() {
     let said = text.lines().find(|row| row.contains("Agrees"));
     let said = said.unwrap_or_else(|| panic!("no verdict:\n{text}"));
     assert!(said.find("Claude") > said.find("Agrees"), "{said}");
+}
+
+/// A kind's pill as painted: its kind, its kind's colour and its count's, the pill's fill and
+/// edge, and whether a × stands in it.
+type Pill = (&'static str, Rgb, Rgb, Option<Rgb>, Option<Rgb>, bool);
+
+/// The words of each kind's pill in the strip over the list, as painted.
+fn strip(grid: &Grid) -> Vec<Pill> {
+    crate::threads::KINDS
+        .iter()
+        .map(|kind| {
+            let (x, y, named) = grid
+                .paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Text {
+                        x, y, text, color, ..
+                    } if text == kind => Some((*x, *y, *color)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no pill for {kind}"));
+            // The count after it on its row, and the pill under both.
+            let counted = grid
+                .paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Text {
+                        x: at,
+                        y: row,
+                        text,
+                        color,
+                        ..
+                    } if *row == y && *at > x && text.parse::<usize>().is_ok() => Some(*color),
+                    _ => None,
+                })
+                .expect("its count");
+            let (bounds, fill, edge) = grid
+                .paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Panel {
+                        bounds,
+                        fill,
+                        border,
+                        ..
+                    } if bounds.x < x
+                        && x < bounds.x + bounds.w
+                        && bounds.y >= y
+                        && bounds.y < y + UNIT =>
+                    {
+                        Some((*bounds, *fill, *border))
+                    }
+                    _ => None,
+                })
+                .expect("its pill");
+            let cleared = grid.paint.iter().any(|p| {
+                matches!(p, Paint::Icon { bounds: b, icon: cellix_render::Icon::Close, .. }
+                    if b.x > x && b.x < bounds.x + bounds.w && b.y >= y && b.y < y + UNIT)
+            });
+            (*kind, named, counted, fill, edge, cleared)
+        })
+        .collect()
+}
+
+/// The kinds' pills are outlines: none is filled until it's picked, where those with comments
+/// were filled grey and read as switched on. A kind with comments says its name in the words'
+/// colour and one with none quietly, so what isn't covered still stands out; every count is
+/// quiet. A pressed one is the accent's with a × in it, and the head says what's listed,
+/// "Evidence · 1 of 3", where it said "3 of yours" over the one card. In both themes.
+#[test]
+fn the_kinds_pills_are_outlines_and_the_head_says_the_kind_listed() {
+    for light in [false, true] {
+        let (_dir, mut app) = page("The cache goes first.\n\nThe tests run last.\n\nShip it.\n");
+        if light {
+            app.theme = Theme::named(Some("light"));
+        }
+        comment(&mut app, "cache", "Why first?");
+        comment(&mut app, "tests", "Which ones?");
+        comment(&mut app, "Ship", "When?");
+        app.threads[0].kind = "Clarity".into();
+        app.threads[1].kind = "Evidence".into();
+        show_comments(&mut app);
+        let theme = app.theme;
+        let grid = painted(&mut app);
+        for (kind, named, counted, fill, edge, cleared) in strip(&grid) {
+            assert_eq!(fill, None, "{kind} isn't filled");
+            assert_eq!(edge, Some(theme.popup_border), "{kind} is outlined");
+            assert_eq!(counted, theme.gutter.fg, "{kind}'s count is quiet");
+            assert!(!cleared, "{kind} has no ×");
+            let covered = matches!(kind, "Clarity" | "Evidence");
+            let want = if covered {
+                theme.text.fg
+            } else {
+                theme.gutter.fg
+            };
+            assert_eq!(named, want, "{kind}");
+        }
+        assert!(grid.text().contains("3 of yours"), "{}", grid.text());
+
+        press(&mut app, "Evidence 1");
+        let grid = painted(&mut app);
+        let text = grid.text();
+        assert!(
+            text.contains("Evidence · 1 of 3"),
+            "the head says it: {text}"
+        );
+        assert!(!text.contains("3 of yours"), "{text}");
+        for (kind, _, _, fill, edge, cleared) in strip(&grid) {
+            let picked = kind == "Evidence";
+            assert_eq!(edge == Some(theme.accent), picked, "{kind}");
+            assert_eq!(fill.is_some(), picked, "{kind}");
+            assert_eq!(cleared, picked, "{kind}'s ×");
+        }
+        // On cells the × is a letter, and a press on the pill lists them all again.
+        let text = screen(&app).text();
+        assert!(text.contains("Evidence 1 \u{d7}"), "{text}");
+        press(&mut app, "Evidence 1");
+        let text = screen(&app).text();
+        assert!(
+            text.contains("3 of yours") && text.contains("Why first?"),
+            "{text}"
+        );
+    }
 }

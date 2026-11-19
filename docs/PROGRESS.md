@@ -3606,3 +3606,12 @@ The fixcards track, from the final review's C13.
 - The tour's two anchors on "Check my" now say "Check My" (`50-comment-glance-open`).
 - Tests changed with it: the tests that press a card's Ask Agent find it on the row of the card's buttons, since the hint over them names it too; `resting_on_commented_words_shows_their_comment_until_the_pointer_leaves` asks for "Agrees Claude:" and "1 more reply"; the rest look for the new words.
 - Tests: `a_cards_buttons_say_what_the_palette_calls_them`, `an_addressed_card_says_so_once`, `the_card_over_the_page_says_a_verdict_as_the_pane_does`.
+
+## Chips that read as what they are (2026-11-18)
+
+The fixcards track, from the final review of 0.11.0 (C3 and C6).
+
+- The kinds' pills over the Comments list: those with comments were filled grey and read as switched on, where only the picked one is a pick. Every other pill is an outline now, its kind in the words' colour where there are comments of it and quiet where there are none, so a kind not covered still stands out, and its count quiet. The picked one is the accent's with a × after its count, and the head says what's listed, "Evidence · 1 of 4", where it said "3 of yours · 1 suggested" over the one card shown (50-flow-kind). A press on the pill lists them all again, as before.
+- Reject and Accept over a suggestion on a page each had a floating panel's shadow. Side by side the shadows met in the 16 px between them, a band of grey (#b0b0b0 on white), and stood out about 12 px either side with a hard top edge (71-sample-changes-chips, -pointed, 82-paper-changes-chips). They're edged and filled with no shadow now; a selection's Comment and Ask Agent keep theirs, which is the selection track's to judge.
+- Test changed with it: `a_comment_kind_with_none_is_quiet_and_one_with_some_is_filled` asked for a kind with comments to be filled, the look the review found reading as switched on. It's `…_is_outlined` now, and asks for an outline with the kind in the words' colour; the ledger's `kind-pills-quiet` says so.
+- Tests: `the_kinds_pills_are_outlines_and_the_head_says_the_kind_listed`, `reject_and_accept_by_a_suggestion_have_no_shadow_between_them` (both themes).

@@ -5736,18 +5736,21 @@ impl App {
     /// A button as the ones by a selection, `lift` cells above its row and `height` of a
     /// row tall, centred on it.
     fn draw_chip_lifted(&self, grid: &mut Grid, chip: Rect, name: &str, lift: (f32, f32)) {
-        self.draw_chip_as(grid, chip, name, lift, false);
+        self.draw_chip_as(grid, chip, name, lift, (false, true));
     }
 
     /// Such a button, filled with the accent when it's `main`, the one a press is most
-    /// likely for, as Accept is in Review.
+    /// likely for, as Accept is in Review, and `floating` with a shadow under it, or not. Two
+    /// side by side, as Reject and Accept by a suggestion are, take none: their shadows met in
+    /// the 16 px between them, a band of grey (#b0b0b0 on white), and stood out 12 px either
+    /// side with a hard top edge. Edged and filled, they read as buttons over the page.
     fn draw_chip_as(
         &self,
         grid: &mut Grid,
         chip: Rect,
         name: &str,
         (lift, height): (f32, f32),
-        main: bool,
+        (main, floating): (bool, bool),
     ) {
         /// Its gap from the button beside it, in cells.
         const SIDE: f32 = 0.24;
@@ -5793,7 +5796,11 @@ impl App {
                 chip.w as f32 - SIDE * 2.0,
                 height,
             );
-            grid.popup(bounds, 20, fill, edge);
+            if floating {
+                grid.popup(bounds, 20, fill, edge);
+            } else {
+                grid.panel(bounds, 20, Some(fill), Some(edge));
+            }
             let font = Font::default();
             let width = self.measure.width(name, font);
             let x = chip.x as f32 + (chip.w as f32 - width) / 2.0;
@@ -5887,8 +5894,8 @@ impl App {
             self.draw_chip(grid, chip, "Comment");
         } else if let Some((_, reject, accept, (first, _))) = self.change_chips() {
             let lift = self.change_chip_lift(reject.y < first);
-            self.draw_chip_as(grid, reject, REJECT, lift, false);
-            self.draw_chip_as(grid, accept, ACCEPT, lift, true);
+            self.draw_chip_as(grid, reject, REJECT, lift, (false, false));
+            self.draw_chip_as(grid, accept, ACCEPT, lift, (true, false));
         }
     }
 
@@ -37602,9 +37609,11 @@ while True:
         );
     }
 
-    /// A kind with no comments is only outlined and quiet; one with comments is filled.
+    /// A kind with no comments is outlined and quiet; one with comments is outlined too, its
+    /// kind in the words' colour. Filled grey, one with comments read as switched on, which only
+    /// the kind listed alone is.
     #[test]
-    fn a_comment_kind_with_none_is_quiet_and_one_with_some_is_filled() {
+    fn a_comment_kind_with_none_is_quiet_and_one_with_some_is_outlined() {
         let dir = tempfile::tempdir().unwrap();
         let mut app = App::new(dir.path().to_path_buf(), (150, 40));
         let held = tempfile::tempdir().unwrap();
@@ -37619,14 +37628,25 @@ while True:
         for thread in &mut app.threads {
             thread.kind = "Correctness".into();
         }
-        let (fill, border) = panel_under(&app, "Clarity 0");
+        let outlined = (None, Some(app.theme.popup_border));
+        assert_eq!(panel_under(&app, "Clarity"), outlined, "quiet");
+        assert_eq!(panel_under(&app, "Correctness"), outlined, "not filled");
+        let colour = |words: &str| {
+            screen(&app)
+                .paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Text { text, color, .. } if text == words => Some(*color),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(colour("Clarity"), app.theme.gutter.fg, "none of it, quiet");
         assert_eq!(
-            (fill, border),
-            (None, Some(app.theme.popup_border)),
-            "quiet"
+            colour("Correctness"),
+            app.theme.text.fg,
+            "some, in the words' colour"
         );
-        let (fill, _) = panel_under(&app, "Correctness 1");
-        assert!(fill.is_some(), "filled");
     }
 
     /// Every button painted on screen, as (words, left, right, top) in columns and rows.
