@@ -48,6 +48,7 @@ use crate::editor::{self, Editor, Marks};
 use crate::explorer::Explorer;
 use crate::find::{Find, Looked};
 use crate::inbox::{Hit as InboxHit, Inbox, Kind as Waits, Listed, Target as WaitTarget, Waiting};
+use crate::install::{Machine, Plan};
 use crate::kernel::{self, Event as KernelEvent, Kernel};
 use crate::measures::{self, BUTTON_GAP};
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu, Outcome as MenuOutcome};
@@ -973,47 +974,30 @@ fn system_clipboard() -> Option<String> {
     })
 }
 
-/// Runs a language server's install command, and says how it went.
-fn install_server(index: usize) -> String {
+/// Runs a language server's install as this machine does it, and says how it went.
+fn install_server(index: usize, plan: Option<Plan>, machine: &Machine) -> String {
     let Some(server) = SERVERS.get(index) else {
         return String::new();
     };
-    install_with(server.install, server.command[0])
+    let program = server.command[0];
+    let shell = match plan.unwrap_or_else(|| crate::install::plan(server, machine)) {
+        Plan::Run { shell, .. } => shell,
+        Plan::Needs { says, .. } => return format!("Couldn't install {program}: {says}"),
+    };
+    match crate::install::run(&shell, program, machine) {
+        // Installed is where Cellix finds it, or its row would go on saying Install.
+        Ok(()) if machine.find(program).is_some() => format!("Installed {program}"),
+        Ok(()) => {
+            format!("Couldn't find {program} after installing it, on the PATH or in ~/.local/bin")
+        }
+        Err(why) => why,
+    }
 }
 
+/// Runs an install's command as this machine is, and says how it went.
 fn install_with(command: &str, tool: &str) -> String {
-    // Not a login shell, whose profile would swap the PATH Cellix was started with.
-    let mut shell = std::process::Command::new("sh");
-    shell
-        .args(["-c", command])
-        .stdin(std::process::Stdio::null());
-    // In a session of its own, with no terminal. An installer that asks on /dev/tty, as
-    // terminal-browser's `setup` does, would otherwise ask on Cellix's own screen, where
-    // Enter arrives as \r and never answers it, and the install would never end. With no
-    // terminal it takes its default answer, and sudo fails instead of waiting for a password.
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        // SAFETY: setsid is async-signal-safe, and this runs in the child before it execs.
-        unsafe {
-            shell.pre_exec(|| {
-                if libc::setsid() < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-    let done = shell.output();
-    match done {
-        Ok(done) if done.status.success() => format!("Installed {tool}"),
-        Ok(done) => {
-            let said = String::from_utf8_lossy(&done.stderr);
-            let first = said.lines().rfind(|l| !l.trim().is_empty());
-            format!("Couldn't: {}", first.unwrap_or("the install failed").trim())
-        }
-        Err(e) => format!("Couldn't: {e}"),
-    }
+    let done = crate::install::run(command, tool, &Machine::here());
+    done.map_or_else(|why| why, |()| format!("Installed {tool}"))
 }
 
 /// Runs text through a formatter on stdin, and returns what comes out.
@@ -1535,8 +1519,14 @@ pub struct App {
     not_now: Vec<String>,
     /// The language being installed from its offer, and how that went.
     offer_install: Option<(&'static str, std::sync::mpsc::Receiver<String>)>,
+    /// A language whose install from its offer failed, and why, which the card says.
+    offer_failed: Option<(&'static str, String)>,
+    /// What each offered server's Install does on this machine, by its place in `SERVERS`.
+    offer_plans: HashMap<usize, Plan>,
     /// Replaces a server's install command, so tests never touch the real package managers.
     server_install: Option<String>,
+    /// What this machine has to install servers with, and where they're found once they are.
+    machine: Machine,
     /// What opens a page when nothing else does.
     system_browser: Vec<String>,
     /// What saves the clipboard's picture to the file named last.
@@ -1833,7 +1823,10 @@ impl App {
             missing_servers: HashMap::new(),
             not_now: Vec::new(),
             offer_install: None,
+            offer_failed: None,
+            offer_plans: HashMap::new(),
             server_install: None,
+            machine: Machine::here(),
             comments: SharedComments::default(),
             wait_file: None,
             vim,
@@ -2095,6 +2088,14 @@ impl App {
                 .or_else(|| default_server(language));
             let root = self.workspace.root().to_path_buf();
             let custom = self.settings.language_servers.contains_key(language);
+            // Started from where it is, which an install may have put in a folder the PATH
+            // Cellix was started with lacks, as ~/.local/bin or ~/go/bin.
+            let command = command.map(|mut command| {
+                if let Some(found) = command.first().and_then(|p| self.machine.find(p)) {
+                    command[0] = found.to_string_lossy().into_owned();
+                }
+                command
+            });
             match command.map(|c| Client::start(&c, &root)) {
                 Some(Ok(client)) => {
                     self.servers.insert(language, client);
@@ -2129,6 +2130,51 @@ impl App {
         let server = SERVERS.iter().position(|s| s.languages.contains(&language));
         if let Some(server) = server.filter(|_| language != "Markdown") {
             self.missing_servers.insert(language, server);
+            // What its Install would do here, looked at once rather than as each frame draws.
+            self.offer_plans
+                .entry(server)
+                .or_insert_with(|| crate::install::plan(&SERVERS[server], &self.machine));
+        }
+    }
+
+    /// What the card's Install does for a server: the test's own command where one is set.
+    fn offer_plan(&self, server: usize) -> Plan {
+        if let Some(shell) = &self.server_install {
+            let says = format!("Runs {shell}");
+            let shell = shell.clone();
+            return Plan::Run { shell, says };
+        }
+        let known = self.offer_plans.get(&server).cloned();
+        known.unwrap_or_else(|| crate::install::plan(&SERVERS[server], &self.machine))
+    }
+
+    /// Why the card's language failed to install, if it did.
+    fn offer_failure(&self) -> Option<&str> {
+        let (language, _) = self.offer()?;
+        let failed = self.offer_failed.as_ref().filter(|(l, _)| *l == language);
+        failed.map(|(_, why)| why.as_str())
+    }
+
+    /// The command the card offers to copy where Install can't do it here: what's needed, or
+    /// the install that failed, to run in a terminal.
+    fn offer_copy(&self, server: usize) -> Option<String> {
+        match self.offer_plan(server) {
+            Plan::Needs { copy, .. } => copy,
+            Plan::Run { shell, .. } => self.offer_failure().map(|_| shell),
+        }
+    }
+
+    /// The card's buttons: Install, or Copy Command where Install could only fail or has.
+    fn offer_labels(&self) -> Vec<&'static str> {
+        let Some((_, server)) = self.offer().filter(|_| !self.offering_browser()) else {
+            return OFFER_BUTTONS.to_vec();
+        };
+        let cant =
+            self.offer_failure().is_some() || matches!(self.offer_plan(server), Plan::Needs { .. });
+        match (cant, self.offer_copy(server)) {
+            (false, _) => OFFER_BUTTONS.to_vec(),
+            (true, Some(_)) => vec!["Copy Command", OFFER_BUTTONS[1], OFFER_BUTTONS[2]],
+            (true, None) => OFFER_BUTTONS[1..].to_vec(),
         }
     }
 
@@ -2161,9 +2207,27 @@ impl App {
         }
         self.offer().map(|(language, server)| {
             let tool = SERVERS[server].command[0];
+            let detail = format!("{tool} adds completion, errors and rename.");
+            // An install that failed stays on the card, why and all, until it's answered:
+            // the bar's message went with the next key, while the card said to keep working.
+            let (title, detail) = match (self.offer_failure(), self.offer_plan(server)) {
+                (Some(why), _) => {
+                    // The card's title names what failed, so its words begin with why.
+                    let why = why.split_once(": ").map_or(why, |(_, why)| why);
+                    let why = crate::install::capitalized(why.trim_end_matches('.'));
+                    (
+                        format!("Couldn't install {language} support"),
+                        format!("{why}."),
+                    )
+                }
+                (None, Plan::Needs { says, .. }) => {
+                    (format!("{language} support"), format!("{detail} {says}."))
+                }
+                (None, Plan::Run { .. }) => (format!("Install {language} support?"), detail),
+            };
             (
-                format!("Install {language} support?"),
-                format!("{tool} adds completion, errors and rename."),
+                title,
+                detail,
                 format!("Installing {language} support…"),
                 format!("You can keep working while {tool} installs."),
                 self.offer_install.is_some(),
@@ -2199,8 +2263,9 @@ impl App {
     /// The offer's buttons, as (label, cells, start column).
     fn offer_buttons(&self) -> Vec<(&'static str, String, u16)> {
         let area = self.offer_area();
-        let placed = self.card_buttons(area.x + 2, &OFFER_BUTTONS);
-        OFFER_BUTTONS
+        let labels = self.offer_labels();
+        let placed = self.card_buttons(area.x + 2, &labels);
+        labels
             .iter()
             .zip(placed)
             .map(|(label, (cells, at))| (*label, cells, at))
@@ -2235,15 +2300,27 @@ impl App {
         match hit.map(|(label, _, _)| label) {
             Some("Install") => {
                 let (done, result) = crate::wake::channel();
-                let command = self.server_install.clone();
+                let plan = self.offer_plan(server);
+                let machine = self.machine.clone();
                 std::thread::spawn(move || {
-                    let install = command.as_deref().unwrap_or(SERVERS[server].install);
-                    let _ = done.send(install_with(install, SERVERS[server].command[0]));
+                    let _ = done.send(install_server(server, Some(plan), &machine));
                 });
                 self.offer_install = Some((language, result));
             }
-            Some("Not Now") => self.not_now.push(language.to_string()),
+            Some("Copy Command") => {
+                if let Some(command) = self.offer_copy(server) {
+                    let note = format!("Copied: {command}");
+                    self.copy_text(command, &note);
+                }
+                self.offer_failed = None;
+                self.not_now.push(language.to_string());
+            }
+            Some("Not Now") => {
+                self.offer_failed = None;
+                self.not_now.push(language.to_string());
+            }
             Some("Never") => {
+                self.offer_failed = None;
                 self.settings.declined_languages.push(language.to_string());
                 let declined = serde_json::json!(self.settings.declined_languages);
                 let _ = Settings::store("declined_languages", declined);
@@ -2315,12 +2392,15 @@ impl App {
         };
         self.offer_install = None;
         let installed = note.starts_with("Installed");
-        self.say(note);
-        // Whatever happened, it's been asked and answered.
-        self.not_now.push(language.to_string());
+        self.say(note.clone());
         if installed {
+            // It's been asked and answered.
+            self.not_now.push(language.to_string());
             self.missing_servers.remove(language);
             self.attach_open_files();
+        } else {
+            // The card stays, saying why, until it's answered.
+            self.offer_failed = Some((language, note));
         }
         true
     }
@@ -2376,13 +2456,16 @@ impl App {
         }
         let lift = self.card_lift(measures::DialogLast::Words, self.card_lead(area));
         grid.lift_since(words, lift);
-        let placed: Vec<(String, u16)> = self
-            .offer_buttons()
+        let buttons = self.offer_buttons();
+        let labels: Vec<&str> = buttons.iter().map(|(label, ..)| *label).collect();
+        let placed: Vec<(String, u16)> = buttons
             .into_iter()
             .map(|(_, cells, x)| (cells, x))
             .collect();
         let y = self.offer_button_row();
-        self.draw_card_buttons(grid, y, &placed, (&OFFER_BUTTONS, true));
+        // The first is the answer, unless all there is to do is put it off.
+        let answer = labels.first() != Some(&OFFER_BUTTONS[1]);
+        self.draw_card_buttons(grid, y, &placed, (&labels, answer));
     }
 
     /// Sends edits to servers and handles their replies. Returns true if anything changed.
@@ -8707,7 +8790,8 @@ impl App {
             Command::MaximizeEditor => self.toggle_maximized(Maximized::Editor),
             Command::OpenSettings => {
                 let closing = self.settings_page.is_some();
-                self.settings_page = (!closing).then(|| SettingsPage::new(Found::look()));
+                self.settings_page =
+                    (!closing).then(|| SettingsPage::new(Found::look(&self.machine)));
                 self.refresh_shortcuts();
                 if !closing {
                     self.review = None;
@@ -16208,6 +16292,18 @@ impl App {
                 self.copy_text(command.to_string(), "");
                 note = format!("Copied: {command}");
             }
+            Control::CopyServer(index) => {
+                let page = self.settings_page.as_ref();
+                let plan = page.and_then(|p| p.found.plan(index));
+                if let Some(Plan::Needs {
+                    copy: Some(command),
+                    ..
+                }) = plan.cloned()
+                {
+                    note = format!("Copied: {command}");
+                    self.copy_text(command, &note);
+                }
+            }
             Control::Codex
             | Control::Gemini
             | Control::InstallServer(_)
@@ -16224,7 +16320,7 @@ impl App {
         }
         if let Some(page) = &mut self.settings_page {
             if matches!(control, Control::ClaudeCode | Control::Ghostty) {
-                page.found = Found::look();
+                page.found = Found::look(&self.machine);
             }
             page.note = note;
         }
@@ -16241,6 +16337,15 @@ impl App {
             return;
         }
         let found = (page.found.codex_installed, page.found.gemini_installed);
+        // What a server's Install runs here, as its row said while it was pointed at.
+        let plan = match control {
+            Control::InstallServer(index) => {
+                page.failed = None;
+                page.found.plan(index).cloned()
+            }
+            _ => None,
+        };
+        let machine = self.machine.clone();
         let (sender, receiver) = crate::wake::channel();
         page.note = "Working…".to_string();
         page.installing = Some(receiver);
@@ -16267,7 +16372,7 @@ impl App {
                     crate::integrations::install_gemini(var),
                     "Installed. Restart Gemini CLI to load it.",
                 ),
-                Control::InstallServer(index) => install_server(index),
+                Control::InstallServer(index) => install_server(index, plan, &machine),
                 Control::InstallBrowser => install_with(BROWSER_INSTALL, BROWSER_TOOL),
                 _ => String::new(),
             };
@@ -16285,9 +16390,15 @@ impl App {
             return false;
         };
         page.installing = None;
-        page.installing_what = None;
+        // A server that didn't install says why on its own row, where it was asked for: the
+        // bar's message goes with the next click.
+        if let Some(Control::InstallServer(index)) = page.installing_what.take()
+            && !note.starts_with("Installed")
+        {
+            page.failed = Some((index, note.clone()));
+        }
         page.note.clone_from(&note);
-        page.found = Found::look();
+        page.found = Found::look(&self.machine);
         self.say(note);
         self.attach_open_files();
         true
@@ -23867,7 +23978,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
         let mut app = App::new(dir.path().to_path_buf(), (120, 30));
-        app.server_install = Some("exit 0".to_string());
+        // A machine of its own, whose install puts a jdtls where installs do: Installed is
+        // said once it's found there, whatever this machine has.
+        app.machine = Machine {
+            os: std::env::consts::OS,
+            arch: std::env::consts::ARCH,
+            home: Some(dir.path().join("home")),
+            path: "/usr/bin:/bin".into(),
+            ..Machine::default()
+        };
+        let program = "\"$HOME/.local/bin/jdtls\"";
+        app.server_install = Some(format!(
+            "mkdir -p \"$HOME/.local/bin\" && printf '#!/bin/sh\\n' > {program} && chmod +x {program}"
+        ));
         app.open(&dir.path().join("Main.java")).unwrap();
         // Whether jdtls is really here doesn't change what happens without it.
         app.servers.clear();
@@ -23910,6 +24033,316 @@ mod tests {
         app.handle(mouse(MouseKind::Left, x, y));
         assert_eq!(app.settings.declined_languages, ["Java"]);
         assert!(app.offer().is_none());
+    }
+
+    /// A Linux machine made of stand-ins: a folder of programs, each a script that records
+    /// what it was asked into `asked.log` before doing its part, with the few the install's
+    /// shell takes from the system linked beside them, and a home of its own. Nothing real
+    /// installs or fetches.
+    #[cfg(unix)]
+    fn stand_in_linux(programs: &[(&str, &str)]) -> (TempDir, Machine) {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (bin, home) = (dir.path().join("bin"), dir.path().join("home"));
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&home).unwrap();
+        let log = dir.path().join("asked.log");
+        for (name, body) in programs {
+            let script = format!(
+                "#!/bin/sh\necho \"{name} $*\" >> '{}'\n{body}\n",
+                log.display()
+            );
+            fs::write(bin.join(name), script).unwrap();
+            fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        for tool in ["mkdir", "mktemp", "chmod", "mv", "rm"] {
+            let real = ["/bin", "/usr/bin"]
+                .iter()
+                .map(|dir| Path::new(dir).join(tool))
+                .find(|path| path.is_file())
+                .unwrap_or_else(|| panic!("no {tool} on this system"));
+            std::os::unix::fs::symlink(real, bin.join(tool)).unwrap();
+        }
+        let machine = Machine {
+            os: "linux",
+            arch: "x86_64",
+            home: Some(home),
+            path: bin.into_os_string(),
+            ..Machine::default()
+        };
+        (dir, machine)
+    }
+
+    /// Where a program resolves for an install's shell: `sh -c`, with the PATH it's given, as
+    /// the install runs it.
+    #[cfg(unix)]
+    fn resolves(machine: &Machine, program: &str) -> String {
+        let out = std::process::Command::new("/bin/sh")
+            .args(["-c", &format!("command -v {program} || true")])
+            .env("PATH", machine.search_path())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A row of Settings' Editor page, by the words it starts with, from the page's left.
+    fn settings_row(app: &App, starts: &str) -> String {
+        let grid = screen(app);
+        let area = app.sheet_area();
+        let page = |y: u16| -> String {
+            let row = grid.row_text(y);
+            row.chars().skip(usize::from(area.x) + 22).collect()
+        };
+        (area.y..area.bottom())
+            .map(page)
+            .find(|row| row.trim_start().starts_with(starts))
+            .unwrap_or_else(|| panic!("no {starts} row:\n{}", grid.text()))
+    }
+
+    fn server_index(language: &str) -> usize {
+        SERVERS
+            .iter()
+            .position(|s| s.languages.contains(&language))
+            .unwrap()
+    }
+
+    /// Where a control of Settings is on screen.
+    fn settings_spot(app: &App, control: Control) -> Option<Rect> {
+        let page = app.settings_page.as_ref()?;
+        let spots = page.controls(app.sheet_area());
+        spots
+            .into_iter()
+            .find(|(_, c)| *c == control)
+            .map(|(r, _)| r)
+    }
+
+    fn wait_for_install(app: &mut App) {
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while !app.poll_install() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the install never ended"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// On Amazon Linux there's no Homebrew, and npm's global folder is the system's, so every
+    /// Install in Settings failed: `brew install marksman` wasn't found, and `npm install -g`
+    /// couldn't write without the sudo an install with no terminal can't ask for. Without
+    /// Homebrew, Markdown's server is fetched as its project builds it for this machine, into
+    /// ~/.local/bin, and npm installs into ~/.local. Cellix finds what's there and starts it
+    /// from there, though the PATH it was started with lacks that folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_installs_without_root_on_linux_and_starts_from_local_bin() {
+        let started = tempfile::tempdir().unwrap();
+        let started = started.path().join("started.log");
+        // curl leaves, where -o says, a marksman that says where it was started from.
+        let curl = format!(
+            "while [ $# -gt 0 ]; do [ \"$1\" = -o ] && out=$2; shift; done\n\
+             printf '#!/bin/sh\\necho \"$0\" > \"{}\"\\n' > \"$out\"",
+            started.display()
+        );
+        // npm puts pyright's program in the bin of the prefix it's given, and fails without one.
+        let npm = "while [ $# -gt 0 ]; do [ \"$1\" = --prefix ] && prefix=$2; shift; done\n\
+             [ -n \"$prefix\" ] || exit 3\nmkdir -p \"$prefix/bin\"\n\
+             printf '#!/bin/sh\\n' > \"$prefix/bin/pyright-langserver\"\n\
+             chmod +x \"$prefix/bin/pyright-langserver\"";
+        let (dir, mut machine) = stand_in_linux(&[("curl", &curl), ("npm", npm)]);
+        // npm's own folder is the system's, as with Amazon Linux's nodejs.
+        machine.npm_writable = Some(false);
+        let home = machine.home.clone().unwrap();
+        // The stand-ins are what an install's shell runs, and there's no Homebrew.
+        let bin = dir.path().join("bin");
+        assert_eq!(
+            resolves(&machine, "curl"),
+            bin.join("curl").display().to_string()
+        );
+        assert_eq!(
+            resolves(&machine, "npm"),
+            bin.join("npm").display().to_string()
+        );
+        assert_eq!(resolves(&machine, "brew"), "", "no Homebrew");
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("notes.md"), "# Notes\n").unwrap();
+        let mut app = App::new(project.clone(), (140, 70));
+        app.machine = machine;
+        app.open(&project.join("notes.md")).unwrap();
+        assert!(!app.servers.contains_key("Markdown"), "no marksman yet");
+        app.run(Command::OpenSettings);
+        app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Editor;
+        assert!(settings_row(&app, "Markdown").contains("Install"));
+
+        // Pointed at, Install says what it runs on this machine.
+        let markdown = server_index("Markdown");
+        let install = settings_spot(&app, Control::InstallServer(markdown)).expect("Install");
+        app.handle(mouse(MouseKind::Move, install.x + 1, install.y));
+        let row = settings_row(&app, "Markdown");
+        assert!(
+            row.contains("Fetches marksman-linux-x64 from GitHub into ~/.local/bin"),
+            "{row}"
+        );
+        app.handle(mouse(MouseKind::Left, install.x + 1, install.y));
+        assert!(settings_row(&app, "Markdown").contains("Installing"));
+        wait_for_install(&mut app);
+        let asked = fs::read_to_string(dir.path().join("asked.log")).unwrap();
+        assert!(
+            asked.contains(
+                "curl -fsSL -o /"
+            ) && asked.contains(
+                "https://github.com/artempyanykh/marksman/releases/latest/download/marksman-linux-x64"
+            ),
+            "{asked}"
+        );
+        assert!(home.join(".local/bin/marksman").is_file());
+        // Found, and started for the open page from where it was put.
+        let row = settings_row(&app, "Markdown");
+        assert!(row.contains("Found"), "{row}");
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while !started.exists() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "marksman never started"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let from = fs::read_to_string(&started).unwrap();
+        assert_eq!(
+            from.trim(),
+            home.join(".local/bin/marksman").display().to_string()
+        );
+
+        // npm, where its folder isn't the person's to write, installs into theirs.
+        let python = server_index("Python");
+        let install = settings_spot(&app, Control::InstallServer(python)).expect("Install");
+        app.handle(mouse(MouseKind::Move, install.x + 1, install.y));
+        let row = settings_row(&app, "Python");
+        assert!(
+            row.contains("Runs npm install -g --prefix ~/.local pyright"),
+            "{row}"
+        );
+        app.handle(mouse(MouseKind::Left, install.x + 1, install.y));
+        wait_for_install(&mut app);
+        let asked = fs::read_to_string(dir.path().join("asked.log")).unwrap();
+        let npm = format!("npm install -g --prefix {}/.local pyright", home.display());
+        assert!(asked.contains(&npm), "{asked}");
+        assert!(settings_row(&app, "Python").contains("Found"));
+    }
+
+    /// What this machine can't install by itself says what it needs and offers the command
+    /// to copy, with no Install that can only fail; and an install that fails says why on its
+    /// own row, where it stays after the bar's message has gone.
+    #[cfg(unix)]
+    #[test]
+    fn what_cant_install_here_says_why_and_offers_its_command() {
+        // A dnf that's never run, and a curl that finds nothing at the address.
+        let curl = "echo 'curl: (22) The requested URL returned error: 404' >&2\nexit 22";
+        let (dir, machine) = stand_in_linux(&[("dnf", "exit 1"), ("curl", curl)]);
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        // Wide enough for the page's widest, where what a row needs has its whole width.
+        let mut app = App::new(project, (170, 70));
+        app.machine = machine;
+        app.run(Command::OpenSettings);
+        app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Editor;
+        // clangd comes from the system's packages, which need sudo.
+        let clangd = server_index("C");
+        assert!(settings_spot(&app, Control::InstallServer(clangd)).is_none());
+        let copy = settings_spot(&app, Control::CopyServer(clangd)).expect("Copy Command");
+        assert!(settings_row(&app, "C ").contains("Copy Command"));
+        app.handle(mouse(MouseKind::Move, copy.x + 1, copy.y));
+        let row = settings_row(&app, "C ");
+        assert!(
+            row.contains("Needs Homebrew, or sudo dnf install clang-tools-extra"),
+            "{row}"
+        );
+        app.handle(mouse(MouseKind::Left, copy.x + 1, copy.y));
+        assert_eq!(app.clipboard, "sudo dnf install clang-tools-extra");
+        assert!(screen(&app).text().contains("Copied: sudo dnf install"));
+        // jdtls has only Homebrew.
+        let java = server_index("Java");
+        let copy = settings_spot(&app, Control::CopyServer(java)).expect("Copy Command");
+        app.handle(mouse(MouseKind::Left, copy.x + 1, copy.y));
+        assert_eq!(app.clipboard, "brew install jdtls");
+
+        // A download that isn't there says so on its row, in the error's colour.
+        let markdown = server_index("Markdown");
+        let install = settings_spot(&app, Control::InstallServer(markdown)).expect("Install");
+        app.handle(mouse(MouseKind::Left, install.x + 1, install.y));
+        wait_for_install(&mut app);
+        let why = "Couldn't install marksman: the download isn't there";
+        assert!(screen(&app).text().contains(why), "said on the bar");
+        // A click elsewhere takes the bar's message, and the row keeps it.
+        let (x, y) = find(&screen(&app), "LANGUAGE SERVERS");
+        app.handle(mouse(MouseKind::Move, x, y));
+        app.handle(mouse(MouseKind::Left, x, y));
+        let grid = screen(&app);
+        let y = (0..grid.height())
+            .find(|y| grid.row_text(*y).contains("Couldn't install marksman"))
+            .unwrap_or_else(|| panic!("not on its row:\n{}", grid.text()));
+        let row = grid.row_text(y);
+        assert!(row.contains("Markdown") && row.contains(why), "{row}");
+        let at = row.find("Couldn't").unwrap();
+        let x = row[..at].chars().count() as u16;
+        assert_eq!(grid.cell(x, y).style.fg, app.theme.error);
+        assert_eq!(
+            grid.text().matches(why).count(),
+            1,
+            "on its row alone, the bar's gone"
+        );
+        // Nothing ran a package manager, so nothing asked for sudo.
+        let asked = fs::read_to_string(dir.path().join("asked.log")).unwrap();
+        assert!(!asked.contains("dnf"), "{asked}");
+    }
+
+    /// The card that offers a language's server, where this machine can't install it: what it
+    /// needs and Copy Command, not an Install that can only fail. And an install from the card
+    /// that fails keeps the card up, saying why, where the bar's message went with the next key.
+    #[cfg(unix)]
+    #[test]
+    fn the_offer_says_what_its_language_needs_where_it_cant_install() {
+        let npm = "echo 'npm ERR! code EACCES' >&2\nexit 243";
+        let (dir, mut machine) = stand_in_linux(&[("npm", npm)]);
+        machine.npm_writable = Some(true);
+        fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
+        fs::write(dir.path().join("main.py"), "x = 1\n").unwrap();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 30));
+        app.machine = machine;
+        app.open(&dir.path().join("Main.java")).unwrap();
+        app.servers.clear();
+        app.note_missing("Java");
+        let text = screen(&app).text();
+        assert!(text.contains("Java support"), "{text}");
+        assert!(!text.contains("Install Java support?"), "{text}");
+        assert!(text.contains("Needs Homebrew"), "{text}");
+        assert!(!text.contains("[Install]"), "{text}");
+        let (x, y) = find(&screen(&app), "Copy Command");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert_eq!(app.clipboard, "brew install jdtls");
+        assert!(!screen(&app).text().contains("Java support"), "answered");
+
+        app.open(&dir.path().join("main.py")).unwrap();
+        app.servers.clear();
+        app.note_missing("Python");
+        assert!(screen(&app).text().contains("Install Python support?"));
+        let at = app.offer_buttons()[0].2;
+        app.handle(mouse(MouseKind::Left, at + 1, app.offer_button_row()));
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while !app.poll_offer() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // A key takes the bar's message; the card keeps saying why.
+        app.handle(Event::Key(KeyEvent::plain(Key::Right)));
+        let text = screen(&app).text();
+        assert!(text.contains("Couldn't install Python support"), "{text}");
+        assert!(text.contains("It isn't allowed to write"), "{text}");
+        let (x, y) = find(&screen(&app), "Copy Command");
+        app.handle(mouse(MouseKind::Left, x + 1, y));
+        assert_eq!(app.clipboard, "npm install -g pyright");
+        assert!(!screen(&app).text().contains("Python support"), "answered");
     }
 
     /// The raised panel under the words `title`, as (left, top, right, bottom) in columns
@@ -24032,6 +24465,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("main.ts"), "const a = 1;\n").unwrap();
         let mut app = App::new(dir.path().to_path_buf(), (120, 30));
+        // Whether npm is on this machine doesn't change how the card asks.
+        app.server_install = Some("exit 0".to_string());
         app.open(&dir.path().join("main.ts")).unwrap();
         app.servers.clear();
         app.note_missing("TypeScript");

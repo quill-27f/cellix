@@ -2,6 +2,7 @@ use std::sync::mpsc::Receiver;
 
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Rgb, Style};
 
+use crate::install::{Machine, Plan};
 use crate::integrations;
 use crate::keys::{self, Shortcut};
 use crate::settings::{SERVERS, Server};
@@ -127,6 +128,8 @@ const SERVERS_ROW: u16 = 13;
 const THUMB: f32 = 1.2;
 const THUMB_WIDE: f32 = 0.25;
 const INSTALL_WIDTH: u16 = 9;
+/// Where a server's Install would only fail: Copy Command, with a column either side.
+const COPY_WIDTH: u16 = 14;
 /// Columns from an integration's name to its state.
 const STATUS_GAP: f32 = 1.1;
 
@@ -168,6 +171,8 @@ pub enum Control {
     Ghostty,
     /// A language server to install, as an index into `SERVERS`.
     InstallServer(usize),
+    /// The command that would install a server this machine can't install by itself, to copy.
+    CopyServer(usize),
     /// terminal-browser, which runs a browser in the side pane.
     InstallBrowser,
     /// A command to put on the clipboard.
@@ -371,10 +376,12 @@ pub struct Found {
     pub ghostty_keeps_cmd_d: Option<bool>,
     /// For each of `SERVERS`, whether it's installed.
     pub servers: Vec<bool>,
+    /// For each of `SERVERS`, what installing it does on this machine.
+    pub plans: Vec<Plan>,
 }
 
 impl Found {
-    pub fn look() -> Self {
+    pub fn look(machine: &Machine) -> Self {
         let var = |name: &str| std::env::var(name).ok();
         Self {
             claude: integrations::on_path("claude", var),
@@ -385,11 +392,34 @@ impl Found {
             gemini_installed: integrations::gemini_installed(var),
             browser: integrations::on_path("terminal-browser", var),
             ghostty_keeps_cmd_d: integrations::ghostty_keeps_cmd_d(var),
+            // Where installs put them too, which the PATH may lack.
             servers: SERVERS
                 .iter()
-                .map(|s| integrations::on_path(s.command[0], var))
+                .map(|s| machine.find(s.command[0]).is_some())
+                .collect(),
+            plans: SERVERS
+                .iter()
+                .map(|s| crate::install::plan(s, machine))
                 .collect(),
         }
+    }
+
+    /// What installing a server does on this machine.
+    pub fn plan(&self, index: usize) -> Option<&Plan> {
+        self.plans.get(index)
+    }
+
+    /// The button a missing server has, and its width: Install, or Copy Command where Install
+    /// could only fail. One that nothing here installs and no command helps has none.
+    fn server_control(&self, index: usize) -> Option<(Control, u16)> {
+        if self.servers.get(index).copied().unwrap_or(false) {
+            return None;
+        }
+        Some(match self.plan(index) {
+            Some(Plan::Needs { copy: Some(_), .. }) => (Control::CopyServer(index), COPY_WIDTH),
+            Some(Plan::Needs { copy: None, .. }) => return None,
+            _ => (Control::InstallServer(index), INSTALL_WIDTH),
+        })
     }
 }
 
@@ -424,6 +454,8 @@ pub struct SettingsPage {
     pub installing: Option<Receiver<String>>,
     /// What that install is of, whose button turns while it runs.
     pub installing_what: Option<Control>,
+    /// A server whose install failed, and why, which its row says until it's tried again.
+    pub failed: Option<(usize, String)>,
     /// Every command and its keys, as the Keyboard section lists them.
     pub shortcuts: Vec<Shortcut>,
     /// What's typed in the filter, which narrows the rows of every page to those that fit.
@@ -446,6 +478,7 @@ impl SettingsPage {
             top: 0,
             installing: None,
             installing_what: None,
+            failed: None,
             shortcuts: Vec::new(),
             filter: String::new(),
             found_top: 0,
@@ -859,11 +892,10 @@ impl SettingsPage {
                 let reading = Rect::new(page.x, page.y + READING_ROW, page.w, 2);
                 spots.push((reading, Control::ReadingWidth));
                 for (row, index) in self.server_rows(page).into_iter().enumerate() {
-                    if !self.found.servers.get(index).copied().unwrap_or(false) {
-                        let x = page.right().saturating_sub(INSTALL_WIDTH);
+                    if let Some((control, width)) = self.found.server_control(index) {
+                        let x = page.right().saturating_sub(width);
                         let y = page.y + SERVERS_ROW + row as u16;
-                        let rect = Rect::new(x, y, INSTALL_WIDTH, 1);
-                        spots.push((rect, Control::InstallServer(index)));
+                        spots.push((Rect::new(x, y, width, 1), control));
                     }
                 }
             }
@@ -928,10 +960,9 @@ impl SettingsPage {
                     segments(y, SEGMENT_WIDTH, spots, of);
                 }
                 Row::Server(index) => {
-                    if !self.found.servers.get(index).copied().unwrap_or(false) {
-                        let x = page.right().saturating_sub(INSTALL_WIDTH);
-                        let rect = Rect::new(x, y, INSTALL_WIDTH, 1);
-                        spots.push((rect, Control::InstallServer(index)));
+                    if let Some((control, width)) = self.found.server_control(index) {
+                        let x = page.right().saturating_sub(width);
+                        spots.push((Rect::new(x, y, width, 1), control));
                     }
                 }
                 Row::Block(index) => {
@@ -1745,14 +1776,27 @@ impl SettingsPage {
         };
         grid.label(page.x, y, server.languages[0], theme.text, page.x + detail);
         let found = self.found.servers.get(index).copied().unwrap_or(false);
-        // Hovering a missing server shows what its button will run.
-        let end = page.right().saturating_sub(INSTALL_WIDTH + 1);
-        if hovered && !found {
-            let runs = format!("Runs {}", server.install);
-            grid.label(page.x + detail, y, &runs, theme.text, end);
-        } else {
-            grid.label(page.x + detail, y, server.command[0], quiet, end);
-        }
+        let control = self.found.server_control(index);
+        let end = page
+            .right()
+            .saturating_sub(control.map_or(INSTALL_WIDTH, |(_, wide)| wide) + 1);
+        // What installing it does here: the command its button runs, or what it needs.
+        let plan = self.found.plan(index).map(Plan::says).filter(|_| !found);
+        let failed = self.failed.as_ref().filter(|(at, _)| *at == index);
+        let error = Style {
+            fg: theme.error,
+            ..theme.text
+        };
+        let (words, style) = match (plan, failed) {
+            // Hovering a missing server says what its button will do.
+            (Some(says), _) if hovered => (says, theme.text),
+            // A failure stays on its row, where it was asked for, until it's tried again.
+            (_, Some((_, why))) => (why.as_str(), error),
+            // With nothing to press, what it needs is all there is to say.
+            (Some(says), _) if control.is_none() => (says, quiet),
+            _ => (server.command[0], quiet),
+        };
+        grid.label(page.x + detail, y, words, style, end);
         if found {
             let state = Style {
                 fg: theme.git_added,
@@ -1779,28 +1823,37 @@ impl SettingsPage {
             grid.label_right(page.right(), y, "Installing", quiet, NOTE_SIZE);
             return;
         }
-        let spot = spots
-            .iter()
-            .find(|(_, c)| *c == Control::InstallServer(index));
+        let Some((control, _)) = control else {
+            return;
+        };
+        let spot = spots.iter().find(|(_, c)| *c == control);
         if let Some((rect, _)) = spot {
+            // Install, or where it could only fail, the command to copy, a quiet button.
+            let (label, main) = match control {
+                Control::CopyServer(_) => ("Copy Command", false),
+                _ => ("Install", true),
+            };
             // Words in the accent until its row is pointed at: twenty chips in a column
             // stood a few pixels apart, a wall beside the list.
-            let (x, wide) = button_place(*rect, "Install", measure);
-            let cells = format!("{:^width$}", "Install", width = wide as usize);
+            let (x, wide) = button_place(*rect, label, measure);
+            let cells = format!("{:^width$}", label, width = wide as usize);
             if hovered {
-                let style = Style {
-                    fg: theme.button_text,
-                    ..theme.text
+                let (fill, fg) = if main {
+                    (theme.button, theme.button_text)
+                } else {
+                    let on_it = hover.is_some_and(|h| rect.contains(h.0, h.1));
+                    (theme.secondary(theme.page_hover, on_it), theme.text.fg)
                 };
+                let style = Style { fg, ..theme.text };
                 // On the row's wash, and inside it where a row has room.
-                grid.row_button((x, rect.y), &cells, "Install", theme.button, style);
+                grid.row_button((x, rect.y), &cells, label, fill, style);
             } else {
                 // Its word where Found stands on the rows beside it.
                 let word = Style {
                     fg: theme.accent,
                     ..theme.text
                 };
-                grid.label_right(page.right(), y, "Install", word, NOTE_SIZE);
+                grid.label_right(page.right(), y, label, word, NOTE_SIZE);
             }
         }
     }

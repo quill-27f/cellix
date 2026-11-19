@@ -4,6 +4,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::install::{Release, Way};
+
 /// Read from `~/.config/cellix/settings.json`, then `.cellix/settings.json` in the
 /// workspace, with later files replacing whole keys.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
@@ -159,125 +161,187 @@ impl Settings {
     }
 }
 
-/// A language server: the languages it covers, how it starts, and how to install it.
+/// A language server: the languages it covers, how it starts, and the ways to install it,
+/// in the order they're tried (see `install`).
 pub struct Server {
     pub languages: &'static [&'static str],
     pub command: &'static [&'static str],
-    pub install: &'static str,
+    pub ways: &'static [Way],
 }
 
 const fn server(
     languages: &'static [&'static str],
     command: &'static [&'static str],
-    install: &'static str,
+    ways: &'static [Way],
 ) -> Server {
     Server {
         languages,
         command,
-        install,
+        ways,
     }
 }
+
+/// clangd as each Linux's packages name it.
+const CLANGD: &[(&str, &str)] = &[
+    ("dnf", "clang-tools-extra"),
+    ("apt", "clangd"),
+    ("pacman", "clang"),
+    ("zypper", "clang-tools"),
+    ("apk", "clang-extra-tools"),
+];
 
 /// The popular servers. A language without one still has colour and word completion.
 pub const SERVERS: [Server; 27] = [
     server(
         &["Rust"],
         &["rust-analyzer"],
-        "rustup component add rust-analyzer",
+        &[
+            Way::Tool("rustup component add rust-analyzer", "rustup"),
+            Way::Brew("rust-analyzer"),
+            Way::Release(Release::RustAnalyzer),
+        ],
     ),
     server(
         &["Python"],
         &["pyright-langserver", "--stdio"],
-        "npm install -g pyright",
+        &[Way::Npm("pyright"), Way::Brew("pyright")],
     ),
     server(
         &["TypeScript", "TSX", "JavaScript"],
         &["typescript-language-server", "--stdio"],
-        "npm install -g typescript typescript-language-server",
+        &[
+            Way::Npm("typescript typescript-language-server"),
+            Way::Brew("typescript-language-server"),
+        ],
     ),
     server(
         &["Go"],
         &["gopls"],
-        "go install golang.org/x/tools/gopls@latest",
+        &[
+            Way::Tool("go install golang.org/x/tools/gopls@latest", "Go"),
+            Way::Brew("gopls"),
+        ],
     ),
-    server(&["Java"], &["jdtls"], "brew install jdtls"),
+    server(&["Java"], &["jdtls"], &[Way::Brew("jdtls")]),
     server(
         &["C#"],
         &["csharp-ls"],
-        "dotnet tool install --global csharp-ls",
+        &[Way::Tool(
+            "dotnet tool install --global csharp-ls",
+            "the .NET SDK",
+        )],
     ),
-    server(&["C", "C++"], &["clangd"], "brew install llvm"),
+    server(
+        &["C", "C++"],
+        &["clangd"],
+        &[Way::Brew("llvm"), Way::System(CLANGD)],
+    ),
     server(
         &["Kotlin"],
         &["kotlin-language-server"],
-        "brew install kotlin-language-server",
+        &[Way::Brew("kotlin-language-server")],
     ),
-    server(&["Swift"], &["sourcekit-lsp"], "xcode-select --install"),
+    server(
+        &["Swift"],
+        &["sourcekit-lsp"],
+        &[
+            Way::Mac("xcode-select --install"),
+            Way::Needs("Swift, from swift.org"),
+        ],
+    ),
     server(
         &["PHP"],
         &["intelephense", "--stdio"],
-        "npm install -g intelephense",
+        &[Way::Npm("intelephense")],
     ),
-    server(&["Ruby"], &["ruby-lsp"], "gem install ruby-lsp"),
+    server(
+        &["Ruby"],
+        &["ruby-lsp"],
+        &[Way::Tool(
+            "gem install --user-install --bindir ~/.local/bin ruby-lsp",
+            "Ruby",
+        )],
+    ),
     server(
         &["Lua"],
         &["lua-language-server"],
-        "brew install lua-language-server",
+        &[Way::Brew("lua-language-server")],
     ),
-    server(&["Scala"], &["metals"], "brew install metals"),
-    server(&["Elixir"], &["elixir-ls"], "brew install elixir-ls"),
+    server(&["Scala"], &["metals"], &[Way::Brew("metals")]),
+    server(&["Elixir"], &["elixir-ls"], &[Way::Brew("elixir-ls")]),
     server(
         &["Haskell"],
         &["haskell-language-server-wrapper", "--lsp"],
-        "brew install haskell-language-server",
+        &[Way::Brew("haskell-language-server")],
     ),
-    server(&["Zig"], &["zls"], "brew install zls"),
+    server(
+        &["Zig"],
+        &["zls"],
+        &[Way::Brew("zls"), Way::Release(Release::Zls)],
+    ),
     server(
         &["Dart"],
         &["dart", "language-server", "--protocol=lsp"],
-        "brew install dart",
+        &[Way::Brew("dart"), Way::Needs("the Dart SDK, from dart.dev")],
     ),
     server(
         &["Shell"],
         &["bash-language-server", "start"],
-        "npm install -g bash-language-server",
+        &[
+            Way::Npm("bash-language-server"),
+            Way::Brew("bash-language-server"),
+        ],
     ),
     server(
         &["Terraform"],
         &["terraform-ls", "serve"],
-        "brew install hashicorp/tap/terraform-ls",
+        &[
+            Way::Brew("hashicorp/tap/terraform-ls"),
+            Way::Release(Release::TerraformLs),
+        ],
     ),
     server(
         &["YAML"],
         &["yaml-language-server", "--stdio"],
-        "npm install -g yaml-language-server",
+        &[
+            Way::Npm("yaml-language-server"),
+            Way::Brew("yaml-language-server"),
+        ],
     ),
-    server(&["TOML"], &["taplo", "lsp", "stdio"], "brew install taplo"),
+    server(
+        &["TOML"],
+        &["taplo", "lsp", "stdio"],
+        &[Way::Brew("taplo"), Way::Release(Release::Taplo)],
+    ),
     server(
         &["HTML"],
         &["vscode-html-language-server", "--stdio"],
-        "npm install -g vscode-langservers-extracted",
+        &[Way::Npm("vscode-langservers-extracted")],
     ),
     server(
         &["CSS"],
         &["vscode-css-language-server", "--stdio"],
-        "npm install -g vscode-langservers-extracted",
+        &[Way::Npm("vscode-langservers-extracted")],
     ),
     server(
         &["JSON"],
         &["vscode-json-language-server", "--stdio"],
-        "npm install -g vscode-langservers-extracted",
+        &[Way::Npm("vscode-langservers-extracted")],
     ),
     server(
         &["Dockerfile"],
         &["docker-langserver", "--stdio"],
-        "npm install -g dockerfile-language-server-nodejs",
+        &[Way::Npm("dockerfile-language-server-nodejs")],
     ),
-    server(&["LaTeX"], &["texlab"], "brew install texlab tectonic"),
+    server(
+        &["LaTeX"],
+        &["texlab"],
+        &[Way::Brew("texlab tectonic"), Way::Release(Release::Texlab)],
+    ),
     server(
         &["Markdown"],
         &["marksman", "server"],
-        "brew install marksman",
+        &[Way::Brew("marksman"), Way::Release(Release::Marksman)],
     ),
 ];
 

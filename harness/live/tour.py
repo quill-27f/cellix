@@ -143,6 +143,8 @@ EXPECT = {
     "176-review-suggested-light": "1 suggested",
     "39-hover-agents": "WORKTREES",
     "42-hover-install": "files save",
+    "42-settings-needs": "Needs npm",
+    "108-install-card-needs": "Copy Command",
     "43-light-hover-menu": "Rename Symbol",
     "50-comments": "yours",
     "50-comment-emoji": ":rock",
@@ -211,7 +213,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 285
+SCENES_IN_ALL = 287
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # The scene shot last, with its picture's digest and what it was taken from; and this one's.
@@ -842,6 +844,14 @@ def install_card(scratch):
     # Over the side pane, which isn't the file's colour: the card's corners show the pane's.
     shoot("108-install-card-pane", [["wait", 1.0], *command("show comments", F1), ["wait", 1.0]],
           "main.tf", cwd=root, env=bare)
+    # A language only Homebrew installs, with no Homebrew: what it needs, and its command to
+    # copy in place of an Install that could only fail.
+    java = f"{scratch}/java"
+    os.makedirs(java)
+    with open(f"{java}/Main.java", "w") as f:
+        f.write("class Main {\n    public static void main(String[] args) {}\n}\n")
+    git(java, "init", "-q", "-b", "main")
+    shoot("108-install-card-needs", [["wait", 1.0]], "Main.java", cwd=java, env=bare)
 
 
 def git_scenes(scratch):
@@ -1477,6 +1487,10 @@ with tempfile.TemporaryDirectory() as made:
     shoot("41-hover-tab-close", [["move", *ON("×", 0)]], CODE_FILE)
     # A language's Install, under the pointer and never pressed.
     shoot("42-hover-install", [*settings, EDITOR_PAGE, ["move", *ON("Install")]], CODE_FILE)
+    # Where Homebrew isn't on the PATH, what can't be installed here says what it needs and
+    # has its command to copy, under the pointer and never pressed.
+    shoot("42-settings-needs", [*settings, EDITOR_PAGE, ["move", *ON("Copy Command")]], CODE_FILE,
+          env={"PATH": "/usr/bin:/bin:/usr/sbin:/sbin"})
     shoot("43-light-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE, background="eff1f5")
     # Pointed at once the count is in, which moves the arrows when it comes.
     shoot("40-hover-find", [["keys", CTRL("f")], ["keys", "item"], ["until", "1 of"], ["move", *ON("↑", 0)],

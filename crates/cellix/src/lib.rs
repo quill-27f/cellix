@@ -19,6 +19,7 @@ mod graph;
 mod guide;
 pub mod hold;
 mod inbox;
+mod install;
 pub mod integrations;
 mod kernel;
 mod keys;

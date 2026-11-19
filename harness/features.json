@@ -6718,5 +6718,12 @@
     "title": "A done or needs-you dot on a tab behind follows its name, with the tab's spare room after it",
     "test": "a_dot_on_a_tab_behind_follows_its_name",
     "passes": true
+  },
+  {
+    "id": "L1-server-install-without-root",
+    "milestone": 15,
+    "title": "Installing a language server works without root on Linux, finds what it installed, and says why where it can't",
+    "test": "a_server_installs_without_root_on_linux_and_starts_from_local_bin",
+    "passes": true
   }
 ]

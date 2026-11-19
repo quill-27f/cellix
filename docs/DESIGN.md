@@ -1760,6 +1760,31 @@ languages to a tree-sitter grammar, with a TextMate grammar as fallback, and to 
 language server. Adding one needs no code change. Over SSH, servers run on the
 remote host and must be installed there.
 
+Installing a server (Settings' Editor page, or the card that offers a language's support) runs
+the first of its ways this machine can run, never asking for a password: an install has no
+terminal, so sudo couldn't ask (`install.rs`). Homebrew where it's on the PATH, as on a Mac or
+with Linuxbrew. npm installs globally, into npm's own folder where the person can write it and
+with `--prefix ~/.local` where it's the system's, as with Amazon Linux's nodejs; npm's folder is
+worked out as npm does, from its variable, `~/.npmrc`, or the folder over node's, without
+running npm. Where the project builds its server for each system (marksman, rust-analyzer,
+taplo, texlab, zls, terraform-ls), that build is fetched for this system and processor into
+`~/.local/bin`, with curl or wget. `rustup`, `go install`, `dotnet tool` and `gem install
+--user-install` run as they are. Where only a system package can give it (clangd on Linux, as
+`sudo dnf install clang-tools-extra`) or only Homebrew (jdtls), there's no Install that could
+only fail: the row says what's needed and has Copy Command, as the agents' cards do. Pointed
+at, a row says what its button does here: "Runs npm install -g --prefix ~/.local pyright",
+"Fetches marksman-linux-x64 from GitHub into ~/.local/bin", "Needs Homebrew, or sudo dnf
+install clang-tools-extra".
+
+Cellix looks for a server, and starts it, in `~/.local/bin`, `~/.cargo/bin`, Go's bin
+(`$GOBIN`, `$GOPATH/bin` or `~/go/bin`) and `~/.dotnet/tools` after the PATH, and in Homebrew's
+LLVM, which it keeps off the PATH on a Mac, so an install that worked reads Found though the
+PATH Cellix was started with lacks them; an install runs with them on its PATH too. An install
+that fails says why in words to act on ("it isn't allowed to write where it installs. Run it
+in a terminal", "the download isn't there", "no connection to the internet") on its own row
+in the error's colour, until it's tried again, and on the card, which stays until it's
+answered: the bar's message alone went with the next key.
+
 ### No debugger, for now
 
 Agents debug through tests, logs and print statements, so it was dropped for the companion.
