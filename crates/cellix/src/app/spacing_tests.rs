@@ -978,6 +978,75 @@ fn a_corner_card_stands_as_far_over_its_sheets_foot_as_from_its_side() {
     );
 }
 
+/// A card that asks has its buttons at its right, ending where its words do, the answer last
+/// and rightmost, one gap between each: the install and logout cards had them from their
+/// words' left edge with the answer first, the card asking to start an agent the other way
+/// round (0.11.0's polish review). The filled one is painted rightmost, and a press lands on
+/// the button painted there.
+#[test]
+fn a_cards_buttons_end_at_its_right_with_the_answer_last() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.server_install = Some("exit 0".to_string());
+    app.open(&dir.path().join("Main.java")).unwrap();
+    app.servers.clear();
+    app.note_missing("Java");
+    let wide = |cells: &str| cells.chars().count() as u16;
+    let area = app.offer_area();
+    let buttons = app.offer_buttons();
+    let labels: Vec<&str> = buttons.iter().map(|(label, ..)| *label).collect();
+    let mut order = app.offer_labels();
+    order.reverse();
+    assert_eq!(labels, order, "the answer last");
+    let (_, cells, x) = buttons.last().unwrap();
+    assert_eq!(
+        x + wide(cells),
+        area.right() - 2,
+        "ending where the words do"
+    );
+    for pair in buttons.windows(2) {
+        assert_eq!(
+            pair[0].2 + wide(&pair[0].1) + BUTTON_GAP,
+            pair[1].2,
+            "one gap"
+        );
+    }
+    // The filled one is the rightmost painted.
+    let grid = screen(&app);
+    let row = i32::from(app.offer_button_row()) * UNIT;
+    let chips: Vec<(Bounds, Option<Rgb>)> = panels(&grid)
+        .into_iter()
+        .filter(|(b, ..)| b.h < UNIT && b.y >= row - UNIT / 2 && b.y < row + UNIT && b.w > UNIT)
+        .map(|(b, fill, ..)| (b, fill))
+        .collect();
+    let right = chips
+        .iter()
+        .max_by_key(|(b, _)| b.x + b.w)
+        .expect("its buttons");
+    assert_eq!(
+        right.1,
+        Some(app.theme.button),
+        "the filled one rightmost: {chips:?}"
+    );
+    // The logout card's too, under it.
+    app.not_now.push("Java".to_string());
+    app.linger = Linger::Offered;
+    let area = app.linger_area();
+    let placed = app.linger_buttons();
+    let (cells, x) = placed.last().unwrap();
+    assert_eq!(LINGER_BUTTONS[2], "Turn On");
+    assert_eq!(x + wide(cells), area.right() - 2);
+    // A press on Copy Command, now in the middle, takes Copy Command.
+    let (cells, x) = &placed[1];
+    let at = x + wide(cells) / 2;
+    let y = app.linger_button_row();
+    app.handle(mouse(MouseKind::Left, at, y));
+    app.handle(mouse(MouseKind::Up, at, y));
+    assert!(app.outgoing_clipboard.is_some(), "Copy Command copied");
+}
+
 /// The table picker's squares stand as far from its top as from its sides: on its first row
 /// they were 7 px from its top and 20 from its sides.
 #[test]

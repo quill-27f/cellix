@@ -1499,15 +1499,7 @@ impl App {
 
     /// The buttons along the card's foot, at its right end, as (cells, x).
     fn consent_buttons(&self, area: Rect) -> Vec<(String, u16)> {
-        let placed = self.card_buttons(0, &CONSENT_BUTTONS);
-        let end = placed
-            .last()
-            .map_or(0, |(cells, x)| x + cells.chars().count() as u16);
-        let start = area.right().saturating_sub(2 + end).max(area.x + 2);
-        placed
-            .into_iter()
-            .map(|(cells, x)| (cells, x + start))
-            .collect()
+        self.card_buttons_right(area, &CONSENT_BUTTONS)
     }
 
     pub(super) fn draw_consent(&self, grid: &mut Grid) {

@@ -7054,5 +7054,12 @@
     "title": "A helper's row under its agent has its name at regular weight, its agent's in bold",
     "test": "names_read_as_rows_that_do_something",
     "passes": true
+  },
+  {
+    "id": "card-buttons-right",
+    "milestone": 15,
+    "title": "A card that asks has its buttons at its right, the answer last and rightmost, one gap between each",
+    "test": "a_cards_buttons_end_at_its_right_with_the_answer_last",
+    "passes": true
   }
 ]

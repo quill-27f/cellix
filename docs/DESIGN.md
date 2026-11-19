@@ -1406,7 +1406,11 @@ primary one filled with the accent, the rest a quiet fill, the least of them pla
 Delete on a comment), and each takes a click anywhere it's painted, from one rectangle the painter
 and the hit test share. Under the pointer a quiet one stands a second step off what's behind it,
 lighter in the dark theme and deeper in the light one, on a card and in a dialog as in a pane
-(`Theme::secondary`). Every action that isn't the main one is that quiet kind: Deny beside Allow,
+(`Theme::secondary`). A card that asks has its buttons at its right, ending where its words do,
+one gap between each and the answer last and rightmost (`App::card_buttons_right`): Never, Not
+Now, Install; Not Now, Copy Command, Turn On; Deny, Always Allow Here, Allow; Close, Start
+Again. The install and logout cards had theirs from their words' left edge with the answer
+first (0.11.0's polish review). Every action that isn't the main one is that quiet kind: Deny beside Allow,
 a suggestion's Keep and Dismiss, Review with…, New Workspace and Resume at the foot, Cancel
 (the design review of 0.11.0 found Deny and Dismiss as plain words, New Workspace in a picked
 row's wash, and hovers in a menu's colour that went darker than the button at rest on a card). In

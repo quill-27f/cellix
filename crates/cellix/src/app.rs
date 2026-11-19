@@ -310,7 +310,8 @@ const SEND_BACK: &str = "[Send back]";
 const OFFER_WIDTH: u16 = 46;
 const OFFER_BUTTONS: [&str; 3] = ["Install", "Not Now", "Never"];
 /// The card saying a server ends programs at logout: its buttons.
-const LINGER_BUTTONS: [&str; 3] = ["Turn On", "Copy Command", "Not Now"];
+/// In the order they stand, the answer last, rightmost, as on every card that asks.
+const LINGER_BUTTONS: [&str; 3] = ["Not Now", "Copy Command", "Turn On"];
 const LINGER_WIDTH: u16 = 52;
 /// Pixels a card's box for a command stands outside its words' column, with the command on
 /// that column: over the side pane, where the words are 24 px in, the box is as far in from the
@@ -2349,8 +2350,10 @@ impl App {
     /// The offer's buttons, as (label, cells, start column).
     fn offer_buttons(&self) -> Vec<(&'static str, String, u16)> {
         let area = self.offer_area();
-        let labels = self.offer_labels();
-        let placed = self.card_buttons(area.x + 2, &labels);
+        // The answer last, at the right (`card_buttons_right`).
+        let mut labels = self.offer_labels();
+        labels.reverse();
+        let placed = self.card_buttons_right(area, &labels);
         labels
             .iter()
             .zip(placed)
@@ -2558,8 +2561,8 @@ impl App {
             .map(|(_, cells, x)| (cells, x))
             .collect();
         let y = self.offer_button_row();
-        // The first is the answer, unless all there is to do is put it off.
-        let answer = labels.first() != Some(&OFFER_BUTTONS[1]);
+        // The last is the answer, unless all there is to do is put it off.
+        let answer = labels.last() != Some(&OFFER_BUTTONS[1]);
         self.draw_card_buttons(grid, (y, drop), &placed, (&labels, answer));
         grid.lift_since(held, -drop);
     }
@@ -9865,8 +9868,24 @@ impl App {
     }
 
     fn linger_buttons(&self) -> Vec<(String, u16)> {
-        let area = self.linger_area();
-        self.card_buttons(area.x + 2, &LINGER_BUTTONS)
+        self.card_buttons_right(self.linger_area(), &LINGER_BUTTONS)
+    }
+
+    /// A card's buttons as (cells, x), in the order of `labels`, ending where its words do, two
+    /// columns in from its right, and starting no further left than they do: the answer last
+    /// and rightmost, as on the asking card (`consent_buttons`). The install and logout cards
+    /// had theirs from the words' left edge with the answer first, the asking card the other
+    /// way round (0.11.0's polish review).
+    fn card_buttons_right(&self, area: Rect, labels: &[&str]) -> Vec<(String, u16)> {
+        let placed = self.card_buttons(0, labels);
+        let end = placed
+            .last()
+            .map_or(0, |(cells, x)| x + cells.chars().count() as u16);
+        let start = area.right().saturating_sub(2 + end).max(area.x + 2);
+        placed
+            .into_iter()
+            .map(|(cells, x)| (cells, x + start))
+            .collect()
     }
 
     fn linger_button_row(&self) -> u16 {
@@ -10107,8 +10126,9 @@ impl App {
             ..theme.bar
         };
         for (i, (cells, x)) in placed.iter().enumerate() {
-            // The first is the answer, filled, unless this row only carries on another.
-            let first = i == 0 && filled;
+            // The last, rightmost, is the answer, filled, unless this row only leads to
+            // another.
+            let first = i + 1 == placed.len() && filled;
             let width = cells.chars().count() as u16;
             let hovered = self.over_raised_button((*x, y), width, -drop);
             // A quiet button stands a step further off what's behind it when pointed at, as
@@ -10366,21 +10386,36 @@ impl App {
         Some((title, detail, buttons))
     }
 
-    /// The card's buttons as (cells, x, row counting from the first, choice), laid out from
-    /// the left, onto another row where the card is too narrow for them all.
+    /// The card's buttons as (cells, x, row counting from the first, choice), the answer, the
+    /// first of `buttons`, last: laid out from the left, onto another row where the card is too
+    /// narrow for them all, and each row then moved to end where the card's words do, as every
+    /// card's buttons stand (`card_buttons_right`).
     fn flow_buttons(&self, card: Rect, buttons: &[Offer]) -> Vec<(String, u16, u16, Revive)> {
         let start = card.x + 2;
+        let end = card.right().saturating_sub(2);
         let (mut x, mut row) = (start, 0);
-        let mut placed = Vec::new();
-        for (label, choice) in buttons {
+        let mut placed: Vec<(String, u16, u16, Revive)> = Vec::new();
+        for (label, choice) in buttons.iter().rev() {
             let cells = measures::button_cells(label, &*self.measure);
             let width = cells.chars().count() as u16;
             // They end inside the card's words, two columns short of its edge.
-            if x > start && x + width > card.right().saturating_sub(2) {
+            if x > start && x + width > end {
                 (x, row) = (start, row + 1);
             }
             placed.push((cells, x, row, *choice));
             x += width + BUTTON_GAP;
+        }
+        for which in 0..=row {
+            let ends = placed
+                .iter()
+                .filter(|(_, _, r, _)| *r == which)
+                .map(|(cells, x, ..)| x + cells.chars().count() as u16)
+                .max()
+                .unwrap_or(end);
+            let by = end.saturating_sub(ends);
+            for button in placed.iter_mut().filter(|(_, _, r, _)| *r == which) {
+                button.1 += by;
+            }
         }
         placed
     }
@@ -10458,14 +10493,15 @@ impl App {
         let mut rows: Vec<u16> = placed.iter().map(|(_, _, y, _)| *y).collect();
         rows.dedup();
         let drop = self.card_drop(card, measures::DialogLast::Words);
+        let last = rows.len().saturating_sub(1);
         for (index, y) in rows.into_iter().enumerate() {
             let (spots, labels): (Vec<(String, u16)>, Vec<&str>) = placed
                 .iter()
-                .zip(&buttons)
+                .zip(buttons.iter().rev())
                 .filter(|((_, _, row, _), _)| *row == y)
                 .map(|((cells, x, _, _), (label, _))| ((cells.clone(), *x), *label))
                 .unzip();
-            self.draw_card_buttons(grid, (y, drop), &spots, (&labels, index == 0));
+            self.draw_card_buttons(grid, (y, drop), &spots, (&labels, index == last));
         }
         grid.lift_since(words, -drop);
     }
@@ -24606,7 +24642,11 @@ mod tests {
     #[test]
     fn the_offer_installs_with_a_click() {
         let (_dir, mut app) = java_project();
-        let at = app.offer_buttons()[0].2;
+        let install = app
+            .offer_buttons()
+            .into_iter()
+            .find(|(label, ..)| *label == "Install");
+        let at = install.expect("Install").2;
         let y = app.offer_button_row();
         app.handle(mouse(MouseKind::Left, at + 1, y));
         assert!(screen(&app).text().contains("Installing Java support"));
@@ -25010,7 +25050,11 @@ mod tests {
         let runs = (text.lines()).find(|line| line.contains("Runs npm install -g pyright"));
         let runs = runs.unwrap_or_else(|| panic!("what Install runs: {text}"));
         assert!(!runs.contains("adds completion"), "{runs}");
-        let at = app.offer_buttons()[0].2;
+        let install = app
+            .offer_buttons()
+            .into_iter()
+            .find(|(label, ..)| *label == "Install");
+        let at = install.expect("Install").2;
         app.handle(mouse(MouseKind::Left, at + 1, app.offer_button_row()));
         let deadline = std::time::Instant::now() + BACKGROUND;
         while !app.poll_offer() {
