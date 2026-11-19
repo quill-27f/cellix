@@ -33,6 +33,17 @@ pub const TAB_CLOSE_AIR: f32 = 0.43;
 /// after a pane tab's × ran from 9 px on a working tab to 25 on an idle one.
 pub const TAB_CLOSE_END: f32 = 2.26;
 
+/// How far a line of words' measured width runs past its last letter's ink, in pixels, at the
+/// interface's size: about 3 px, the letter's own air after it ("README.md" 3.7, "pricing page"
+/// 3). What stands in the middle of the air after a name, as the line between two tabs, counts
+/// from its ink: from its measure, the line stood 37 px after README.md and 32 before PLAN.md.
+pub const WORDS_RUN_ON: f32 = 3.0;
+
+/// `WORDS_RUN_ON` in columns, where there are pixels.
+pub fn words_run_on(measure: &dyn Measure) -> f32 {
+    columns(WORDS_RUN_ON, measure).unwrap_or(0.0)
+}
+
 /// How wide a tab with a mark paints, in cells, for a name `name` cells wide and `more` cells
 /// of what follows it before the × (an agent's state, its context).
 pub fn tab_painted(name: f32, more: f32) -> f32 {
@@ -274,6 +285,42 @@ pub fn band(
     let right = f32::from(row.right()) - air;
     let top = f32::from(row.y) + inset;
     cellix_render::Bounds::cells(left, top, right - left, f32::from(row.h) - inset * 2.0)
+}
+
+/// A chip in a row of tabs, `wide` columns from `left` on row `y`: under the pointer on an
+/// icon at the top right, the sidebar's button, the +, a tab behind, and the count of tabs out
+/// of view, one height for all. On a row with room, 34 px of the terminal's line, kept at
+/// that height as a button on a wash is, which leaves 8 px over and under it in a row of 50
+/// and so 8 px over the sheet's line under the row, and 4 px round a 13 pt icon: the icons'
+/// and the button's stood at a control's 39 px, 5 px over that line, beside the count's 35
+/// (0.11.0's release check, m4). On a row the terminal's line or little more, where nothing
+/// keeps 8 px, nine tenths of the row, 3 px round the icon.
+pub fn bar_chip(
+    grid: &mut cellix_render::Grid,
+    (left, y, wide): (f32, u16, f32),
+    (radius, fill): (u8, cellix_render::Rgb),
+    measure: &dyn Measure,
+) {
+    let (high, kept) = bar_chip_height(measure);
+    let top = f32::from(y) + (1.0 - high) / 2.0;
+    grid.paint.push(cellix_render::Paint::Panel {
+        bounds: cellix_render::Bounds::cells(left, top, wide, high),
+        radius,
+        fill: Some(fill),
+        border: None,
+        shadow: false,
+        dashed: false,
+        inset: kept,
+    });
+}
+
+/// How tall `bar_chip` is in rows, and whether that's kept at the terminal's line's height.
+pub fn bar_chip_height(measure: &dyn Measure) -> (f32, bool) {
+    if roomy(measure) {
+        (34.0 / 36.0, true)
+    } else {
+        (0.89, false)
+    }
 }
 
 /// How tall the band behind a picked or pointed row of a list is, in rows: 33 px of 36,

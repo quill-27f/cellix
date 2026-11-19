@@ -1077,9 +1077,11 @@ fn every_tip_under_a_bar_stands_10_px_under_its_line_under_its_control() {
 }
 
 /// An agent's tab's tip, what it says of the context, stands under the tab from where the
-/// tab starts and inside the pane, `LINE_AIR` from its lines, cut with "…" where it's
-/// longer than that: from the pointer it ran over the file's sheet's line and ended 9 px from
-/// the window's side.
+/// tab starts and inside the pane, `LINE_AIR` from its lines, and on a second line where it's
+/// longer than that, broken at a " · ": from the pointer it ran over the file's sheet's line
+/// and ended 9 px from the window's side, and cut with "…" on one line it lost what it said
+/// last, "right-click to open the tra…", with 48 px empty after it (0.11.0's release check,
+/// P7, 64-transcript-tab-hover).
 #[test]
 fn a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start() {
     let (dir, mut app) = project((150, 40));
@@ -1109,15 +1111,42 @@ fn a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start() {
     app.handle(mouse(MouseKind::Move, title.x + 3, title.y));
     let grid = screen(&app);
     let tip = tip_pixels(&grid);
-    let words = grid.paint.iter().rev().find_map(|p| match p {
-        Paint::Text { text, .. } if text.starts_with("Context") => Some(text.clone()),
-        _ => None,
-    });
-    let words = words.expect("the tip's words");
-    // Too long for the pane at this width, it's cut with "…".
-    assert!(words.ends_with('…'), "{words:?}");
-    let kept = words.trim_end_matches('…');
-    assert!(said.starts_with(kept), "{words:?} of {said:?}");
+    // Its lines, each with where its words stand, in pixels from the window's top.
+    let lines: Vec<(String, f32)> = (grid.paint.iter())
+        .filter_map(|p| match p {
+            Paint::Text { text, y, font, .. }
+                if font.size == TOOLTIP_SIZE && said.contains(text.as_str()) =>
+            {
+                Some((text.clone(), *y as f32 / UNIT as f32))
+            }
+            _ => None,
+        })
+        .collect();
+    // Too long for the pane at this width, it's on two lines, all of it, broken at a " · ".
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(
+        format!("{} · {}", lines[0].0, lines[1].0),
+        said,
+        "{lines:?}"
+    );
+    assert!(!lines[1].0.ends_with('…'), "{lines:?}");
+    // The second line a line of the terminal's under the first, both inside the tip with the
+    // air a tip of one line has over and under its words.
+    let step = (lines[1].1 - lines[0].1) * ROW;
+    assert!(
+        (step - LINE).abs() < 1.0,
+        "{step} px from one line to the next"
+    );
+    let (first, last) = (lines[0].1 * ROW, lines[1].1 * ROW);
+    let (over, under) = (
+        first + (ROW - LINE) / 2.0 - tip.2,
+        tip.3 - (last + (ROW + LINE) / 2.0),
+    );
+    // The box and its words each stand on a 64th of a row, 0.8 px here.
+    assert!(
+        over > 0.0 && (over - under).abs() <= 1.6,
+        "{over} px over its first line's box, {under} under its last's"
+    );
     // Inside the pane, clear of its lines, from where the tab starts.
     let near = measures::LINE_AIR + measures::line_pixels(&*app.measure);
     let lines = app.sheet_lines();

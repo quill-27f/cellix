@@ -32,6 +32,9 @@ use crate::theme::Theme;
 /// The most header lines sticky scroll keeps at the top, as VS Code's default.
 pub const STICKY_LINES: usize = 5;
 const GUTTER_MIN_DIGITS: usize = 4;
+/// Pixels a failed step's chip has either side of its word (`Tone::FailedChip`), as a chip's
+/// words have.
+const FAILED_SIDE: f32 = 12.0;
 /// Where a commented line's ◆ is painted in the gutter's first column, in columns from the
 /// sheet's edge, and its size: half a column in, so it keeps 8 px from that edge, where it
 /// stood on it; as big as a page's ◆ (16 px) where the line's number leaves the column after
@@ -5072,7 +5075,7 @@ impl Editor {
             Tone::Footnote => theme.accent,
             Tone::Callout(kind) => callout_colour(kind, theme),
             Tone::Inserted => theme.inserted(),
-            Tone::Deleted | Tone::Failed => theme.deleted(),
+            Tone::Deleted | Tone::Failed | Tone::FailedChip => theme.deleted(),
             Tone::Margin(_) => theme.gutter.fg,
             Tone::Note => theme.text.fg,
             Tone::NoteMark => theme.accent,
@@ -5140,6 +5143,8 @@ impl Editor {
             // cells; with pixels its pill is painted.
             let ground = if noted(g.tone) && !proportional {
                 theme.tint
+            } else if g.tone == Tone::FailedChip && !proportional {
+                theme.failed_tint()
             } else {
                 bg
             };
@@ -5228,6 +5233,21 @@ impl Editor {
                 // Nine tenths of the row, which holds a tail of words of 13 pt.
                 let pill = Bounds::cells(x - 0.1, text_y + 0.05, width + 0.2, 0.9);
                 grid.panel(pill, 8, Some(theme.highlighter()), None);
+            }
+            if g.tone == Tone::FailedChip {
+                // The word and 12 px either side of it, in the room its spaces keep.
+                let glyphs = &row.glyphs[run.clone()];
+                let word = glyphs.iter().filter(|g| g.ch != ' ');
+                let (from, to) = word.fold((f32::MAX, f32::MIN), |(from, to), g| {
+                    (from.min(g.x), to.max(g.x + g.advance))
+                });
+                if from < to {
+                    let side =
+                        crate::measures::columns(FAILED_SIDE, self.measure.as_ref()).unwrap_or(0.7);
+                    let (left, right) = (origin + from - side, origin + to + side);
+                    let pill = Bounds::cells(left, text_y + 0.05, right - left, 0.9);
+                    grid.panel(pill, 8, Some(theme.failed_tint()), None);
+                }
             }
         }
         // A reviewer's note, its ◆ and its words, on one pill of a comment's tint.

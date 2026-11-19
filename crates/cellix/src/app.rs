@@ -1349,6 +1349,26 @@ pub(crate) fn sheet_edge(grid: &mut Grid, bounds: Bounds, frame: Rgb, line: Rgb)
     grid.panel(bounds, SHEET_RADIUS, None, Some(line));
 }
 
+/// A tip's words in the `room` they have, in columns: whole on one line where they fit, and
+/// otherwise on two, broken at the last " · " that leaves the first line within the room, or
+/// else at a space; what the second line can't hold is cut with "…". Cut on one line, a pane
+/// tab's tip lost the end of what it said, "right-click to open the tra…", with 48 px empty
+/// after it (0.11.0's release check, P7, 64-transcript-tab-hover).
+fn wrap_tip(text: &str, room: f32, width: impl Fn(&str) -> f32) -> String {
+    if width(text) <= room {
+        return text.to_string();
+    }
+    let breaks = |gap: &str| {
+        let found = text.match_indices(gap).map(|(at, _)| (at, at + gap.len()));
+        found.filter(|(at, _)| width(&text[..*at]) <= room).last()
+    };
+    let cut = |text: &str| crate::agent_task::fit(text, room, &width).into_owned();
+    match breaks(" · ").or_else(|| breaks(" ")) {
+        Some((at, next)) => format!("{}\n{}", &text[..at], cut(&text[next..])),
+        None => cut(text),
+    }
+}
+
 /// A list's place in the pane's screen with a row of air under the tabs.
 fn under_strip(screen: Rect) -> Rect {
     let air = u16::from(screen.h > 1);
@@ -4484,10 +4504,10 @@ impl App {
             let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
             grid.fill(cell, ground);
             if hovered {
-                let (wide, high) = crate::dock::BESIDE_LINE_PILL;
+                let wide = crate::dock::BESIDE_LINE_PILL.0;
                 let left = cell.x as f32 + 1.0 - wide / 2.0;
-                let chip = Bounds::cells(left, (1.0 - high) / 2.0, wide, high);
-                grid.panel(chip, PILL_RADIUS, Some(theme.row_hover), None);
+                let look = (PILL_RADIUS, theme.row_hover);
+                measures::bar_chip(grid, (left, cell.y, wide), look, self.measure.as_ref());
             }
             let color = if hovered {
                 theme.text.fg
@@ -4541,15 +4561,10 @@ impl App {
             if on || hovered {
                 // The rail's chip, so the two bars of icons read as one set.
                 let fill = if on { theme.tint } else { theme.row_hover };
-                let (wide, high) = ACTION_PILL;
+                let wide = ACTION_PILL.0;
                 let left = cell.x as f32 + (cell.w as f32 - wide) / 2.0;
-                let top = cell.y as f32 + (1.0 - high) / 2.0;
-                grid.panel(
-                    Bounds::cells(left, top, wide, high),
-                    PILL_RADIUS,
-                    Some(fill),
-                    None,
-                );
+                let at = (left, cell.y, wide);
+                measures::bar_chip(grid, at, (PILL_RADIUS, fill), self.measure.as_ref());
             }
             let color = if on || hovered {
                 theme.text.fg
@@ -17282,10 +17297,9 @@ impl App {
                 .filter(|line| (line - start).abs() < near)
                 .fold(start.max(0.5), |left, line| left.max(line + near));
             let end = f32::from(area.right()) - near;
-            let fitted = crate::agent_task::fit(&name, end - left - wide(""), |text| {
-                self.measure.width(text, font)
-            });
-            Some((fitted.into_owned(), left))
+            let room = end - left - wide("");
+            let said = wrap_tip(&name, room, |text| self.measure.width(text, font));
+            Some((said, left))
         });
         // Where each one goes: its name, left edge and top, in cells and rows.
         let spot = match &self.overlay {
@@ -17447,62 +17461,124 @@ impl App {
             // Its row's top is where the line over it is, under a tab row or a bar.
             top + self.tip_drop()
         };
+        // Wrapped where it's longer than the room it has, a line under another.
+        let said: Vec<&str> = name.split('\n').collect();
+        let tip_wide = said.iter().map(|line| wide(line)).fold(0.0, f32::max);
         // Its sides off the sheets' upright lines (`measures::clear_of_lines`), and 8 px or
         // more from the window's side where it ends at it.
         let lines = self.sheet_lines();
-        let left = left.min(self.tip_end(wide(name)));
-        let along = measures::clear_of_lines(&lines, (left, left + wide(name)), &*self.measure);
+        let left = left.min(self.tip_end(tip_wide));
+        let along = measures::clear_of_lines(&lines, (left, left + tip_wide), &*self.measure);
         let left = left + f32::from(along);
         // Under its control, 10 px under the line over it, it's a layer over what's under it,
         // a chip or a minimap's first lines: moved past them, the rail's tip stood 85 px under
         // its icon and cut a folder's name in half.
         let theme = &self.theme;
         // A hair short of its row, which is what lets it keep its own height on a taller
-        // row and stand in the middle of it, clear of a line over or under.
-        let bounds = Bounds::cells(
-            left,
-            top + TIP_INSET,
-            wide(name),
-            TOOLTIP_HEIGHT - TIP_INSET * 2.0,
-        );
+        // row and stand in the middle of it, clear of a line over or under. A line more is
+        // the terminal's line more, in rows, the box growing down by it.
+        let more = (said.len() - 1) as f32;
+        let (box_top, box_tall, line) = self.tip_box(top, more);
+        let bounds = Bounds::cells(left, box_top, tip_wide, box_tall);
         let painted = grid.painted_so_far();
         grid.popup(bounds, 24, theme.popup, theme.popup_border);
+        self.cover_cursor(grid, bounds);
         // A tip over the bar at the foot keeps to the rows over it. The bar's row is moved
         // down to stand in what's under the sheets, and the part of a tip's shadow that
         // reached into it went down with it, away from its tip.
         if over_bar {
             grid.keep_to_rows(painted, 0, foot);
         }
-        let text_top = top + (TOOLTIP_HEIGHT - 1.0) / 2.0;
+        for (at, name) in said.into_iter().enumerate() {
+            let text_top = top + (TOOLTIP_HEIGHT - 1.0) / 2.0 + line * at as f32;
+            self.tip_words(grid, (left, text_top), (name, tip_wide), font);
+        }
+    }
+
+    /// Where a tip's box stands, `top` being its row's and `more` the lines it has past its
+    /// first, as its top and height in rows, and how far one line of its words is from the
+    /// next. One line, a hair short of its row; each line more is the terminal's line more,
+    /// under it, so a tip of two lines is its words and no row of air between them.
+    fn tip_box(&self, top: f32, more: f32) -> (f32, f32, f32) {
+        let single = (top + TIP_INSET, TOOLTIP_HEIGHT - TIP_INSET * 2.0);
+        let Some((_, row)) = self.measure.cell_pixels().filter(|_| more > 0.0) else {
+            return (single.0, single.1 + more, 1.0);
+        };
+        let row = row as f32;
+        let line = row / self.measure.row_air().max(1.0);
+        // The one line's box as a taller row stands it, from where it starts, and the lines
+        // after it: from where it stands in its rows, its top rounded twice to a 64th of a row.
+        let units = |rows: f32| (rows * cellix_render::UNIT as f32).round() as i32;
+        let (over, tall) = cellix_render::stood(0, units(single.1), row, line);
+        let first = single.0 + over / row;
+        let step = line / row;
+        (first, (tall + line * more) / row, step)
+    }
+
+    /// One line of a tip's words, from `left`: what it does, and then, quieter, the other way
+    /// to do it, or its key after two spaces.
+    fn tip_words(
+        &self,
+        grid: &mut Grid,
+        (left, text_top): (f32, f32),
+        (name, wide): (&str, f32),
+        font: Font,
+    ) {
+        let theme = &self.theme;
         if self.measure.in_cells() {
             let style = Style {
                 fg: theme.text.fg,
                 bg: theme.popup,
                 ..theme.bar
             };
-            grid.put_str(
-                left as u16 + 1,
-                text_top.round() as u16,
-                name,
-                style,
-                self.size.0,
-            );
-        } else {
-            let end = left + wide(name);
-            // What it does, and then, quieter, the other way to do it, or its key after
-            // two spaces.
-            let (head, tail) = name
-                .split_once(" or ")
-                .or_else(|| name.split_once("  "))
-                .map_or((name, ""), |(head, _)| (head, &name[head.len()..]));
-            let start = (left + 1.5, text_top);
-            grid.text_run(start, end, head, (theme.text.fg, false), font);
-            if !tail.is_empty() {
-                let after = left + 1.5 + self.measure.width(head, font);
-                let quiet = (theme.popup_dim, false);
-                grid.text_run((after, text_top), end, tail, quiet, font);
-            }
+            let (x, y) = (left as u16 + 1, text_top.round() as u16);
+            grid.put_str(x, y, name, style, self.size.0);
+            return;
         }
+        let end = left + wide;
+        let (head, tail) = name
+            .split_once(" or ")
+            .or_else(|| name.split_once("  "))
+            .map_or((name, ""), |(head, _)| (head, &name[head.len()..]));
+        let start = (left + 1.5, text_top);
+        grid.text_run(start, end, head, (theme.text.fg, false), font);
+        if !tail.is_empty() {
+            let after = left + 1.5 + self.measure.width(head, font);
+            let quiet = (theme.popup_dim, false);
+            grid.text_run((after, text_top), end, tail, quiet, font);
+        }
+    }
+
+    /// The side pane's terminal's cursor goes while a tip covers any of its cell: the tip
+    /// covers its row but the top of it, 10 px under the line over it, and a sliver of the
+    /// cursor stood on the tip's top edge (0.11.0's release check, R4, 166). Its cell has the
+    /// terminal's own colours again.
+    fn cover_cursor(&self, grid: &mut Grid, tip: Bounds) {
+        if self.dock.front != Front::Session || self.dock.listing() {
+            return;
+        }
+        let (Some(screen), Some(session)) = (self.dock_screen(), self.dock.session()) else {
+            return;
+        };
+        let Some((x, y)) = session.cursor_in(screen, self.dock.focused) else {
+            return;
+        };
+        let cell = Bounds::cells(f32::from(x), f32::from(y), 1.0, 1.0);
+        let apart = cell.x >= tip.x + tip.w
+            || tip.x >= cell.x + cell.w
+            || cell.y >= tip.y + tip.h
+            || tip.y >= cell.y + cell.h;
+        if apart || x >= grid.width() || y >= grid.height() {
+            return;
+        }
+        let under = grid.cell(x, y);
+        let symbol = under.symbol.to_string();
+        let style = Style {
+            fg: self.theme.text.fg,
+            bg: self.theme.sidebar.bg,
+            ..under.style
+        };
+        grid.put_str(x, y, &symbol, style, x + 1);
     }
 
     /// How far a tooltip stands below the top of its row, in rows, so it's `LINE_AIR` from
@@ -17728,17 +17804,53 @@ impl App {
         match self.landing(&drag) {
             Landing::Tabs(slot) => {
                 let tabs = self.visible_tabs();
+                let area = self.tabs_area();
                 // In the gap before a tab, and never left of the bar.
-                let first = f32::from(self.tabs_area().x) + 0.2;
-                let x = match tabs.iter().find(|(index, ..)| *index == slot) {
-                    Some((_, at, _)) => (f32::from(*at) - 0.5).max(first),
-                    None => tabs
-                        .last()
-                        .map_or(f32::from(self.tabs_area().x), |(_, at, width)| {
-                            f32::from(at + width) + 0.5
-                        }),
+                let first = f32::from(area.x) + 0.2;
+                let x = match tabs.iter().position(|(index, ..)| *index == slot) {
+                    // Where there are pictures, in the middle of the air before the tab's
+                    // mark's ink, from the sheet's line or from what the tab before paints,
+                    // where the line between two tabs stands: at the start of the strip it
+                    // stood on the sheet's line and read as that line lit (0.11.0's release
+                    // check, 97-tab-drag-reorder).
+                    Some(at) if !self.measure.in_cells() => {
+                        let (index, x, width) = tabs[at];
+                        let (mark_at, ..) = self.tab_places(&self.tab_title(index), x, width);
+                        let ink = mark_at + MARK_INK;
+                        let before = match at.checked_sub(1).map(|p| tabs[p]) {
+                            Some((p, px, pw)) => {
+                                let name = self.tab_title(p);
+                                let (_, name_at, close) = self.tab_places(&name, px, pw);
+                                let shown = (px + pw).saturating_sub(1) < area.right();
+                                self.tab_painted_end(p, &name, (name_at, close), shown)
+                            }
+                            // The button at the start of the tabs, to its icon's ink.
+                            None if self.sidebar_button() && x == area.x => {
+                                let measure = self.measure.as_ref();
+                                let side = ACTION_ICON * measures::rows_to_columns(measure)
+                                    / measure.row_air();
+                                let middle =
+                                    f32::from(self.main_area().x) + f32::from(MENU_BUTTON) / 2.0;
+                                // Its box from `ACTION_ICON` before its middle, its ink ending
+                                // about 2 of its 24 before the box does.
+                                middle - ACTION_ICON + side * (1.0 - 2.0 / 24.0)
+                            }
+                            // The sheet's line, as thick as it's painted.
+                            None if x == area.x => {
+                                let line = measures::line_pixels(self.measure.as_ref());
+                                f32::from(x)
+                                    + measures::columns(line, self.measure.as_ref()).unwrap_or(0.0)
+                            }
+                            None => f32::from(x) - 1.0,
+                        };
+                        (before + ink) / 2.0
+                    }
+                    Some(at) => (f32::from(tabs[at].1) - 0.5).max(first),
+                    None => tabs.last().map_or(f32::from(area.x), |(_, at, width)| {
+                        f32::from(at + width) + 0.5
+                    }),
                 };
-                self.insertion_bar(grid, x, self.tabs_area().y);
+                self.insertion_bar(grid, x, area.y);
             }
             Landing::PaneTabs(_) => {
                 if let Some(area) = self.dock_area() {
@@ -18196,10 +18308,10 @@ impl App {
         let hovered = self.hover.is_some_and(|h| cell.contains(h.0, h.1));
         let middle = f32::from(cell.x) + f32::from(cell.w) / 2.0;
         if hovered {
-            let (wide, high) = crate::dock::BESIDE_LINE_PILL;
-            let top = f32::from(cell.y) + (1.0 - high) / 2.0;
-            let chip = Bounds::cells(middle - wide / 2.0, top, wide, high);
-            grid.panel(chip, PILL_RADIUS, Some(theme.row_hover), None);
+            let wide = crate::dock::BESIDE_LINE_PILL.0;
+            let at = (middle - wide / 2.0, cell.y, wide);
+            let look = (PILL_RADIUS, theme.row_hover);
+            measures::bar_chip(grid, at, look, self.measure.as_ref());
         }
         let color = if hovered {
             theme.text.fg
@@ -18346,6 +18458,51 @@ impl App {
         Rect::new(main.x, main.y + 1, main.w, main.h.saturating_sub(1))
     }
 
+    /// Where a file tab named `name`, `width` columns from `x`, has its parts where there are
+    /// pictures, as (its mark, its name, its ×): the anatomy every tab has, a third of its whole
+    /// columns' slack before the mark, a third before the × and a third after it.
+    fn tab_places(&self, name: &str, x: u16, width: u16) -> (f32, f32, f32) {
+        let wide = self.measure.width(name, Font::default());
+        let painted = crate::measures::tab_painted(wide, 0.0);
+        let slack = f32::from(width) - painted;
+        let third = if (-1.0..1.0).contains(&slack) {
+            slack / 3.0
+        } else {
+            0.0
+        };
+        let lead = f32::from(x) + third;
+        let close = lead + crate::measures::TAB_NAME + wide + third;
+        let close = (close + crate::measures::TAB_CLOSE_AIR)
+            .min(f32::from(x + width) - crate::measures::TAB_CLOSE_END);
+        (
+            lead + crate::measures::TAB_MARK,
+            lead + crate::measures::TAB_NAME,
+            close,
+        )
+    }
+
+    /// Where what file tab `index` paints ends, to the ink, with its × showing only under the
+    /// pointer: its unsaved dot where its × would be, where that's in view (`shown`), or its
+    /// name's last letter, which its measure runs past. From its measure, the line after it
+    /// stood 37 px after README.md and 32 before PLAN.md (0.11.0's release check,
+    /// m4-tabs-wheel). A tab behind keeps its ×'s room, as VS Code's do, so a line after it
+    /// can't be nearer than about 34 px to either.
+    fn tab_painted_end(
+        &self,
+        index: usize,
+        name: &str,
+        (name_at, close): (f32, f32),
+        shown: bool,
+    ) -> f32 {
+        let dirty = self.editors.get(index).is_some_and(|e| e.buffer.is_dirty());
+        if dirty && shown {
+            return close + DIRTY_DOT.0 + DIRTY_DOT.1;
+        }
+        let wide = self.measure.width(name, Font::default());
+        let run_on = measures::words_run_on(self.measure.as_ref());
+        (name_at + wide - run_on).min(close)
+    }
+
     fn draw_tabs(&self, grid: &mut Grid) {
         let main = self.main_area();
         let theme = &self.theme;
@@ -18378,7 +18535,14 @@ impl App {
             let hovered = self
                 .hover
                 .is_some_and(|h| h.1 == area.y && h.0 >= x && h.0 < x + width);
-            let style = if active { self.front_tab() } else { theme.tab };
+            let style = if active {
+                self.front_tab()
+            } else {
+                Style {
+                    fg: theme.tab_behind(),
+                    ..theme.tab
+                }
+            };
             let tab = Rect::new(x, area.y, width.min(area.right().saturating_sub(x)), 1);
             grid.fill(tab, style);
             if active && pictures {
@@ -18391,24 +18555,7 @@ impl App {
             // Where its parts stand: on cells by columns; where there are pictures, the
             // anatomy every tab has, its whole columns' slack shared by its two ends.
             let (mark_at, name_at, close) = if pictures {
-                let wide = self.measure.width(&name, Font::default());
-                let painted = crate::measures::tab_painted(wide, 0.0);
-                // A third before the mark, a third before the × and a third after it.
-                let slack = f32::from(width) - painted;
-                let third = if (-1.0..1.0).contains(&slack) {
-                    slack / 3.0
-                } else {
-                    0.0
-                };
-                let lead = f32::from(x) + third;
-                let close = lead + crate::measures::TAB_NAME + wide + third;
-                let close = (close + crate::measures::TAB_CLOSE_AIR)
-                    .min(f32::from(x + width) - crate::measures::TAB_CLOSE_END);
-                (
-                    lead + crate::measures::TAB_MARK,
-                    lead + crate::measures::TAB_NAME,
-                    close,
-                )
+                self.tab_places(&name, x, width)
             } else {
                 let lead = if task { f32::from(TASK_TAB_ICON) } else { 0.0 };
                 let close = f32::from(x + width.saturating_sub(2));
@@ -18433,14 +18580,9 @@ impl App {
                 let line = Bounds::cells(middle, f32::from(area.y) + 0.28, 0.0, 0.44);
                 grid.hairline(line, theme.border);
             }
-            let painted_end = (!hovered).then(|| {
-                if dirty && close_x < area.right() {
-                    close + DIRTY_DOT.0 + DIRTY_DOT.1
-                } else {
-                    let wide = self.measure.width(&name, Font::default());
-                    (name_at + wide).min(close)
-                }
-            });
+            let shown = close_x < area.right();
+            let painted_end =
+                (!hovered).then(|| self.tab_painted_end(i, &name, (name_at, close), shown));
             before = Some((x + width, active, painted_end));
             // The Task page's tab has its mark before its name, in the accent colour, and
             // a file's has its kind's icon in that kind's; on cells only the Task page's.
@@ -18534,13 +18676,9 @@ impl App {
             let label = Self::more_label(count, side);
             let words = self.measure.width(&label, MORE_FONT);
             let left = f32::from(rect.x) + if side { MORE_EDGE } else { 0.15 };
-            let chip = Bounds::inset(rect, 0.15, 0.12);
-            let chip = Bounds {
-                x: cellix_render::units(left),
-                w: cellix_render::units(words + MORE_AIR * 2.0),
-                ..chip
-            };
-            grid.panel(chip, PILL_RADIUS, Some(fill), None);
+            // As tall as the row's other chips, the icons' and the sidebar button's.
+            let at = (left, rect.y, words + MORE_AIR * 2.0);
+            measures::bar_chip(grid, at, (PILL_RADIUS, fill), self.measure.as_ref());
             let style = Style {
                 fg: if hovered {
                     theme.text.fg
@@ -34709,13 +34847,16 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // The pane's first column is the frame's, between the two sheets, and the tabs
         // start after it, so the row has a column less to give than it had.
         // The + and the button that maximizes the pane keep their places after them: a tab
-        // behind is cut to its mark first, the terminal to its prompt here, as the last of two
-        // names alike gives way first. The + went whenever the names had less than three
-        // letters each (0.11.0's final review), and the button with it, and a pane this
-        // narrow, as Cellix's is inside Claude Code, couldn't be maximized by anything in sight.
-        // The icons end the row now that the button that quits is at the foot, a column
-        // from the window's edge, so the tabs have the other column it took.
-        assert_eq!(strip.trim_end(), "  Comm… Agents ×  >  +  ⤢", "{row}");
+        // behind is cut to its mark first, the terminal to its prompt here, the last of those
+        // that can't all keep three letters giving way first, and the others then stand at
+        // three letters, alike, keeping none of the room it freed (the user's choice after
+        // 0.11.0's release check, R3: it gave Comments a letter back, "Comm…"). The + went
+        // whenever the names had less than three letters each (0.11.0's final review), and the
+        // button with it, and a pane this narrow, as Cellix's is inside Claude Code, couldn't
+        // be maximized by anything in sight. The icons end the row now that the button that
+        // quits is at the foot, a column from the window's edge, so the tabs have the other
+        // column it took.
+        assert_eq!(strip.trim_end(), "  Com… Agents ×  >  +   ⤢", "{row}");
         for x in area.x..first_icon {
             let hit = app.dock.hit(title, x);
             assert_ne!(hit, Some(TabHit::Pick), "no chevron at {x}");

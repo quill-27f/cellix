@@ -12,6 +12,8 @@ use super::*;
 
 /// The header's button that gives the helper a tab.
 const KEEP: &str = "Keep as Tab";
+/// Columns from the card's edge to where the helper's mark is drawn in its header.
+const PEEK_MARK: u16 = 2;
 /// How far what's around the card is dimmed, out of 255.
 const DIM: u8 = 110;
 /// Pixels between the header's groups, where there are pictures: the name, what it's doing
@@ -153,9 +155,25 @@ impl App {
     /// The header's Keep as Tab and ×, as (cells, x) and the ×'s column.
     fn peek_buttons(&self, card: Rect) -> ((String, u16), u16) {
         let cells = measures::button_cells(KEEP, &*self.measure);
-        let close = card.right().saturating_sub(4);
+        let close = self.peek_close(card).floor() as u16;
         let keep = close.saturating_sub(cells.chars().count() as u16 + BUTTON_GAP);
         ((cells, keep), close)
+    }
+
+    /// Where the header's × is drawn: as far from the card's right edge, to its ink, as the
+    /// helper's mark is from its left. Four columns in, it stood 46 px from the edge against
+    /// the mark's 24 (0.11.0's release check, 173-peek). On cells, four columns in.
+    fn peek_close(&self, card: Rect) -> f32 {
+        let measure = &*self.measure;
+        if measure.in_cells() {
+            return f32::from(card.right().saturating_sub(4));
+        }
+        let side = cellix_render::GLYPH * measures::rows_to_columns(measure) / measure.row_air();
+        // The mark's box starts `GLYPH_LEAD` before its place, and its ink about 2 of its 24
+        // in; the ×'s ink ends 5.6 of its 24 before its box does.
+        let lead = cellix_render::GLYPH_LEAD;
+        let air = f32::from(PEEK_MARK) - lead + side * 2.2 / 24.0 - self.pane_card_lead();
+        f32::from(card.right()) - air - side * (1.0 - 5.6 / 24.0) + lead
     }
 
     /// The header, the card's first row, its words in the middle of it between the card's edge
@@ -192,7 +210,14 @@ impl App {
         let icon = session.icon();
         let colour = crate::dock::icon_colour(icon, theme);
         let fallback = crate::toolbar::fallback(icon);
-        grid.glyph(f32::from(card.x + 2), y, icon, colour, fallback, base);
+        grid.glyph(
+            f32::from(card.x + PEEK_MARK),
+            y,
+            icon,
+            colour,
+            fallback,
+            base,
+        );
         let name = session.called().unwrap_or_default();
         let strong = Style { bold: true, ..base };
         grid.label_at(at, cell, y, name, strong, stop, 100);
@@ -331,7 +356,7 @@ impl App {
             },
             ..base
         };
-        grid.glyph(f32::from(close), y, Icon::Close, shut.fg, "×", shut);
+        grid.glyph(self.peek_close(card), y, Icon::Close, shut.fg, "×", shut);
         session.draw_on(grid, screen, theme, (true, theme.popup));
         // The line under the header, the card's width, and the card's own line round it with
         // its corners, painted over the cells' square ones in what stands behind.

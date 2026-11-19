@@ -2352,6 +2352,28 @@ mod tests {
             .map(|(bounds, ..)| bounds)
             .expect("Keep as Tab, a quiet button");
         assert!(from < keep.x, "who started it stops short of Keep as Tab");
+        // Its × as far from the card's right edge as the helper's mark is from its left, to
+        // their ink: it stood 46 px in against the mark's 24 (0.11.0's release check, 173).
+        let icon = |which: Icon| {
+            grid.paint.iter().find_map(|p| match p {
+                Paint::Icon { bounds, icon, .. } if *icon == which && card_row(bounds) => {
+                    Some(*bounds)
+                }
+                _ => None,
+            })
+        };
+        let px = |units: i32| units as f32 / 64.0 * 17.0;
+        // A square as tall as its bounds on the line of 37 px: Codex's hexagon's ink starts
+        // 2.7 of its 24 in, and the ×'s ends 5.6 before its end.
+        let side = |b: Bounds| b.h as f32 / 64.0 * 37.0;
+        let mark = icon(Icon::AgentCodex).expect("the helper's mark");
+        let close = icon(Icon::Close).expect("its ×");
+        let left = px(mark.x) + side(mark) * 2.7 / 24.0 - px(edge.x);
+        let right = px(edge.x + edge.w) - (px(close.x) + side(close) * (1.0 - 5.6 / 24.0));
+        assert!(
+            (left - right).abs() <= 2.0,
+            "{left} px before the mark, {right} after the ×"
+        );
     }
 
     #[test]

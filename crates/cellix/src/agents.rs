@@ -1022,7 +1022,16 @@ fn draw_needs_you(
         ..theme.sidebar
     };
     let cell = right.saturating_sub(NEEDS_YOU.len() as u16);
+    let from = grid.painted_so_far();
     grid.label_at(left + CHIP_PAD, cell, y, NEEDS_YOU, style, right, CHIP_SIZE);
+    // Its ink in the chip's middle, the "d" as far from its top as the "y"'s tail from its
+    // foot: words stand with their capitals in the middle of their row, and their tails
+    // reach further down than their heads reach up. In the chip's middle they had 11 px over
+    // them and 7 under (0.11.0's final review, T9, m2).
+    grid.lift_since(
+        from,
+        crate::measures::FIELD_LIFT / measure.row_air().max(1.0),
+    );
 }
 
 /// `color` over `ground` at `share` of its strength.

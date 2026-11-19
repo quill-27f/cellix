@@ -300,4 +300,97 @@ fn the_needs_you_chip_has_room_for_its_words_tails() {
         "its middle at {} where the row's is {middle}",
         chip_top + high / 2.0
     );
+    // Its words' ink in its middle, measured in the picture: the "d" as far from its top as
+    // the "y"'s tail from its foot. Words stand with their capitals in their row's middle, and
+    // had 11 px over them and 7 under (0.11.0's final review, T9).
+    let rows = super::strip_tests::picture(&grid, y);
+    let (from, to) = (
+        (chip.x as f32 / UNIT as f32 * 17.0) as usize + 2,
+        ((chip.x + chip.w) as f32 / UNIT as f32 * 17.0) as usize - 2,
+    );
+    // The picture is the row's own, from its top.
+    let top = chip_top - f32::from(y) * row;
+    // Its wash, at its middle before its words.
+    let wash = rows[(top + high / 2.0) as usize][from];
+    let inked: Vec<usize> = (top.ceil() as usize + 1..(top + high) as usize - 1)
+        // Clear of its round corners.
+        .filter(|line| {
+            rows[*line][from + 10..to - 10]
+                .iter()
+                .any(|p| super::strip_tests::apart(*p, wash))
+        })
+        .collect();
+    let (ink_top, ink_foot) = (inked[0] as f32, inked[inked.len() - 1] as f32 + 1.0);
+    let (over, under) = (ink_top - top, top + high - ink_foot);
+    assert!(
+        (over - under).abs() <= 1.5,
+        "{over} px over its words' ink and {under} under it"
+    );
+}
+
+/// A step that failed, marked `==failed==` as a transcript has it, is a chip in the failed
+/// colour's tint, its word in that colour with 12 px either side: it was a highlighter's
+/// amber, 2 px past the word (0.11.0's final review, T9, 65-67).
+#[test]
+fn a_failed_step_is_a_chip_of_the_failed_colour() {
+    use cellix_render::{FontMeasure, Paint, UNIT};
+    let dir = tempfile::tempdir().unwrap();
+    let page = dir.path().join("transcript.md");
+    fs::write(&page, "- Bash `cargo test orders` · ==failed==\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (130, 36));
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+    app.open(&page).unwrap();
+    let grid = screen(&app);
+    let theme = *app.theme();
+    let tint = theme.failed_tint();
+    let chip = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            fill: Some(fill),
+            ..
+        } if *fill == tint => Some(*bounds),
+        _ => None,
+    });
+    let chip = chip.expect("a chip in the failed colour's tint");
+    assert!(
+        !grid.paint.iter().any(|p| matches!(p,
+            Paint::Panel { fill: Some(fill), .. } if *fill == theme.highlighter())),
+        "no highlighter's amber"
+    );
+    let word = grid.paint.iter().find_map(|p| match p {
+        Paint::Text { x, text, color, .. } if text.trim() == "failed" => {
+            Some((*x, text.clone(), *color))
+        }
+        _ => None,
+    });
+    let (x, text, color) = word.expect("the word, painted on its own");
+    assert_eq!(color, theme.deleted(), "in the failed colour");
+    let px = |units: i32| units as f32 / UNIT as f32 * 17.0;
+    let measure = FontMeasure::new(17, 50).with_type_row(36);
+    let wide = cellix_render::Measure::width(&measure, &text, cellix_render::Font::default());
+    let lead = text.len() - text.trim_start().len();
+    let spaces =
+        cellix_render::Measure::width(&measure, &text[..lead], cellix_render::Font::default());
+    let start = px(x) + spaces * 17.0;
+    let end = px(x) + wide * 17.0
+        - cellix_render::Measure::width(
+            &measure,
+            &text[text.trim_end().len()..],
+            cellix_render::Font::default(),
+        ) * 17.0;
+    let (before, after) = (start - px(chip.x), px(chip.x + chip.w) - end);
+    assert!(
+        (11.0..=13.0).contains(&before) && (11.0..=13.0).contains(&after),
+        "{before} px before the word, {after} after it"
+    );
+    // On cells, where nothing is painted, the word stands on the tint itself.
+    let mut cells = App::new(dir.path().to_path_buf(), (130, 36));
+    cells.open(&page).unwrap();
+    let grid = screen(&cells);
+    let y = (0..grid.height())
+        .find(|y| grid.row_text(*y).contains("failed"))
+        .expect("its row");
+    let at = grid.row_text(y).find("failed").unwrap();
+    let column = grid.row_text(y)[..at].chars().count() as u16;
+    assert_eq!(grid.cell(column, y).style.bg, cells.theme().failed_tint());
 }

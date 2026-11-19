@@ -1277,7 +1277,14 @@ code. Small words, a button's, a chip's and both bars', are nine tenths of that,
 heading four fifths. A page's words are the interface's, so they grew with it. An icon beside a
 name is 16 pt (`GLYPH`). An icon in a chip at the top right is 13 pt: VS Code's are 16 in a bar
 35 pt tall, this bar is one row, and a larger icon would stand against its chip, which keeps 3 px
-over and under the icon's box as VS Code's hover chips do. Making the two tab rows two rows
+over and under the icon's box as VS Code's hover chips do. Every chip in a row of tabs, under
+the pointer on those icons, the sidebar's button, the + or a tab behind, and the count of tabs
+out of view, is one height (`measures::bar_chip`): on a row with room, 34 px of the terminal's
+line, kept at that height, which leaves 8 px over and under it in a row of 50, and so 8 px over
+the sheet's line under the row, and 4 px round a 13 pt icon; the icons' and the button's were a
+control's 39 px, 5 px over that line, beside the count's 35 (0.11.0's release check, m4; the
+8 px rule over the design's 20/28 chip, decided with the user). On a row the terminal's line
+tall, nine tenths of it. Making the two tab rows two rows
 tall, which would hold 16 pt, was weighed and left (2026-11-16, the user asking for the choice
 to be made): it costs a row of the file in each pane for 3 pt, in a window that has forty rows
 and inside Claude Code often fewer; at 13 pt the icons are the words' own size and read at a
@@ -1475,7 +1482,13 @@ its name and its note in one colour, readable and quieter than a row that can be
 light one, whose quiet words are all but its text's. Dimmed past its note, the name read as less
 than "not installed". One that can't be picked and says nothing is dimmed. A menu that marks the one in use, the Comments pane's order, has its check in
 a column of its own, as an icon is, so every row's words start in one place. It drops from the bottom edge of what opened it; a tooltip is one row, on
-the row under its icon. Nothing covers part of a row. A palette (Quick Open, the commands, and
+the row under its icon. A tip longer than the room it has, as an agent's tab's on what its
+context holds, goes on to a second line, the terminal's line under the first, broken at a " · "
+where one leaves the first line within the room: cut on one line it lost what it said last,
+"right-click to open the tra…", with 48 px empty after it (0.11.0's release check, P7). While a
+tip covers the side pane's terminal's cursor, the cursor goes: a tip covers the row under its
+line but the top 10 px of it, and a sliver of the cursor stood on the tip's edge (R4). Nothing
+covers part of a row. A palette (Quick Open, the commands, and
 every list that asks with a field) is whole rows too: the field's row, one row of air, and its
 list. The field is a box, as the Find bar's and a prompt's are, nine tenths of its row as the
 canvas draws a field, a column in from the panel's edges where the picked row's band stands
@@ -1622,17 +1635,30 @@ between them, so that room reads as the tab's own (the tab in front is its own s
 two files' tabs the line stands in the middle of the air between what the first paints, its
 name while its × shows only under the pointer, and the next one's mark, and not beside a tab
 under the pointer, whose × and its chip stand there: at their edge it stood 55 px after a name
-and 16 px before the next mark (0.11.0's release review, m4). The chip under the pointer on a
+and 16 px before the next mark (0.11.0's release review, m4). It's measured to the name's last
+letter's ink, which its measure runs about 3 px past (`measures::WORDS_RUN_ON`): from the
+measure it stood 37 px after README.md and 32 before PLAN.md (0.11.0's release check). A tab
+behind keeps its ×'s room, so the line stands about 34 px from either, and couldn't be nearer
+without the tab growing under the pointer (decided with the user, 2026-11-19). A tab dragged
+along the row has its bar where that line would stand, and before the first tab in the middle
+of the air between the sheet's line and its mark: at the strip's start it stood on the sheet's
+line, which read as the line lit (R5, 97). The chip under the pointer on a
 file tab's × is about 30 by 28 px round the ×'s ink, kept at that height on a taller row, 8 px
 and more over the line under the tab in front; grown to the row's chip it was 37 px, its foot 3
 px over that line. Counted in letters, as cells count them, a tab
 was nearly twice what it painted, and two tabs, an agent's and a terminal's, were enough to
 cut the row short with 200 px to spare, which took the + away (found in 0.11.0's tour). So
 the + stands a cell after the last tab whenever the tabs and it fit, and its menu is in reach;
-it gives way only when the row truly overflows. A name is never cut mid-letter: it's whole
+it gives way only when the row truly overflows. With the button that maximizes the pane right
+after it, the + stands in the middle of the air from the last tab's ink, its × where it keeps
+room for one, to the button's: at the start of its columns it stood 39 px after a tab's × and
+34 before the button (0.11.0's release check, m1-agent-tabs). A name is never cut mid-letter: it's whole
 while the tab has the width it paints, and only short of that ends in a "…" at its measured
 width. A tab in front, or under the pointer, has its words in the text's own colour, whatever
-its program is doing; one whose program ended says so by its mark, dimmed. The screen's text,
+its program is doing; one whose program ended says so by its mark, dimmed. Behind, they're the
+tabs' quieter words; in the light theme a step quieter than its other quiet words, #686b81
+against the front's #4c4f69, as VS Code's light theme has them, where they were 1.1 to 1 from
+the front's and a tab behind read as the one in front (0.11.0's release check). The screen's text,
 which the tour and the tests read, holds as much of a painted tab's name as its columns do: its
 × in its last column, what it's doing and its context before that. On cells a tab is its
 letters and the columns round them, as before.
@@ -1640,21 +1666,36 @@ A side pane whose tabs don't all fit before the icons at the top right keeps eve
 the row. The one in front, a tab in the shape every tab has, hugs its measured name and its ×, with none
 of the slack a tab has when there's room, since that slack is what would cut its neighbours.
 Those behind it stand as names alone, half a column of air either side, whole while they
-fit and then cut short with a "…", the longest giving way first (the last of two alike); two of
-them side by side have a hairline between them, centred in the cell that parts them, so what
-one is doing at its end is never read as the next one's. Its mark and a spinner stand about
-16 px from its ends, as a whole tab's do: at 10 and 11 px either side of that line, two read
+fit and then cut short with a "…", sharing the room evenly as VS Code's shrink mode does: every
+name longer than a level is cut to it, the highest level that fits, so names are cut alike, and
+a name shorter than that stays whole (the user's choice, 2026-11-19; the widest gave a column
+at a time, and Gemini CLI went to its mark while Claude Code kept "pricing p…", 0.11.0's
+release check, R3). None goes below three letters and its "…" while another is longer; only
+when all of them at that can't fit does one go to its mark, the last first, and the others
+then stand at three letters, alike, keeping none of the room it freed. Two of
+them side by side have a hairline between them, in the middle of the air from the ink of one
+to the ink of the next, as between two whole tabs behind, so what
+one is doing at its end is never read as the next one's. Its mark and its name stand where
+they do while it's in front, so neither moves as it's brought forward: cut short, the first
+tab's mark stood 5 px nearer the pane's edge than in front (0.11.0's release check, A7). A
+spinner stands about 16 px from its end: at 10 and 11 px either side of that line, two read
 as one (0.11.0's release review, m1-agent-tabs). A dot follows the name as on a whole tab,
-about 11 px to its ink, and what the tab's last column has to spare is after it, with the line
-in the middle of the air from the dot to the next mark: at the tab's end, the spare room stood
+in the middle of the room a spinner would have there, about 14 px to its ink, and what the
+tab's last column has to spare is after it: at the tab's end, the spare room stood
 between the name and the dot, 33 px, and the dot read as the next tab's (0.11.0's release
 check, m1-agent-tab-done). Short of three letters and the "…", a
 tab behind is cut to its mark, and what its program is doing beside it: the mark in the tab's
 middle with the same air either side, about 16 px to its ink, in three columns, or five with
 its state, and under the pointer a chip that's exactly the mark and that air (it kept a chip
-five columns wide with the mark at its left, 16 px before it and 47 after). Every tab has a
-mark, and marks tell tabs apart, as herdr's narrow tabs do; letters come back, the first of
-those cut first, as room allows. On cells a view's tab, a name elsewhere, is cut to the
+five columns wide with the mark at its left, 16 px before it and 47 after). The first tab in
+the row has the sheet's line just before it, and takes what it needs, a column more, for its
+mark to stand in the middle between that line and its end with its chip 8 px from the line
+(the user's choice, 2026-11-19: in three columns it read 22 | mark | 14 from the line, and
+centred its chip would have come 4 px from it; 0.11.0's release review, A4), where the row
+has that column; where it hasn't, every tab staying in the row comes first, and the mark
+stands in the middle of its three (three agents in the tour's narrow window). Every tab has a
+mark, and marks tell tabs apart, as herdr's narrow tabs do; letters come back, to every name
+cut alike, as room allows. On cells a view's tab, a name elsewhere, is cut to the
 letter its icon has at the top right. The + keeps its place after the tabs while any tab is
 cut rather than listed, and the button that maximizes the pane its three columns at the end
 of the pane's part of the row: the names are cut to their marks before either gives way. With
@@ -1694,7 +1735,10 @@ names its row in the Agents list and the inbox, until it takes that back: the ta
 "Terminal" beside a row that said "deploy". A shell running a command is named after the
 command with a shell's mark before it (below). An agent's tab shows what its agent is doing half a cell after its name: the spinner in
 the accent while it works, a dot in the attention colour while it asks, a green dot when it
-finished a turn while its tab wasn't in front, until it is, and nothing while it's idle. An
+finished a turn while its tab wasn't in front, until it is, and nothing while it's idle. A dot
+stands in the middle of the room a spinner has, about 14 px after the name and 19 to 24 before
+the ×: at the room's start, the needs-you dot stood 24 to 28 px from the × against a spinner's
+19 (0.11.0's release check, m1-agent-tab-asking, 170). An
 idle tab keeps no room for a state it isn't showing, so its × follows its name with nothing
 idle before it, and the tab grows by the state's width when its agent starts (decided after
 0.11.0's review, which measured 72 to 96 px of nothing before idle tabs' ×; the width had
@@ -1872,7 +1916,9 @@ send it with every report, so Cellix knows each tab's transcript: Claude Code's
 a hook didn't say. Right-click an agent's tab, or run Open Agent Transcript, and it opens as a page
 beside the code, made by Cellix into `.cellix/transcripts` (ignored by git) and read only: each turn
 under a heading with how its context grew, the prompt in a callout, the replies as written, and
-each tool call on one line with its input and a word on the result. A command's output, and any
+each tool call on one line with its input and a word on the result; one that failed says
+`==failed==`, which a page shows as a chip in the failed colour's tint, the word in that colour
+12 px from its ends (it was a highlighter's amber 2 px past the word). A command's output, and any
 that failed, follows in a code block, cut to its last 12 lines; a file read whole isn't repeated.
 What the transcript holds is data: tool output stays in code blocks, and nothing in it is run. A
 selection on it gets Comment and Ask Agent as on any page, and the comment carries the step it's
@@ -2039,7 +2085,9 @@ from their ink: 16 px between the name and what it's doing, a mark 8 px from its
 started it is whole or not there: "· from Cl…" said nothing in a narrow pane. Keep as Tab is a quiet button, as the
 board has it, at its height on the terminal's line as a button on a pointed row is
 (`Grid::row_button`), which keeps 9 px from the card's edge and from the line under the header on
-a row with room. The
+a row with room. Its × is as far from the card's right edge, to its ink, as the helper's mark
+is from its left, about 24 px: four columns in, it stood 46 px from the edge (0.11.0's release
+check, 173-peek). The
 keyboard and pastes go to it while it's open; a press outside it or its × closes it, and the
 press does nothing else. Keep as Tab gives it a tab of its own, in front. A helper that outlives
 its agent gets one too.
@@ -2408,7 +2456,8 @@ long since what it's doing changed (`<1m`, `5m`, `2h`, `3d`, which the half-seco
 up and nothing redraws faster for), and at its end what that is: the spinner, a chip, the
 design's chip of 20/28 of a taller row with room under its words' tails (it was 24 px, the "y"
 of "you" a pixel over its foot), saying "needs you" in the attention colour with what it's
-asking on the row under it, a green
+asking on the row under it, its words' ink in its middle, raised the 2 px their tails reach
+further down than their heads reach up (they had 11 px over them and 7 under), a green
 dot, or nothing. Every row keeps room at its end as wide as that chip, so how long ago stands in
 one column down the list (it moved six columns left on the row that needs you). Under START,
 what can be started is listed as the + menu lists it: Terminal first, a rule, then the agents,

@@ -137,6 +137,10 @@ const CUT_ICON: f32 = 1.55;
 const CUT_MARK: f32 = 2.25;
 /// How wide that mark is, in cells, where a cell is 17 px and a line 37.
 const MARK_WIDE: f32 = 1.4;
+/// How far inside its square a ×'s ink ends, and the ink of the button that maximizes the
+/// pane starts, as parts of it (`icon.rs`).
+const CLOSE_INK: f32 = 5.6 / 24.0;
+const MAXIMIZE_INK: f32 = 2.1 / 24.0;
 /// The button that closes the pane.
 const HIDE_WIDTH: u16 = 3;
 /// Rows tall each icon at the top right is: the pane's buttons and the icons beside them.
@@ -1637,6 +1641,20 @@ impl Session {
         self.draw_on(grid, area, theme, (focused, theme.sidebar.bg));
     }
 
+    /// The cell its cursor is drawn in on `area`, where `draw` shows one.
+    pub fn cursor_in(&self, area: Rect, focused: bool) -> Option<(u16, u16)> {
+        let content = self.term.renderable_content();
+        let cursor = content.cursor;
+        let shown = focused
+            && content.mode.contains(TermMode::SHOW_CURSOR)
+            && cursor.shape != CursorShape::Hidden
+            && content.display_offset == 0;
+        let (x, y) = (cursor.point.column.0, cursor.point.line.0);
+        let x = u16::try_from(x).ok().filter(|x| *x < area.w)?;
+        let y = u16::try_from(y).ok().filter(|y| *y < area.h)?;
+        shown.then_some((area.x + x, area.y + y))
+    }
+
     /// `draw`, on `ground` where the program leaves its own background, as on a card.
     pub fn draw_on(
         &self,
@@ -2609,9 +2627,30 @@ impl Dock {
             let extra = Self::cell_extra(face) + u16::from(marked);
             return text.chars().count() as u16 + 1 + extra;
         }
-        let side = |on: bool| if on { CUT_SIDE } else { 0.0 };
-        let sides = side(face.icon.is_some()) + side(face.state.is_some());
-        (self.text_width(text) + CUT_AIR * 2.0 + sides).ceil() as u16
+        let cells = cellix_render::CellMeasure;
+        let measure: &dyn cellix_render::Measure = self.measure.as_deref().unwrap_or(&cells);
+        // Its name where it stands in front, and half a column after it, or its state's side.
+        let lead = if face.icon.is_some() {
+            self.cut_lead(face, measure).1
+        } else {
+            CUT_AIR
+        };
+        let end = CUT_AIR + if face.state.is_some() { CUT_SIDE } else { 0.0 };
+        (lead + self.text_width(text) + end).ceil() as u16
+    }
+
+    /// Where a tab's mark's middle and its name stand from its start while it's in front and
+    /// hugs them, which a tab behind cut short keeps, so neither moves as it's brought forward:
+    /// cut short, the first tab's mark stood 5 px nearer the pane's edge than in front, and
+    /// jumped on a click (0.11.0's release check, A7). On cells, a column for the mark's letter
+    /// and one after it.
+    fn cut_lead(&self, face: &Face, measure: &dyn cellix_render::Measure) -> (f32, f32) {
+        if measure.in_cells() {
+            return (CUT_ICON, CUT_AIR + CUT_SIDE);
+        }
+        let tab = Rect::new(0, 0, self.hugging(face), 1);
+        let parts = self.parts(face, tab, (true, false), measure);
+        (parts.icon.0, parts.name.0)
     }
 
     /// Columns a tab behind needs to show any of its name: three letters and the "…", or the
@@ -2670,7 +2709,6 @@ impl Dock {
         let behind: Vec<usize> = (0..faces.len())
             .filter(|index| *index != front && !self.untabbed(*index))
             .collect();
-        let least = |index: usize| self.least(&faces[index]);
         let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
         let rest = self.cut_room(area).checked_sub(kept);
         let Some(rest) = rest.filter(|_| self.cut_fits(area)) else {
@@ -2696,28 +2734,68 @@ impl Dock {
                 stubs[index]
             };
         }
-        let taken = |widths: &[u16]| -> u16 { behind.iter().map(|index| widths[*index]).sum() };
-        // The widest gives a column at a time, the last of equals first; one that would be
-        // left short of three letters is cut to its mark.
-        while taken(&widths) > rest {
-            let widest = (behind.iter().copied())
-                .filter(|index| widths[*index] > least(*index))
-                .max_by_key(|index| widths[*index]);
-            let Some(at) = widest else { break };
-            let less = widths[at] - 1;
-            widths[at] = if less < named[at] { least(at) } else { less };
-        }
-        // What's left over gives letters back, a column at a time, to the first of those
-        // whose names are cut.
-        let mut spare = rest.saturating_sub(taken(&widths));
-        while spare > 0 {
-            let cut = (behind.iter().copied())
-                .find(|index| widths[*index] >= named[*index] && widths[*index] < stubs[*index]);
-            let Some(at) = cut else { break };
-            widths[at] += 1;
-            spare -= 1;
+        // The first tab's room to stand its mark in the middle of, where the row has it: where
+        // it hasn't, every tab staying in the row comes first, as it did before (three agents
+        // in the tour's narrow window, m1-agent-tabs-narrow).
+        let widened = |index: usize| self.least_at(index, &faces[index]);
+        let roomy = behind.iter().map(|index| widened(*index)).sum::<u16>() <= rest;
+        let least = |index: usize| {
+            if roomy {
+                widened(index)
+            } else {
+                self.least(&faces[index])
+            }
+        };
+        let taken = behind.iter().map(|index| widths[*index]).sum::<u16>();
+        if taken > rest {
+            // What each takes besides its name: its mark, what it's doing and their air.
+            let around: Vec<u16> = faces.iter().map(|face| self.stub_of("", face)).collect();
+            let tabs = (&stubs[..], &named[..], &around[..]);
+            for (index, width) in shared(&behind, tabs, least, rest) {
+                widths[index] = width;
+            }
         }
         (widths, Fit::Cut)
+    }
+
+    /// Where a side pane's tabs start, the sheet's line ends, in columns from the first tab's
+    /// start: beside the file, its sheet starts half way into the column before the tabs; under
+    /// it, at the first tab's own edge.
+    fn sheet_line_end(&self, measure: &dyn cellix_render::Measure) -> f32 {
+        let line = crate::measures::columns(crate::measures::line_pixels(measure), measure);
+        let line = line.unwrap_or(0.0);
+        if self.tabs_flush.get() {
+            line
+        } else {
+            line - 0.5
+        }
+    }
+
+    /// The first tab in the row, views and then sessions: the one beside the sheet's line.
+    fn first_index(&self) -> Option<usize> {
+        let views = self.views().len();
+        if views > 0 {
+            return Some(0);
+        }
+        self.sessions.iter().position(|session| session.tabbed)
+    }
+
+    /// Columns the tab at `index` takes cut to its mark. The first in the row has the sheet's
+    /// line just before it, so it takes what it needs for its mark, and what its program is
+    /// doing, to stand in the middle between that line and its end with its chip `LINE_AIR`
+    /// from the line: in three columns, the first tab's mark stood 22 px from the line and 14
+    /// from its end, and its chip, centred, would have come 4 px from the line (0.11.0's
+    /// release review, A4, 131, 173-peek-narrow; the user's choice, a wider tab).
+    fn least_at(&self, index: usize, face: &Face) -> u16 {
+        let least = self.least(face);
+        if self.in_cells() || Some(index) != self.first_index() {
+            return least;
+        }
+        let cells = cellix_render::CellMeasure;
+        let measure: &dyn cellix_render::Measure = self.measure.as_deref().unwrap_or(&cells);
+        let air = crate::measures::columns(crate::measures::LINE_AIR, measure).unwrap_or(0.5);
+        let wide = marks_wide(face.state) + (MARK_AIR + air) * 2.0 + self.sheet_line_end(measure);
+        ((wide - 0.01).ceil() as u16).max(least)
     }
 
     /// The columns tabs cut short have between them: the row up to the button that maximizes
@@ -3239,11 +3317,12 @@ impl Dock {
             };
             grid.glyph_in(at, area.y, (Icon::ChevronDown, quiet.fg), "▾", quiet);
         };
-        // The tab before, where it ended and whether it was the one in front, for the line
-        // between two behind it side by side.
-        let mut before: Option<(u16, bool)> = None;
-        // Where the dot at the end of a tab cut short stopped, if it follows its name.
-        let mut inked: Option<f32> = None;
+        // The tab before, where it ended, and where its last ink ended unless it was in front
+        // or under the pointer, for the line between two behind it side by side.
+        let mut before: Option<(u16, Option<f32>)> = None;
+        // Where the last tab's ink ends, its × where it keeps room for one, for the +.
+        let mut last_ink: Option<f32> = None;
+        let run_on = crate::measures::words_run_on(measure);
         for (index, (face, tab)) in faces.iter().zip(self.tab_rects(area)).enumerate() {
             // Out of room, only the tab in front has columns; the rest are in its list.
             if tab.w == 0 {
@@ -3268,7 +3347,7 @@ impl Dock {
                 fg: if on || hovered {
                     theme.text.fg
                 } else {
-                    theme.tab.fg
+                    theme.tab_behind()
                 },
                 bg: if on { theme.sidebar.bg } else { theme.tab.bg },
                 ..theme.tab
@@ -3286,23 +3365,42 @@ impl Dock {
             // Two tabs behind the one in front, side by side, have a hairline between them, so
             // the state at the end of one is never read as the next one's, and the room a tab
             // keeps for its × reads as its own: whole, an unselected tab's 54 px after its
-            // dot stood with nothing to say where it ended. The tab in front is its own shape.
-            if !on
-                && !measure.in_cells()
-                && before.is_some_and(|(end, was_on)| !was_on && end == tab.x)
-            {
-                // After a dot that follows its name, in the middle of the air from its ink to
-                // where the next tab's mark starts, as between two files' tabs.
-                let edge = f32::from(tab.x);
-                let x = inked.map_or(edge, |ink| (ink + edge + CUT_ICON - MARK_WIDE / 2.0) / 2.0);
-                let line = Bounds::cells(x, f32::from(area.y) + 0.28, 0.0, 0.44);
-                grid.hairline(line, theme.border);
-            }
-            before = Some((tab.right(), on));
-            inked = None;
+            // dot stood with nothing to say where it ended. The tab in front is its own shape,
+            // and one under the pointer has its chip there. The line stands in the middle of
+            // the air between the ink of the two, as between two files' tabs: at their edge,
+            // it stood nearer the next one's mark by as much as that tab's mark is set in.
+            let after = before.filter(|(end, _)| *end == tab.x).and_then(|b| b.1);
+            let quiet = !on && !hovered && !measure.in_cells();
+            let line = |grid: &mut Grid, first: f32| {
+                if let Some(last) = after.filter(|_| quiet) {
+                    let x = (last + first) / 2.0;
+                    let line = Bounds::cells(x, f32::from(area.y) + 0.28, 0.0, 0.44);
+                    grid.hairline(line, theme.border);
+                }
+            };
             if cut {
                 let marks = (mark, marked(face.mark));
-                inked = cut_tab(grid, tab, face, (style, hovered, marks), (measure, theme));
+                let lead = self.cut_lead(face, measure);
+                // The first tab's room starts at the sheet's line just before it, where the
+                // row gave it the room to stand in the middle of.
+                let first = Some(index) == self.first_index();
+                let edge = if first && tab.w >= self.least_at(index, face) {
+                    f32::from(tab.x) + self.sheet_line_end(measure)
+                } else {
+                    f32::from(tab.x)
+                };
+                let ink = cut_tab(
+                    grid,
+                    (tab, lead, edge),
+                    face,
+                    (style, hovered, marks),
+                    (measure, theme),
+                );
+                if let Some(ink) = ink {
+                    line(grid, ink.0);
+                }
+                before = Some((tab.right(), ink.filter(|_| quiet).map(|ink| ink.1)));
+                last_ink = ink.map(|ink| ink.1);
                 continue;
             }
             // Where the views are icons, the one showing has a column and no tab to draw.
@@ -3334,10 +3432,30 @@ impl Dock {
                 let quiet = Style { fg, ..style };
                 grid.label_at(px, cell, area.y, text, quiet, stop, CONTEXT_SIZE);
             }
+            // What its agent is doing stands in the room a spinner has before the ×, a dot in
+            // its middle: at its start, a needs-you dot stood 24 to 28 px from the × against a
+            // spinner's 19 (0.11.0's release check, m1-agent-tab-asking, 170).
             if let Some(state) = face.state {
-                let at = (parts.state.0 - dot_lead(state, measure), parts.state.1);
-                draw_mark_in(grid, (at, area.y), state, style, theme);
+                draw_mark_in(grid, (parts.state, area.y), state, style, theme);
             }
+            // Where its ink starts and ends, for the line between it and a tab beside it.
+            let first = match face.icon {
+                Some(_) => parts.icon.0 - ICON_SIZE + mark_ink(measure),
+                None => parts.name.0,
+            };
+            let last = match (face.state, &face.context, parts.context) {
+                (Some(state), ..) => state_ink(state, parts.state.0, measure).1,
+                (None, Some(text), Some(((px, _), _))) => px + self.small_width(text),
+                _ => {
+                    parts.name.0 + measure.width(&parts.text, cellix_render::Font::default())
+                        - run_on
+                }
+            };
+            line(grid, first);
+            before = Some((tab.right(), quiet.then_some(last)));
+            // Where its × is, shown or not: the room it keeps for it is its own.
+            let close = parts.close.0 - cellix_render::GLYPH_LEAD;
+            last_ink = Some(close + square(cellix_render::GLYPH, measure) * (1.0 - CLOSE_INK));
             if let Some(at) = parts.pick {
                 chevron(grid, at, style);
             }
@@ -3360,13 +3478,29 @@ impl Dock {
         let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
         // Out of room, the + gives way: the icons at the top right start the same things.
         let plus_shows = self.plus_shows(area);
+        let font = cellix_render::Font::default();
+        let plus_wide = measure.width("+", font);
+        let maximize = self.maximize_button(area);
+        // With the button that maximizes the pane right after it, the + stands in the middle
+        // of the air from the last tab's ink to that button's: at the start of its columns, it
+        // stood 39 px after a tab's × and 34 before the button's ink (0.11.0's release check,
+        // m1-agent-tabs), and 41 and 51 with a column between them.
+        let middle = match last_ink {
+            Some(ink)
+                if !measure.in_cells()
+                    && (maximized || self.maximize_shows(area))
+                    && maximize <= plus + NEW_WIDTH + MAXIMIZE_GAP =>
+            {
+                let side = square(ACTION_ICON, measure);
+                let icon = f32::from(maximize) + f32::from(MAXIMIZE_WIDTH) / 2.0 - ACTION_ICON;
+                (ink + icon + side * MAXIMIZE_INK) / 2.0
+            }
+            _ => f32::from(plus + 1) + plus_wide / 2.0,
+        };
         if on_it && plus_shows {
-            grid.panel(
-                Bounds::inset(button, 0.1, 0.1),
-                16,
-                Some(theme.row_hover),
-                None,
-            );
+            let wide = f32::from(NEW_WIDTH) - 0.2;
+            let at = (middle - wide / 2.0, area.y, wide);
+            crate::measures::bar_chip(grid, at, (16, theme.row_hover), measure);
         }
         let style = Style {
             fg: if on_it {
@@ -3377,12 +3511,13 @@ impl Dock {
             ..theme.tab
         };
         if plus_shows {
-            grid.label(plus + 1, area.y, "+", style, area.right());
+            let at = middle - plus_wide / 2.0;
+            grid.label_at(at, plus + 1, area.y, "+", style, area.right(), 100);
         }
         // Maximized, it stands on the chip a selected icon has, so it's plain how to get back.
         // In a short row it keeps its place at the end of the pane's part of it, where it
         // gave way with the +: a pane that can't be maximized is stuck at its width.
-        let button = Rect::new(self.maximize_button(area), area.y, MAXIMIZE_WIDTH, 1);
+        let button = Rect::new(maximize, area.y, MAXIMIZE_WIDTH, 1);
         if maximized || self.maximize_shows(area) {
             let on_it = hover.is_some_and(|h| button.contains(h.0, h.1));
             if maximized || on_it {
@@ -3392,11 +3527,10 @@ impl Dock {
                     theme.row_hover
                 };
                 // The chip the icons beside it have, around its middle.
-                let (wide, high) = ACTION_PILL;
+                let wide = ACTION_PILL.0;
                 let middle = button.x as f32 + button.w as f32 / 2.0;
-                let top = area.y as f32 + (1.0 - high) / 2.0;
-                let chip = Bounds::cells(middle - wide / 2.0, top, wide, high);
-                grid.panel(chip, HIDE_RADIUS, Some(fill), None);
+                let at = (middle - wide / 2.0, area.y, wide);
+                crate::measures::bar_chip(grid, at, (HIDE_RADIUS, fill), measure);
             }
             let icon = if maximized {
                 Icon::Minimize
@@ -3425,10 +3559,9 @@ impl Dock {
         let middle = hide.x as f32 + 1.0;
         if on_it {
             // The chip the icons beside it have on hover.
-            let (wide, high) = HIDE_PILL;
-            let top = area.y as f32 + (1.0 - high) / 2.0;
-            let chip = Bounds::cells(middle - wide / 2.0, top, wide, high);
-            grid.panel(chip, HIDE_RADIUS, Some(theme.row_hover), None);
+            let wide = HIDE_PILL.0;
+            let at = (middle - wide / 2.0, area.y, wide);
+            crate::measures::bar_chip(grid, at, (HIDE_RADIUS, theme.row_hover), measure);
         }
         let fg = if on_it {
             theme.text.fg
@@ -3583,23 +3716,24 @@ pub fn initial_over(
 }
 
 /// A tab behind the one in front, in a row too short for every tab whole: its mark and what
-/// its program is doing at either end of it, and as much of its name between as fits. Under
-/// the pointer its chip is the tab's width.
+/// its program is doing at either end of it, and as much of its name between as fits. Its
+/// mark and name stand `lead` from its start, where they do while it's in front. Under the
+/// pointer its chip is the tab's width. Where its ink starts and ends, for the line beside it.
 fn cut_tab(
     grid: &mut Grid,
-    tab: Rect,
+    (tab, lead, edge): (Rect, (f32, f32), f32),
     face: &Face,
     (style, hovered, (mark, cut_mark)): (Style, bool, (Option<ProgramMark>, ProgramMark)),
     (measure, theme): (&dyn cellix_render::Measure, &Theme),
-) -> Option<f32> {
+) -> Option<(f32, f32)> {
     let (x, right) = (f32::from(tab.x), f32::from(tab.right()));
+    let font = cellix_render::Font::default();
+    let run_on = crate::measures::words_run_on(measure);
     let icon = mark.is_some();
     let marked = face.state.is_some();
-    let high = 0.8;
-    let top = f32::from(tab.y) + (1.0 - high) / 2.0;
     let chip = |grid: &mut Grid, from: f32, wide: f32| {
-        let chip = Bounds::cells(from, top, wide, high);
-        grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+        let look = (TAB_CHIP_RADIUS, theme.row_hover);
+        crate::measures::bar_chip(grid, (from, tab.y, wide), look, measure);
     };
     // As many letters as a name cut short shows at the least.
     let least = least_cut(&face.text).chars().count();
@@ -3611,29 +3745,24 @@ fn cut_tab(
         let room = f32::from(tab.w) - CUT_AIR * 2.0;
         let text = crate::context::elide(&face.text, room, measure);
         if named(&text) {
+            let wide = measure.width(&text, font);
             if hovered {
-                let font = cellix_render::Font::default();
-                chip(grid, x, measure.width(&text, font) + CUT_AIR * 2.0);
+                chip(grid, x, wide + CUT_AIR * 2.0);
             }
             let (from, cell) = (x + CUT_AIR, tab.x + 1);
             grid.label_at(from, cell, tab.y, &text, style, tab.right(), 100);
-            return None;
+            return Some((from, from + wide - run_on));
         }
-        marks_alone(
+        return Some(marks_alone(
             grid,
-            tab,
+            (tab, edge),
             face,
             (style, hovered, cut_mark),
             (measure, theme),
-        );
-        return None;
+        ));
     }
     // The name, between the mark and the state, where three letters and a "…" have room.
-    let from = if icon {
-        x + CUT_AIR + CUT_SIDE
-    } else {
-        x + CUT_AIR
-    };
+    let from = if icon { x + lead.1 } else { x + CUT_AIR };
     let to = if marked {
         right - CUT_AIR - CUT_SIDE
     } else {
@@ -3648,14 +3777,13 @@ fn cut_tab(
     };
     let text = crate::context::elide(&face.text, room, measure);
     if !named(&text) {
-        marks_alone(
+        return Some(marks_alone(
             grid,
-            tab,
+            (tab, edge),
             face,
             (style, hovered, cut_mark),
             (measure, theme),
-        );
-        return None;
+        ));
     }
     if hovered {
         chip(grid, x, f32::from(tab.w));
@@ -3668,27 +3796,33 @@ fn cut_tab(
         last.max(to.ceil() as u16)
     };
     grid.label_at(from, first, tab.y, &text, style, end, 100);
+    let name_end = from + measure.width(&text, font).min(to - from);
     // Either end of the name.
-    if let Some(mark) = mark {
-        tab_icon(grid, mark, (x + CUT_ICON, tab.x + 1), tab.y, style);
-    }
-    let state = face.state?;
+    let ink = match mark {
+        Some(mark) => {
+            tab_icon(grid, mark, (x + lead.0, tab.x + 1), tab.y, style);
+            x + lead.0 - ICON_SIZE + mark_ink(measure)
+        }
+        None => from,
+    };
+    let Some(state) = face.state else {
+        return Some((ink, name_end - run_on));
+    };
     // On cells, its letter in the column before the last.
     let cell = tab.right().saturating_sub(2);
     if state == TabMark::Working || measure.in_cells() {
         // A spinner is the tab's last ink, as far from its end as its mark is from its start.
-        draw_mark_in(grid, ((right - CUT_MARK, cell), tab.y), state, style, theme);
-        return None;
+        let at = right - CUT_MARK;
+        draw_mark_in(grid, ((at, cell), tab.y), state, style, theme);
+        return Some((ink, state_ink(state, at, measure).1));
     }
-    // A dot follows the name as a whole tab's does, and the column's room the name didn't
-    // need is after it: put at the tab's end, the dot stood 33 px after "pricing page" and
-    // 17 px before the next tab, and read as that one's (0.11.0's release check, R1).
-    let font = cellix_render::Font::default();
-    let after = from + measure.width(&text, font).min(to - from) + STATE_AIR;
-    let at = after - dot_lead(state, measure);
+    // A dot follows the name in the room a spinner would have there, in its middle, as on a
+    // whole tab, so it doesn't move as the tab comes forward; the column's room the name
+    // didn't need is after it. Put at the tab's end, the dot stood 33 px after "pricing page"
+    // and 17 px before the next tab, and read as that one's (0.11.0's release check, R1).
+    let at = name_end + STATE_AIR;
     draw_mark_in(grid, ((at, cell), tab.y), state, style, theme);
-    // Where its ink ends, for the line before the next tab.
-    Some(at + dot_lead(state, measure) + MARK_WIDE * DOT_SHARE)
+    Some((ink, state_ink(state, at, measure).1))
 }
 
 /// A tab behind cut to its mark, its name having no room for three letters: the mark, and
@@ -3697,11 +3831,11 @@ fn cut_tab(
 /// of a chip five columns wide, 16 px before it and 47 after (0.11.0's final review, 166).
 fn marks_alone(
     grid: &mut Grid,
-    tab: Rect,
+    (tab, edge): (Rect, f32),
     face: &Face,
     (style, hovered, mark): (Style, bool, ProgramMark),
     (measure, theme): (&dyn cellix_render::Measure, &Theme),
-) {
+) -> (f32, f32) {
     let x = f32::from(tab.x);
     if measure.in_cells() {
         // A column before the letter, and the state's a column after it.
@@ -3709,20 +3843,73 @@ fn marks_alone(
         if let Some(state) = face.state {
             draw_mark_in(grid, ((x + 3.0, tab.x + 3), tab.y), state, style, theme);
         }
-        return;
+        return (x, f32::from(tab.right()));
     }
     let wide = marks_wide(face.state);
-    let start = x + (f32::from(tab.w) - wide) / 2.0;
+    // In the middle of its room, from `edge`: the first tab's starts at the sheet's line.
+    let start = edge + (f32::from(tab.right()) - edge - wide) / 2.0;
     if hovered {
-        let high = 0.8;
-        let top = f32::from(tab.y) + (1.0 - high) / 2.0;
-        let chip = Bounds::cells(start - MARK_AIR, top, wide + MARK_AIR * 2.0, high);
-        grid.panel(chip, TAB_CHIP_RADIUS, Some(theme.row_hover), None);
+        let at = (start - MARK_AIR, tab.y, wide + MARK_AIR * 2.0);
+        let look = (TAB_CHIP_RADIUS, theme.row_hover);
+        crate::measures::bar_chip(grid, at, look, measure);
     }
     tab_icon(grid, mark, (start + ICON_SIZE, tab.x + 1), tab.y, style);
-    if let Some(state) = face.state {
-        let at = start + ICON_SIZE * 2.0 + CUT_AIR - dot_lead(state, measure);
-        draw_mark_in(grid, ((at, at.floor() as u16), tab.y), state, style, theme);
+    let ink = start + mark_ink(measure);
+    let Some(state) = face.state else {
+        return (ink, start + square(ICON_SIZE, measure) - mark_ink(measure));
+    };
+    let at = start + ICON_SIZE * 2.0 + CUT_AIR - dot_lead(state, measure);
+    draw_mark_in(grid, ((at, at.floor() as u16), tab.y), state, style, theme);
+    (ink, state_ink(state, at, measure).1)
+}
+
+/// What each tab behind the one in front gets, `behind` being their places among `stubs`
+/// (what each takes whole), `named` (three letters and the "…") and `around` (what each takes
+/// besides its name), in a row with `rest` columns for them, as VS Code's shrink mode shares
+/// it: every name longer than a level is cut to it, the highest level that fits, so names
+/// are cut alike, and none goes below three letters and its "…" while another is longer.
+/// Only when all of them at that can't fit does one go to its mark (`least`), the last first,
+/// and the rest then stand at three letters, alike, keeping none of the room it freed. It was
+/// the widest giving a column at a time, one short of three letters going to its mark and the
+/// room that freed going back to the first: Gemini CLI stood at its mark beside "pricing p…"
+/// (0.11.0's release check, R3, m1-agent-tabs; the user's choice, 2026-11-19).
+fn shared(
+    behind: &[usize],
+    (stubs, named, around): (&[u16], &[u16], &[u16]),
+    least: impl Fn(usize) -> u16,
+    rest: u16,
+) -> Vec<(usize, u16)> {
+    let floor = |index: usize| named[index].min(stubs[index]);
+    let mut marked: Vec<usize> = Vec::new();
+    loop {
+        let names: Vec<usize> = (behind.iter().copied())
+            .filter(|index| !marked.contains(index))
+            .collect();
+        let room = rest.saturating_sub(marked.iter().map(|index| least(*index)).sum());
+        let floors: u16 = names.iter().map(|index| floor(*index)).sum();
+        // The last whose mark takes less than its three letters goes to its mark.
+        let gives = (names.iter().rev().copied()).find(|index| least(*index) < floor(*index));
+        if floors > room
+            && let Some(at) = gives
+        {
+            marked.push(at);
+            continue;
+        }
+        let width =
+            |index: usize, level: u16| (around[index] + level).min(stubs[index]).max(floor(index));
+        let top = (names.iter())
+            .map(|index| stubs[*index].saturating_sub(around[*index]))
+            .max()
+            .unwrap_or(0);
+        let fits = |level: u16| names.iter().map(|i| width(*i, level)).sum::<u16>() <= room;
+        let level = if marked.is_empty() {
+            (0..=top).rev().find(|level| fits(*level)).unwrap_or(0)
+        } else {
+            0
+        };
+        let mut out: Vec<(usize, u16)> = names.iter().map(|i| (*i, width(*i, level))).collect();
+        out.extend(marked.iter().map(|index| (*index, least(*index))));
+        return out;
     }
 }
 
@@ -3756,8 +3943,26 @@ fn dot_lead(state: TabMark, measure: &dyn cellix_render::Measure) -> f32 {
         return 0.0;
     }
     // The ring's ink starts 1.4 of the square's 24 parts in, the dot's 6.
-    let square = MARK_SIZE * crate::measures::rows_to_columns(measure) / measure.row_air();
-    square * (6.0 - 1.4) / 24.0
+    square(MARK_SIZE, measure) * (6.0 - 1.4) / 24.0
+}
+
+/// How wide a mark `size` rows tall is painted, in cells: a square on the terminal's line,
+/// whatever the row it stands in.
+fn square(size: f32, measure: &dyn cellix_render::Measure) -> f32 {
+    size * crate::measures::rows_to_columns(measure) / measure.row_air()
+}
+
+/// How far into a program's mark's square its ink starts, in cells: about 2 of its 24.
+fn mark_ink(measure: &dyn cellix_render::Measure) -> f32 {
+    square(ICON_SIZE, measure) * 2.2 / 24.0
+}
+
+/// Where what an agent is doing has its ink, drawn at `at`, in cells: a spinner's ring from
+/// 1.4 of its square's 24 parts to as far from its end, a dot from 6.
+fn state_ink(state: TabMark, at: f32, measure: &dyn cellix_render::Measure) -> (f32, f32) {
+    let side = square(MARK_SIZE, measure);
+    let parts = if state == TabMark::Working { 1.4 } else { 6.0 };
+    (at + side * parts / 24.0, at + side * (24.0 - parts) / 24.0)
 }
 
 /// What an agent is doing, at `x`: turning while it works, a dot when it asks or is done. Its

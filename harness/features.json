@@ -6823,5 +6823,103 @@
     "title": "The Agents list shows only agents with a tab here, and nothing counts one running outside Cellix",
     "test": "the_agents_list_shows_only_agents_with_a_tab_here",
     "passes": true
+  },
+  {
+    "id": "tab-dot-middle-of-room",
+    "milestone": 15,
+    "title": "A dot on an agent's tab stands in the middle of the room a spinner has, before the × and after a name cut short",
+    "test": "a_dot_stands_in_the_middle_of_a_spinners_room",
+    "passes": true
+  },
+  {
+    "id": "tab-forward-in-place",
+    "milestone": 15,
+    "title": "A tab behind cut short has its mark, name and dot where they stand in front, so nothing moves on a click",
+    "test": "a_tab_brought_forward_keeps_its_mark_name_and_dot_in_place",
+    "passes": true
+  },
+  {
+    "id": "tab-line-to-ink",
+    "milestone": 15,
+    "title": "The line between two tabs behind stands in the middle of the air between their ink, files' and the side pane's",
+    "test": "the_line_between_two_whole_tabs_behind_stands_in_their_air",
+    "passes": true
+  },
+  {
+    "id": "tab-plus-between",
+    "milestone": 15,
+    "title": "The + stands in the middle of the air between the last tab and the maximize button after it",
+    "test": "the_plus_stands_in_the_middle_between_the_tabs_and_the_button",
+    "passes": true
+  },
+  {
+    "id": "tab-row-chips-one-height",
+    "milestone": 15,
+    "title": "Every chip in a row of tabs is 34 px of a row of 50, 8 px from the sheet's line",
+    "test": "every_chip_in_the_tab_row_is_one_height",
+    "passes": true
+  },
+  {
+    "id": "peek-close-even",
+    "milestone": 15,
+    "title": "Peek's × is as far from the card's right edge as the helper's mark from its left",
+    "test": "cards_over_the_side_pane_stand_alike_on_both_sides",
+    "passes": true
+  },
+  {
+    "id": "light-tab-behind-quieter",
+    "milestone": 15,
+    "title": "In the light theme a tab behind has its words a step quieter than the one in front's",
+    "test": "a_tab_behind_reads_as_behind_in_the_light_theme",
+    "passes": true
+  },
+  {
+    "id": "cursor-under-tip-hidden",
+    "milestone": 15,
+    "title": "The side pane's terminal cursor goes while a tip covers it",
+    "test": "a_tip_over_the_terminals_cursor_hides_it",
+    "passes": true
+  },
+  {
+    "id": "drag-bar-clear-of-line",
+    "milestone": 15,
+    "title": "A dragged tab's bar stands in the air before the first tab, clear of the sheet's line",
+    "test": "a_dragged_tabs_bar_stands_clear_of_the_sheets_line",
+    "passes": true
+  },
+  {
+    "id": "needs-you-ink-centred",
+    "milestone": 15,
+    "title": "The needs-you chip has its words' ink in its middle",
+    "test": "the_needs_you_chip_has_room_for_its_words_tails",
+    "passes": true
+  },
+  {
+    "id": "failed-step-chip",
+    "milestone": 15,
+    "title": "A transcript's failed step is a chip in the failed colour's tint with 12 px sides",
+    "test": "a_failed_step_is_a_chip_of_the_failed_colour",
+    "passes": true
+  },
+  {
+    "id": "tip-wraps-two-lines",
+    "milestone": 15,
+    "title": "A pane tab's tip longer than its room goes on to a second line",
+    "test": "a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start",
+    "passes": true
+  },
+  {
+    "id": "tabs-share-evenly",
+    "milestone": 15,
+    "title": "Tabs behind share a short row evenly, names cut alike before any goes to its mark",
+    "test": "tabs_behind_share_the_room_evenly",
+    "passes": true
+  },
+  {
+    "id": "first-tab-mark-room",
+    "milestone": 15,
+    "title": "A first tab cut to its mark takes the room to stand in the middle, its chip 8 px from the sheet's line",
+    "test": "a_first_tab_cut_to_its_mark_stands_in_the_middle_of_its_room",
+    "passes": true
   }
 ]

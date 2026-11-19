@@ -270,9 +270,10 @@ fn tab_span(app: &App, row: cellix_render::Rect, index: usize) -> (u16, u16) {
 /// Whether the + is drawn after the tabs, where a click on it starts something.
 fn plus_drawn(app: &App, grid: &Grid, row: cellix_render::Rect) -> bool {
     let plus = app.dock.plus_x(row);
-    let drawn = words(grid, row.y).into_iter().any(|(text, x, ..)| {
-        text == "+" && x >= f32::from(plus) + 1.0 && x < f32::from(plus) + 2.0
-    });
+    // Within its own columns: it stands in the middle of the air before the button after it.
+    let drawn = words(grid, row.y)
+        .into_iter()
+        .any(|(text, x, ..)| text == "+" && x >= f32::from(plus) && x < f32::from(plus) + 3.0);
     drawn && app.dock.hit(row, plus + 1) == Some(TabHit::New)
 }
 
@@ -1081,9 +1082,11 @@ fn the_line_between_two_tabs_cut_short_has_the_same_air_either_side() {
 }
 
 /// A tab behind whose whole name shows has its dot as close after the name as a whole tab's,
-/// about 11 px to the ink, and the room its last column has to spare after the dot: put at
-/// the tab's end, "pricing page"'s dot stood 33 px after the name and 17 px before the next
-/// tab, and read as that one's (0.11.0's release check, R1, m1-agent-tab-done).
+/// in the middle of the room a spinner would have there, about 14 px to the ink, and the room
+/// its last column has to spare after the dot: put at the tab's end, "pricing page"'s dot
+/// stood 33 px after the name and 17 px before the next tab, and read as that one's (0.11.0's
+/// release check, R1, m1-agent-tab-done). It stood at the start of that room, 10 px from the
+/// name, until the dot on a tab in front was centred in it, and this one with it.
 #[test]
 #[cfg(unix)]
 fn a_dot_on_a_tab_behind_follows_its_name() {
@@ -1122,7 +1125,7 @@ fn a_dot_on_a_tab_behind_follows_its_name() {
         let (ink, ink_end) = dot.expect("the dot after the name");
         let after = (ink - end) * 17.0;
         assert!(
-            (8.0..=14.0).contains(&after),
+            (12.0..=17.0).contains(&after),
             "{width}: the dot {after} px after the name: {}",
             grid.row_text(row.y)
         );
@@ -1139,4 +1142,505 @@ fn a_dot_on_a_tab_behind_follows_its_name() {
         seen += 1;
     }
     assert!(seen > 0, "some width shows the whole name with its dot");
+}
+
+/// The middle of what the pane's first agent tab says it's doing, and where the ink of the
+/// tab's × starts, in pixels.
+fn doing_and_close(app: &App) -> (f32, f32) {
+    let grid = screen(app);
+    let row = title(app);
+    let unit = UNIT as f32;
+    let (top, bottom) = (i32::from(row.y) * UNIT, i32::from(row.y + 1) * UNIT);
+    let middle = grid.paint.iter().find_map(|paint| match paint {
+        Paint::Spinner { bounds, .. } if bounds.y >= top && bounds.y < bottom => {
+            let left = bounds.x as f32 / unit;
+            Some(left + bounds.h as f32 / unit * 36.0 / 17.0 / 2.0)
+        }
+        _ => None,
+    });
+    let middle = middle.expect("what it's doing");
+    let close = squares(&grid, row.y, Some(Icon::Close))
+        .into_iter()
+        .find(|c| c.0 > middle)
+        .expect("its ×");
+    (
+        middle * 17.0,
+        (close.0 + (close.1 - close.0) * CLOSE_INK) * 17.0,
+    )
+}
+
+/// What an agent's tab says it's doing stands in the room a spinner has between its name and
+/// its ×, and a dot in the middle of that room: at its start, the needs-you dot on the tab in
+/// front stood 24 to 28 px before the × against a spinner's 19 (0.11.0's release check,
+/// m1-agent-tab-asking, 170), with the room the spinner would fill after it.
+#[test]
+#[cfg(unix)]
+fn a_dot_stands_in_the_middle_of_a_spinners_room() {
+    let (dir, mut app) = project((150, 44));
+    start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.turn_at = Some(0);
+    // Names of several widths, so the room their columns round to differs.
+    for name in ["pricing page", "og tags", "a", "documentation", "refunds"] {
+        app.dock.sessions[0].renamed = Some(name.to_string());
+        app.serve(working());
+        let (spinner, close) = doing_and_close(&app);
+        app.serve(asking());
+        let (dot, dot_close) = doing_and_close(&app);
+        assert_eq!(close, dot_close, "{name}: the × stays where it was");
+        assert!(
+            (dot - spinner).abs() <= 1.0,
+            "{name}: the dot's middle at {dot} px, the spinner's at {spinner}"
+        );
+        // A dot's ink is half its square's: a quarter of the square either side of its middle.
+        let square = crate::dock::MARK_SIZE * 36.0;
+        let before_close = close - (dot + square / 4.0);
+        assert!(
+            before_close <= 25.0,
+            "{name}: the dot's ink {before_close} px before the ×"
+        );
+    }
+}
+
+/// A tab behind cut short has its mark, its name, and a dot that follows its whole name, where
+/// they stand when it's brought forward, so none of them moves on a click: cut short, the first
+/// tab's mark stood 5 px nearer the pane's edge than in front (0.11.0's release check, A7).
+#[test]
+#[cfg(unix)]
+fn a_tab_brought_forward_keeps_its_mark_name_and_dot_in_place() {
+    let (dir, mut app) = project((150, 44));
+    start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.serve(asking());
+    app.open_agent(crate::agents::SHELL.1);
+    let last = app.dock.sessions.len() - 1;
+    app.dock.sessions[last].renamed = Some("Terminal".to_string());
+    app.dock.front = Front::Session;
+    let unit = UNIT as f32;
+    // How the row stands, and where the agent's mark, name and dot are, in pixels.
+    let place = |app: &App| {
+        let grid = screen(app);
+        let row = title(app);
+        let mark = squares(&grid, row.y, Some(Icon::AgentClaude));
+        let name = words(&grid, row.y)
+            .into_iter()
+            .find(|w| w.0.starts_with("pri"))
+            .map(|w| (w.0, w.1 * 17.0));
+        let (top, bottom) = (i32::from(row.y) * UNIT, i32::from(row.y + 1) * UNIT);
+        let dot = grid.paint.iter().find_map(|paint| match paint {
+            Paint::Spinner {
+                bounds, step: None, ..
+            } if bounds.y >= top && bounds.y < bottom => Some(bounds.x as f32 / unit * 17.0),
+            _ => None,
+        });
+        let text = grid.row_text(row.y);
+        (
+            app.dock.fit(row),
+            mark.first().map(|m| m.0 * 17.0),
+            name,
+            dot,
+            text,
+        )
+    };
+    let (mut named, mut whole) = (0, 0);
+    for width in (16..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        app.dock.active = Some(last);
+        let behind = place(&app);
+        app.dock.active = Some(0);
+        let front = place(&app);
+        if behind.0 != Fit::Cut || front.0 != Fit::Cut {
+            continue;
+        }
+        // Where it shows any of its name: cut to its mark it stands in its tab's middle.
+        let (Some(was), Some(name)) = (&behind.2, &front.2) else {
+            continue;
+        };
+        let (mark, then) = (behind.1.unwrap(), front.1.unwrap());
+        assert!(
+            (mark - then).abs() <= 0.5,
+            "{width}: its mark at {mark} px behind and {then} in front: {} / {}",
+            behind.4,
+            front.4
+        );
+        assert!(
+            (was.1 - name.1).abs() <= 0.5,
+            "{width}: its name at {} px behind and {} in front",
+            was.1,
+            name.1
+        );
+        named += 1;
+        if was.0 == name.0 {
+            let (dot, then) = (behind.3.unwrap(), front.3.unwrap());
+            assert!(
+                (dot - then).abs() <= 0.5,
+                "{width}: its dot at {dot} px behind and {then} in front"
+            );
+            whole += 1;
+        }
+    }
+    assert!(
+        named > 0 && whole > 0,
+        "{named} widths named it, {whole} whole"
+    );
+}
+
+/// In the light theme a tab behind reads as behind, a file's and the side pane's: its words a
+/// step quieter than the one in front's, as VS Code's light theme has them, and still 4.5 to 1
+/// on white and on Latte's base. In the light theme's quiet words they were 1.1 to 1 from the
+/// front's (0.11.0's release check, m1-agent-tabs-light).
+#[test]
+#[cfg(unix)]
+fn a_tab_behind_reads_as_behind_in_the_light_theme() {
+    use crate::theme::Theme;
+    let (dir, mut app) = project((150, 44));
+    app.theme = Theme::named(Some("light"));
+    fs::write(dir.path().join("beta.rs"), "fn main() {}\n").unwrap();
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    app.open(&dir.path().join("beta.rs")).unwrap();
+    for name in ["make build", "og tags"] {
+        app.open_agent(crate::agents::SHELL.1);
+        let last = app.dock.sessions.len() - 1;
+        app.dock.sessions[last].renamed = Some(name.to_string());
+    }
+    let grid = screen(&app);
+    let theme = *app.theme();
+    let colour = |y: u16, name: &str| {
+        let found = words(&grid, y).into_iter().find(|w| w.0 == name);
+        found.unwrap_or_else(|| panic!("{name}")).3
+    };
+    let row = title(&app);
+    // The pane's: "og tags" in front, "make build" behind; the files': beta.rs in front.
+    let pairs = [
+        (row.y, "make build", "og tags"),
+        (0, "alpha.txt", "beta.rs"),
+    ];
+    let luminance = |c: cellix_render::Rgb| {
+        let channel = |v: u8| {
+            let v = f32::from(v) / 255.0;
+            if v <= 0.039_28 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(c.0) + 0.7152 * channel(c.1) + 0.0722 * channel(c.2)
+    };
+    let contrast = |a: cellix_render::Rgb, b: cellix_render::Rgb| {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    };
+    for (y, behind, front) in pairs {
+        let (behind, front) = (colour(y, behind), colour(y, front));
+        assert!(
+            contrast(behind, front) >= 1.4,
+            "{behind:?} behind and {front:?} in front"
+        );
+        for ground in [cellix_render::Rgb(255, 255, 255), theme.tab.bg] {
+            assert!(contrast(behind, ground) >= 4.5, "{behind:?} on {ground:?}");
+        }
+    }
+}
+
+/// What a tab behind shows of its name, painted in its columns, if any.
+fn shown_name(app: &App, grid: &Grid, row: cellix_render::Rect, index: usize) -> Option<String> {
+    let (from, to) = tab_span(app, row, index);
+    let found = words(grid, row.y)
+        .into_iter()
+        .find(|w| w.1 >= f32::from(from) && w.1 < f32::from(to));
+    found.map(|w| w.0)
+}
+
+/// In a row too short for every tab whole, those behind the one in front share the room
+/// evenly, as VS Code's shrink mode does: every name longer than a level is cut to it, so
+/// names are cut alike, and none goes to its mark while another keeps more than three letters.
+/// Gemini CLI stood at its mark while Claude Code kept "pricing p…" (0.11.0's release check,
+/// R3, m1-agent-tabs; the user's choice).
+#[test]
+#[cfg(unix)]
+fn tabs_behind_share_the_room_evenly() {
+    let (_dir, mut app) = project((150, 44));
+    let names = [
+        "the documentation's navigation",
+        "pricing page and refunds",
+        "landing hero section copy",
+        "og tags",
+    ];
+    for name in names {
+        app.open_agent(crate::agents::SHELL.1);
+        let last = app.dock.sessions.len() - 1;
+        app.dock.sessions[last].renamed = Some(name.to_string());
+    }
+    app.dock.active = Some(3);
+    app.dock.front = Front::Session;
+    let font = Font::default();
+    let (mut alike, mut marks) = (0, 0);
+    for width in (16..100).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let grid = screen(&app);
+        let row = title(&app);
+        if app.dock.fit(row) != Fit::Cut {
+            continue;
+        }
+        let text = grid.row_text(row.y);
+        let shown: Vec<Option<String>> = (0..3).map(|i| shown_name(&app, &grid, row, i)).collect();
+        let cut: Vec<&String> = shown
+            .iter()
+            .flatten()
+            .filter(|name| name.ends_with('…'))
+            .collect();
+        if shown.iter().any(Option::is_none) {
+            // One at its mark: the others show three letters and the "…", alike.
+            for name in shown.iter().flatten() {
+                assert!(
+                    name.trim_end_matches('…').chars().count() <= 3,
+                    "{width}: {name:?} beside a tab at its mark: {text}"
+                );
+            }
+            marks += 1;
+            continue;
+        }
+        // Each cut to the same width, give or take a letter and the column it rounds to.
+        let widths: Vec<f32> = cut.iter().map(|name| measure().width(name, font)).collect();
+        let (least, most) = (
+            widths.iter().copied().fold(f32::MAX, f32::min),
+            widths.iter().copied().fold(0.0, f32::max),
+        );
+        assert!(
+            most - least <= 1.6,
+            "{width}: {cut:?} measure {widths:?}: {text}"
+        );
+        // A name shorter than that stays whole.
+        for (name, full) in shown.iter().zip(names) {
+            let name = name.as_ref().unwrap();
+            if !name.ends_with('…') && !cut.is_empty() {
+                assert_eq!(name, full, "{width}: {text}");
+                assert!(measure().width(full, font) <= most + 0.6, "{width}: {text}");
+            }
+        }
+        if cut.len() >= 2 {
+            alike += 1;
+        }
+    }
+    assert!(
+        alike > 3 && marks > 0,
+        "{alike} widths cut alike, {marks} with marks"
+    );
+}
+
+/// A first tab cut to its mark has the room it needs for its mark to stand in the middle
+/// between the sheet's line just before it and its own end, and for its chip under the
+/// pointer to keep 8 px from that line: in three columns it stood 22 px from the line and 14
+/// from its end, and centred, its chip came 4 px from the line (0.11.0's release review, A4,
+/// 131, 173-peek-narrow; the user's choice, a wider tab).
+#[test]
+#[cfg(unix)]
+fn a_first_tab_cut_to_its_mark_stands_in_the_middle_of_its_room() {
+    let (dir, mut app) = project((150, 44));
+    app.open_agent(crate::agents::SHELL.1);
+    app.dock.sessions[0].renamed = Some("make build".to_string());
+    start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.dock.active = Some(1);
+    app.dock.front = Front::Session;
+    let theme = *app.theme();
+    let mut seen = 0;
+    for width in (16..60).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        mouse(&mut app, MouseKind::Move, 0, 40);
+        let grid = screen(&app);
+        let row = title(&app);
+        if app.dock.fit(row) != Fit::Cut || shown_name(&app, &grid, row, 0).is_some() {
+            continue;
+        }
+        let (from, to) = tab_span(&app, row, 0);
+        // Where the row has the column for it: where it hasn't, every tab staying in the row
+        // comes first, and the mark stands in the middle of its three.
+        if to - from < 4 {
+            continue;
+        }
+        // The sheet's line, half way into the column before the tabs, two pixels thick.
+        let area = app.dock_area().unwrap();
+        let line = (f32::from(area.x) + 0.5) * 17.0 + 2.0;
+        let mark = squares(&grid, row.y, Some(Icon::Terminal))
+            .into_iter()
+            .find(|m| m.0 >= f32::from(from) - 1.0 && m.0 < f32::from(to))
+            .expect("its mark");
+        // The prompt's ink starts 2.4 of its 24 in, and ends 2.4 before its box does.
+        let ink = 2.4 / 24.0 * (mark.1 - mark.0);
+        let (before, after) = (
+            (mark.0 + ink) * 17.0 - line,
+            f32::from(to) * 17.0 - (mark.1 - ink) * 17.0,
+        );
+        assert!(
+            (before - after).abs() <= 2.0,
+            "{width}: {before} px from the line to its mark, {after} from it to its end"
+        );
+        // Under the pointer, its chip 8 px or more from the line.
+        mouse(&mut app, MouseKind::Move, from + 1, row.y);
+        let grid = screen(&app);
+        let (top, bottom) = (i32::from(row.y) * UNIT, i32::from(row.y + 1) * UNIT);
+        let chip = grid.paint.iter().find_map(|paint| match paint {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == theme.row_hover && bounds.y >= top && bounds.y < bottom => {
+                Some(bounds.x as f32 / UNIT as f32 * 17.0)
+            }
+            _ => None,
+        });
+        let chip = chip.expect("its chip");
+        assert!(
+            chip - line >= 8.0,
+            "{width}: its chip {} px from the line",
+            chip - line
+        );
+        seen += 1;
+    }
+    assert!(seen > 0, "some width cuts the first tab to its mark");
+}
+
+/// The side pane's terminal's cursor goes while a tip covers its cell: the tip covers the
+/// terminal's first row but the top of it, and a sliver of the cursor stood on its top edge
+/// (0.11.0's release check, R4, 166-pane-tabs-cut-hover). Without the tip it's there.
+#[test]
+#[cfg(unix)]
+fn a_tip_over_the_terminals_cursor_hides_it() {
+    let (dir, mut app) = project((150, 44));
+    app.set_measure(Rc::new(
+        cellix_render::FontMeasure::new(17, 50).with_type_row(36),
+    ));
+    app.open_agent(crate::agents::SHELL.1);
+    app.dock.sessions[0].renamed = Some("the documentation's navigation".to_string());
+    // An agent that prints nothing, so its cursor stays in its first cell.
+    let agent = start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.dock.active = Some(agent);
+    app.dock.front = Front::Session;
+    app.dock.focused = true;
+    let theme = *app.theme();
+    let mut seen = false;
+    let mut tried = Vec::new();
+    for width in (30..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        // Where the tabs stop is known once the row is drawn.
+        let _ = screen(&app);
+        let row = title(&app);
+        let (from, _) = tab_span(&app, row, 0);
+        if app.dock.cut_name(row, from).is_none() {
+            tried.push((width, app.dock.fit(row), from));
+            continue;
+        }
+        let screen_area = app.dock_screen().unwrap();
+        let cursor = app.dock.sessions[agent].cursor_in(screen_area, true);
+        let (x, y) = cursor.expect("its cursor, in its first cell");
+        mouse(&mut app, MouseKind::Move, 0, 40);
+        let grid = screen(&app);
+        assert_eq!(grid.cell(x, y).style.bg, theme.text.fg, "the cursor shows");
+        // Under the pointer, the tab cut short has its name in a tip under it.
+        mouse(&mut app, MouseKind::Move, from + 1, row.y);
+        let grid = screen(&app);
+        let tip = grid.paint.iter().any(|paint| {
+            matches!(paint, Paint::Panel { shadow: true, fill: Some(fill), .. }
+                if *fill == theme.popup)
+        });
+        assert!(tip, "{width}: a tip under the tab");
+        let cell = grid.cell(x, y);
+        assert_eq!(
+            (cell.style.fg, cell.style.bg),
+            (theme.text.fg, theme.sidebar.bg),
+            "{width}: the cursor under the tip goes"
+        );
+        seen = true;
+        break;
+    }
+    assert!(seen, "some width cuts the first tab short: {tried:?}");
+}
+
+/// With the button that maximizes the pane right after it, the + stands in the middle of the
+/// air from the last tab's ink to that button's, measured in the picture, whether the tabs are
+/// whole or cut short: at the start of its columns it stood 39 px after the last tab's × and
+/// 34 before the button (0.11.0's release check, m1-agent-tabs), and with a column between
+/// them, 41 and 51.
+#[test]
+#[cfg(unix)]
+fn the_plus_stands_in_the_middle_between_the_tabs_and_the_button() {
+    let (dir, mut app) = project((150, 44));
+    start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.serve(working());
+    app.turn_at = Some(0);
+    for name in ["documentation", "og tags"] {
+        app.open_agent(crate::agents::SHELL.1);
+        let last = app.dock.sessions.len() - 1;
+        app.dock.sessions[last].renamed = Some(name.to_string());
+    }
+    app.dock.active = Some(2);
+    app.dock.front = Front::Session;
+    let theme = *app.theme();
+    let (mut whole, mut cut) = (0, 0);
+    for width in (30..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let grid = screen(&app);
+        let row = title(&app);
+        let (plus, button) = (app.dock.plus_x(row), app.dock.maximize_button(row));
+        if !app.dock.plus_shows(row) || !app.dock.maximize_shows(row) || button > plus + 4 {
+            continue;
+        }
+        let rows = super::strip_tests::picture(&grid, row.y);
+        let from = usize::from(plus) * 17 - 34;
+        let to = usize::from(button + 3) * 17;
+        let runs = super::strip_tests::ink_runs(&rows, theme.tab.bg, (from, to));
+        // The + in its columns, the last tab's last ink before it, and the button's after it.
+        let own = usize::from(plus) * 17..usize::from(plus + 3) * 17;
+        let found = runs.iter().position(|run| own.contains(&run.0));
+        let (Some(at), true) = (found, found.is_some_and(|at| at > 0 && at + 1 < runs.len()))
+        else {
+            panic!("{width}: {runs:?}: {}", grid.row_text(row.y));
+        };
+        let (tab, sign, maximize) = (runs[at - 1], runs[at], runs[at + 1]);
+        let (before, after) = (sign.0 - tab.1, maximize.0 - sign.1);
+        assert!(
+            before.abs_diff(after) <= 2,
+            "{width}: {before} px before the +, {after} after it, of {runs:?}, the + at {plus} \
+             and the button at {button}: {}",
+            grid.row_text(row.y)
+        );
+        match app.dock.fit(row) {
+            Fit::Whole => whole += 1,
+            _ => cut += 1,
+        }
+    }
+    assert!(whole > 0 && cut > 0, "{whole} widths whole, {cut} cut");
+}
+
+/// Two whole tabs behind the one in front have the line between them in the middle of the
+/// air from the first one's ink to the next one's mark's, as two files' tabs do, measured in
+/// the picture: at their edge, it stood after the room the first keeps for its ×, about 40 px
+/// from its name and 17 from the next mark.
+#[test]
+#[cfg(unix)]
+fn the_line_between_two_whole_tabs_behind_stands_in_their_air() {
+    let (_dir, mut app) = project((150, 44));
+    for name in ["make build", "Terminal"] {
+        app.open_agent(crate::agents::SHELL.1);
+        let last = app.dock.sessions.len() - 1;
+        app.dock.sessions[last].renamed = Some(name.to_string());
+    }
+    app.run(Command::ShowComments);
+    app.dock.width = Some(80);
+    app.handle(Event::Resize(150, 44));
+    let grid = screen(&app);
+    let row = title(&app);
+    assert_eq!(app.dock.fit(row), Fit::Whole, "{}", grid.row_text(row.y));
+    let theme = *app.theme();
+    let lines = super::strip_tests::line_air(&grid, row.y, theme.border, theme.tab.bg);
+    assert_eq!(lines.len(), 1, "{lines:?}: {}", grid.row_text(row.y));
+    let (before, after) = lines[0];
+    eprintln!("whole pane tabs: {before} / {after}");
+    assert!(
+        before.abs_diff(after) <= 2,
+        "{before} px after make build's ink, {after} before Terminal's mark's"
+    );
 }

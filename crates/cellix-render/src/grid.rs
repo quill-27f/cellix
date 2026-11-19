@@ -35,7 +35,7 @@ pub const SMALL_GLYPH: f32 = 0.70;
 pub const FIELD_AIR: f32 = 0.0625;
 /// Columns such an icon starts before where it's asked for, which keeps its middle where an
 /// icon of 0.72 of a row had it, so it grew evenly to both sides.
-const GLYPH_LEAD: f32 = 0.15;
+pub const GLYPH_LEAD: f32 = 0.15;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Rgb(pub u8, pub u8, pub u8);

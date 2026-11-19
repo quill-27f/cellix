@@ -59,6 +59,10 @@ pub enum Tone {
     Deleted,
     /// What failed, in the colour of failure.
     Failed,
+    /// A highlight that says a step failed, `==failed==` as a transcript has it: the word in
+    /// the colour of failure on a chip of its tint, with room either side of it. It was a
+    /// highlighter's amber, 2 px past the word (0.11.0's final review, T9).
+    FailedChip,
     /// An equation's number, moved this many 64ths of a row from the middle of its row.
     Margin(i8),
     /// A reviewer's note in the text (`{>>note<<}`), and the comment's ◆ it's shown after.
@@ -724,6 +728,34 @@ fn closing(chars: &[char], from: usize, marker: &[char]) -> Option<usize> {
         .find(|i| chars[*i..].starts_with(marker) && *i > from)
 }
 
+/// `==failed==` at the start of `rest`, as a transcript marks the step that went wrong: the
+/// word on a chip of the failed colour's tint, two spaces either side of it keeping room for
+/// the chip's sides. Returns how many letters of `rest` it took.
+fn failed_chip(rest: &[char], at: usize, look: Look, out: &mut Vec<Glyph>) -> Option<usize> {
+    const WORD: &str = "failed";
+    let length = WORD.chars().count();
+    let marked = rest.starts_with(&['=', '='])
+        && rest.get(2 + length..2 + length + 2) == Some(&['=', '='][..])
+        && rest[2..2 + length]
+            .iter()
+            .zip(WORD.chars())
+            .all(|(a, b)| a.eq_ignore_ascii_case(&b));
+    if !marked {
+        return None;
+    }
+    let chip = Look {
+        tone: Tone::FailedChip,
+        ..look
+    };
+    let room = |out: &mut Vec<Glyph>| out.extend([glyph(' ', None, chip), glyph(' ', None, chip)]);
+    room(out);
+    for (n, c) in rest[2..2 + length].iter().enumerate() {
+        out.push(glyph(*c, Some(at + 2 + n), chip));
+    }
+    room(out);
+    Some(length + 4)
+}
+
 /// Turns one span of text into glyphs, hiding emphasis, code and link markers.
 fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mut Vec<Glyph>) {
     let mut i = 0;
@@ -816,6 +848,8 @@ fn inline(chars: &[char], offset: usize, look: Look, context: &Context, out: &mu
             replacement(rest, look, at, context, out)
         } else if rest.starts_with(&['~', '~']) {
             wrap(&['~', '~'], toned(Tone::Struck, None), out)
+        } else if let Some(used) = failed_chip(rest, at, look, out) {
+            Some(used)
         } else if rest.starts_with(&['=', '=']) && rest.get(2).is_some_and(|c| *c != ' ') {
             wrap(&['=', '='], toned(Tone::Marked, None), out)
         } else if tight('~') {

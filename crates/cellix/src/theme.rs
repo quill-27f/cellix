@@ -118,6 +118,13 @@ impl Theme {
         }
     }
 
+    /// What a step that failed stands on, as a chip: the failed colour's tint, as strong as
+    /// the chip that says an agent needs the person is of its colour.
+    pub fn failed_tint(&self) -> Rgb {
+        let share = if self.is_light() { 0.12 } else { 0.16 };
+        mix(self.text.bg, self.deleted(), share)
+    }
+
     /// What highlighted text stands on.
     pub fn highlighter(&self) -> Rgb {
         if self.is_light() {
@@ -376,6 +383,19 @@ impl Theme {
             Rgb(0x6c, 0x6f, 0x85)
         } else {
             self.popup_dim
+        }
+    }
+
+    /// The words of a tab behind the one in front, a file's or the side pane's. Dark, the
+    /// tabs' quiet words. Light, a step quieter than the one in front's, as VS Code's light
+    /// theme has them (#868686 against #3b3b3b), and 4.6 to 1 or more on Latte's base and on
+    /// white: in the light theme's quiet words they were 1.1 to 1 from the front's, and a tab
+    /// behind read as the one in front (0.11.0's release check, m1-agent-tabs-light).
+    pub fn tab_behind(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0x68, 0x6b, 0x81)
+        } else {
+            self.tab.fg
         }
     }
 

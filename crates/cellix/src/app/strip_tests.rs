@@ -179,17 +179,103 @@ fn the_count_at_the_strips_start_keeps_clear_of_the_edge() {
     );
 }
 
+/// Row `y` as the tour's terminal shows it, rows of 50 px with words set for 36: each pixel
+/// row's colours, from the window's left edge.
+pub(super) fn picture(grid: &Grid, y: u16) -> Vec<Vec<cellix_render::Rgb>> {
+    use cellix_render::{Rasterizer, SoftwareRasterizer};
+    let mut rasterizer = SoftwareRasterizer::new(17, 50)
+        .expect("fonts are in the binary")
+        .with_type_row(36);
+    let image = rasterizer.row(grid, y);
+    (0..image.height)
+        .map(|line| {
+            (0..image.width)
+                .map(|x| {
+                    let at = (line * image.width + x) * 3;
+                    cellix_render::Rgb(image.rgb[at], image.rgb[at + 1], image.rgb[at + 2])
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Whether two colours are apart by more than a hair.
+pub(super) fn apart(a: cellix_render::Rgb, b: cellix_render::Rgb) -> bool {
+    let d = |p: u8, q: u8| p.abs_diff(q) > 24;
+    d(a.0, b.0) || d(a.1, b.1) || d(a.2, b.2)
+}
+
+/// The runs of columns with ink in them, from pixel `from` to `to`, on a picture of a row:
+/// what isn't `ground` in its middle, clear of the accent's line at its foot. Runs closer
+/// than 4 px are one.
+pub(super) fn ink_runs(
+    rows: &[Vec<cellix_render::Rgb>],
+    ground: cellix_render::Rgb,
+    (from, to): (usize, usize),
+) -> Vec<(usize, usize)> {
+    let inked = |x: usize| (10..40).any(|line| apart(rows[line][x], ground));
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for x in from..to.min(rows[0].len()) {
+        if !inked(x) {
+            continue;
+        }
+        match runs.last_mut() {
+            Some(run) if x - run.1 <= 4 => run.1 = x,
+            _ => runs.push((x, x)),
+        }
+    }
+    runs
+}
+
+/// Each line between two tabs on row `y`, drawn as the tour's terminal shows it, with the air
+/// either side of it in pixels: from the last ink before it to the line, and from the line to
+/// the first ink after it. `ground` is the row's colour where nothing is drawn.
+pub(super) fn line_air(
+    grid: &Grid,
+    y: u16,
+    border: cellix_render::Rgb,
+    ground: cellix_render::Rgb,
+) -> Vec<(usize, usize)> {
+    use cellix_render::{Paint, UNIT};
+    let rows = picture(grid, y);
+    let width = rows[0].len();
+    // Words and marks stand in the row's middle, clear of the accent's line at its foot.
+    let inked = |x: usize| (10..40).any(|line| apart(rows[line][x], ground));
+    let lines = grid.paint.iter().filter_map(|p| match p {
+        Paint::Hairline { bounds, color }
+            if *color == border
+                && bounds.w == 0
+                && bounds.y >= i32::from(y) * UNIT
+                && bounds.y < i32::from(y + 1) * UNIT =>
+        {
+            Some((bounds.x as f32 / UNIT as f32 * 17.0).round() as usize)
+        }
+        _ => None,
+    });
+    lines
+        .map(|line| {
+            // The line is two pixels from its place on, on a Retina screen.
+            let left = (0..line).rev().find(|x| inked(*x));
+            let right = (line + 2..width).find(|x| inked(*x));
+            let (left, right) = (left.expect("ink before"), right.expect("ink after"));
+            (line - left - 1, right - line - 2)
+        })
+        .collect()
+}
+
 /// The line between two file tabs behind the one in front stands in the middle of the air
 /// between what the first paints, its name while its × shows only under the pointer, and the
-/// second one's mark: at their edge it stood 55 px after README.md and 16 before PLAN.md
-/// (0.11.0's release review, A7, m4-tabs-wheel).
+/// second one's mark, measured to the ink: at their edge it stood 55 px after README.md and 16
+/// before PLAN.md (0.11.0's release review, A7), and in the middle of their measures 37 and 32
+/// (its release check, m4-tabs-wheel). A tab behind keeps its ×'s room, as VS Code's do, so
+/// that it doesn't move under the pointer: the line can't stand nearer either than about 34.
 #[test]
 fn the_line_between_two_file_tabs_stands_in_the_middle_of_their_air() {
-    use cellix_render::{Font, Measure, Paint, UNIT};
+    use cellix_render::{Paint, UNIT};
     let dir = tempfile::tempdir().unwrap();
     let mut app = App::new(dir.path().to_path_buf(), (150, 30));
-    let measure = cellix_render::FontMeasure::new(17, 36);
-    app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 36)));
+    let airy = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+    app.set_measure(std::rc::Rc::new(airy));
     for name in ["queue.rs", "README.md", "PLAN.md"] {
         let path = dir.path().join(name);
         fs::write(&path, "text\n").unwrap();
@@ -197,45 +283,17 @@ fn the_line_between_two_file_tabs_stands_in_the_middle_of_their_air() {
     }
     app.show_tab(0);
     let grid = screen(&app);
-    let unit = UNIT as f32;
-    let lines: Vec<f32> = (grid.paint.iter())
-        .filter_map(|p| match p {
-            Paint::Hairline { bounds, color }
-                if *color == app.theme().border
-                    && bounds.w == 0
-                    && bounds.y < UNIT
-                    && bounds.h < UNIT =>
-            {
-                Some(bounds.x as f32 / unit)
-            }
-            _ => None,
-        })
-        .collect();
+    let theme = *app.theme();
+    let lines = line_air(&grid, 0, theme.border, theme.tab.bg);
     assert_eq!(
         lines.len(),
         1,
         "one line, between the two behind: {lines:?}"
     );
-    let line = lines[0];
-    let name = (grid.paint.iter())
-        .find_map(|p| match p {
-            Paint::Text { x, y: 0, text, .. } if text == "README.md" => Some(*x as f32 / unit),
-            _ => None,
-        })
-        .expect("README.md");
-    let name_end = name + measure.width("README.md", Font::default());
-    let mark = (grid.paint.iter())
-        .filter_map(|p| match p {
-            Paint::Icon { bounds, .. } if bounds.y < UNIT => Some(bounds.x as f32 / unit),
-            _ => None,
-        })
-        .find(|x| *x > line)
-        .expect("PLAN.md's mark");
-    // Its ink about 2 px into its box.
-    let (before, after) = ((line - name_end) * 17.0, (mark - line) * 17.0 + 2.0);
+    let (before, after) = lines[0];
     assert!(
-        (before - after).abs() <= 4.0,
-        "{before} px after README.md, {after} before PLAN.md's mark"
+        before.abs_diff(after) <= 2,
+        "{before} px after README.md's ink, {after} before PLAN.md's mark's"
     );
     // Beside a tab under the pointer, whose × and its chip stand there, there's none.
     let (_, x, _) = app.visible_tabs()[1];
@@ -326,4 +384,133 @@ fn a_tabs_close_chip_stands_clear_of_its_line() {
     let (line_top, _) = stood(under.y, under.h, row, line);
     let clear = line_top - (top + tall);
     assert!(clear >= 8.0, "{clear} px over the line");
+}
+
+/// Every chip in the row of a file's tabs is one height, 34 px of a row of 50, with 8 px over
+/// and under it and so 8 px to the sheet's line under the row: the count of tabs out of view,
+/// and under the pointer the sidebar's button and the icons at the top right. The count's was
+/// 35 px and the others' a control's 39, 5 px over the line (0.11.0's release check, m4).
+#[test]
+fn every_chip_in_the_tab_row_is_one_height() {
+    use cellix_render::{Paint, UNIT, stood};
+    let (_dir, mut app) = many_files(8, (84, 40));
+    let (row, line) = (50.0, 36.0);
+    app.set_measure(std::rc::Rc::new(
+        cellix_render::FontMeasure::new(17, 50).with_type_row(36),
+    ));
+    app.show_tab(7);
+    let theme = *app.theme();
+    // The chips on row 0 in the hover colour over column `x`, or all of them, as a top and a
+    // height in pixels.
+    let chips = |app: &App, x: Option<u16>| -> Vec<(f32, f32)> {
+        let grid = screen(app);
+        let over = |bounds: &cellix_render::Bounds| {
+            x.is_none_or(|x| {
+                let x = i32::from(x) * UNIT + UNIT / 2;
+                bounds.x <= x && bounds.x + bounds.w >= x
+            })
+        };
+        let found = grid.paint.iter().filter_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                inset: kept,
+                ..
+            } if *fill == theme.row_hover && bounds.y < UNIT && over(bounds) => {
+                // Kept at the terminal's line's height, or stood as a taller row stands it.
+                Some(if *kept {
+                    cellix_render::inset(bounds.y, bounds.h, row, line)
+                } else {
+                    stood(bounds.y, bounds.h, row, line)
+                })
+            }
+            _ => None,
+        });
+        found.collect()
+    };
+    let count = chips(&app, None);
+    assert_eq!(count.len(), 1, "the count of tabs out of view: {count:?}");
+    let mut seen = vec![("the count", count[0])];
+    // Each icon at the top right, under the pointer, and then, the sidebar hidden, the
+    // button at the start of the tabs that shows it.
+    let mut spots = Vec::new();
+    for (cell, ..) in app.pane_actions() {
+        if cell.y == 0 {
+            spots.push(("an icon at the top right", cell.x + 1));
+        }
+    }
+    assert!(spots.len() > 1, "{spots:?}");
+    let mut pointed = |app: &mut App, what: &'static str, x: u16| {
+        wheel(app, MouseKind::Move, x, 0);
+        let found = chips(app, Some(x));
+        assert_eq!(found.len(), 1, "{what} at {x}: {found:?}");
+        seen.push((what, found[0]));
+    };
+    for (what, x) in spots {
+        pointed(&mut app, what, x);
+    }
+    app.handle(Event::Key(cellix_input::KeyEvent::ctrl('b')));
+    assert!(app.sidebar_button(), "the button at the start of the tabs");
+    let button = app.main_area().x + 1;
+    pointed(&mut app, "the sidebar's button", button);
+    for (what, (top, tall)) in &seen {
+        assert!(
+            (33.5..=34.5).contains(tall),
+            "{what}: {tall} px tall: {seen:?}"
+        );
+        // 8 px over and under, to a 64th of a row.
+        assert!(
+            *top >= 7.4 && row - (top + tall) >= 7.4,
+            "{what}: {top} to {} of a row of {row}",
+            top + tall
+        );
+    }
+}
+
+/// A tab dragged to the start of the strip has its bar in the middle of the air between the
+/// sheet's line and the first tab's mark, 8 px or more from each: it stood on the sheet's line
+/// and read as that line lit (0.11.0's release check, R5, 97-tab-drag-reorder).
+#[test]
+fn a_dragged_tabs_bar_stands_clear_of_the_sheets_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 30));
+    app.set_measure(std::rc::Rc::new(
+        cellix_render::FontMeasure::new(17, 50).with_type_row(36),
+    ));
+    for name in ["queue.rs", "results.md", "notes.txt"] {
+        let path = dir.path().join(name);
+        fs::write(&path, "text\n").unwrap();
+        app.open(&path).unwrap();
+    }
+    let tabs = app.visible_tabs();
+    let y = app.tabs_area().y;
+    let (last, first) = (tabs[2].1 + 3, tabs[0].1);
+    wheel(&mut app, MouseKind::Left, last, y);
+    wheel(&mut app, MouseKind::Drag, first, y);
+    let grid = screen(&app);
+    let theme = *app.theme();
+    let rows = picture(&grid, y);
+    // The bar: the accent, upright, in the row's middle.
+    let accent = |x: usize| (20..30).all(|line| !apart(rows[line][x], theme.accent));
+    let edge = usize::from(first) * 17;
+    let bar: Vec<usize> = (edge.saturating_sub(17)..edge + 40)
+        .filter(|x| accent(*x))
+        .collect();
+    assert!(!bar.is_empty(), "the bar at the strip's start");
+    let (from, to) = (bar[0], bar[bar.len() - 1]);
+    // What's either side of it on the row's ground: the sheet's line, and the first mark.
+    // Past the pixel either side the bar shades. The sheet's line is faint, 22 from the ground
+    // in each of its colours, so anything 12 away counts.
+    let ground = theme.tab.bg;
+    let faint = |a: cellix_render::Rgb| {
+        a.0.abs_diff(ground.0) > 12 || a.1.abs_diff(ground.1) > 12 || a.2.abs_diff(ground.2) > 12
+    };
+    let inked = |x: usize| (10..40).any(|l| faint(rows[l][x]));
+    let left = (0..from.saturating_sub(1)).rev().find(|x| inked(*x));
+    let right = (to + 2..rows[0].len()).find(|x| inked(*x));
+    let (before, after) = (from - left.unwrap() - 1, right.unwrap() - to - 1);
+    assert!(
+        before >= 7 && after >= 7 && before.abs_diff(after) <= 2,
+        "{before} px from the line to the bar at {from}..{to}, {after} from the bar to the mark"
+    );
 }
