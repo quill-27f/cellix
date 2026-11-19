@@ -64,6 +64,12 @@ struct TextMask {
 /// edge of a curve doesn't move where words stand by a whole pixel.
 const INK: u8 = 85;
 
+/// What a button's words are stood by in its middle, whatever letters they have: a capital's
+/// top to a tail's foot in their font. Each by its own ink, words without tails stood lower than
+/// words with them, a row of buttons had as many baselines, and "Dismiss" stood 4 px under its
+/// button's top and 10 over its foot (0.11.0's polish review).
+const SPAN: &str = "Hg";
+
 /// The first and last rows of a `width`-wide picture whose `alpha` reaches `INK` anywhere.
 fn ink_rows(alpha: &[u8], width: usize) -> Option<(usize, usize)> {
     let mut rows = alpha
@@ -507,57 +513,7 @@ impl SoftwareRasterizer {
         mask
     }
 
-    /// The ink each of `paint` stands by where it's words that stand by their ink
-    /// (`Paint::Text`'s `ink_centred`): the ink every such run of one size on the same row of
-    /// one band has together, the highest capital's top to the lowest tail among them. Buttons
-    /// side by side so keep one baseline, and one whose words have no tails beside one whose
-    /// have stands as that one does: each by its own ink, "Keep" stood 2 px over "Dismiss"
-    /// beside it and "Next" 3 px under "Reject All". A band is a tile of its own, drawn from
-    /// what's in it, so it's the band's words that are taken together.
-    fn shared_inks(&mut self, grid: &Grid, y: u16, paint: &[Paint]) -> Vec<Option<(usize, usize)>> {
-        let spans = grid.spans(y);
-        let band = |x: i32| {
-            spans
-                .iter()
-                .position(|(from, to)| x >= i32::from(*from) * UNIT && x < i32::from(*to) * UNIT)
-        };
-        let keys: Vec<_> = paint
-            .iter()
-            .map(|p| match p {
-                Paint::Text {
-                    x,
-                    y,
-                    font,
-                    ink_centred: true,
-                    ..
-                } => Some((*y, *font, band(*x))),
-                _ => None,
-            })
-            .collect();
-        let mut together = HashMap::new();
-        for (p, key) in paint.iter().zip(&keys) {
-            let (Paint::Text { text, font, .. }, Some(key)) = (p, key) else {
-                continue;
-            };
-            let Some((first, last)) = self.text_mask(text, *font).ink else {
-                continue;
-            };
-            together
-                .entry(*key)
-                .and_modify(|(top, foot): &mut (usize, usize)| {
-                    *top = (*top).min(first);
-                    *foot = (*foot).max(last);
-                })
-                .or_insert((first, last));
-        }
-        keys.iter()
-            .map(|key| key.and_then(|key| together.get(&key).copied()))
-            .collect()
-    }
-
-    /// Draws one paint, with `ink` the ink it stands by if it's words standing by theirs
-    /// (`shared_inks`).
-    fn draw_paint(&mut self, target: &mut Target, paint: &Paint, ink: Option<(usize, usize)>) {
+    fn draw_paint(&mut self, target: &mut Target, paint: &Paint) {
         let (cw, ch) = (self.cell.0 as f32, self.cell.1 as f32);
         // What sizes are taken from: the row's own height, or the terminal's line under a
         // taller row.
@@ -639,7 +595,7 @@ impl SoftwareRasterizer {
                 align_right,
                 centred,
                 underline,
-                ink_centred,
+                span_centred,
             } => {
                 let mask = self.text_mask(text, *font);
                 let mut left = scale(*x, cw).round() as i32;
@@ -648,10 +604,12 @@ impl SoftwareRasterizer {
                 } else if *centred {
                     left -= mask.width as i32 / 2;
                 }
-                // Tall text stays centred on its row, and a button's ink on its middle: the
-                // ink's last row is a whole pixel, so it reaches to the row after it.
+                // Tall text stays centred on its row, and a button's words with their font's
+                // span in its middle (`SPAN`): the span's last row is a whole pixel, so it
+                // reaches to the row after it.
                 let lift = (mask.height as i32 - ch as i32) / 2;
-                let top = match ink.or(mask.ink).filter(|_| *ink_centred) {
+                let span = span_centred.then(|| self.text_mask(SPAN, *font).ink);
+                let top = match span.flatten() {
                     Some((first, last)) => {
                         let middle = scale(*y, ch) + ch / 2.0;
                         (middle - (first + last + 1) as f32 / 2.0).round() as i32
@@ -1204,15 +1162,14 @@ impl Rasterizer for SoftwareRasterizer {
             }
         }
         let paint: Vec<Paint> = grid.paint_on_row(y).cloned().collect();
-        let inks = self.shared_inks(grid, y, &paint);
         let mut target = Target {
             rgb: &mut rgb,
             width,
             height: ch,
             top: y as i32 * ch as i32,
         };
-        for (item, ink) in paint.iter().zip(inks) {
-            self.draw_paint(&mut target, item, ink);
+        for item in &paint {
+            self.draw_paint(&mut target, item);
         }
         // A thin caret, as in a real editor, not a terminal's block.
         if let Some(bounds) = caret_bounds(grid) {
@@ -1568,6 +1525,7 @@ mod tests {
         let mut r = r.with_type_row(36);
         let mut grid = Grid::new(12, 1, style());
         grid.roomy = true;
+        grid.row_air = 139;
         // The wash behind the row, and the button at its end.
         let wash = crate::paint::Bounds::cells(0.4, 0.06, 11.2, 0.88);
         grid.panel(wash, 12, Some(Rgb(0, 0, 255)), None);
@@ -1596,12 +1554,12 @@ mod tests {
             "{} px of button",
             button.len()
         );
-        // A pixel under the wash's middle with its words (`ROW_BUTTON_DROP`), so there's a
-        // pixel more of the wash over it than under it.
+        // Inside the wash, gone down with its words onto the row's baseline
+        // (`WORDS_BASELINE`), 3 px under the wash's middle: its foot is on the wash's.
         let over = round.iter().filter(|y| **y < button[0]).count();
         let under = round.len() - over;
         assert!(
-            (4..=6).contains(&over) && (2..=4).contains(&under) && over.abs_diff(under + 2) <= 1,
+            (6..=8).contains(&over) && under <= 1,
             "{over} px of wash over the button, {under} under"
         );
         // Its corners are tighter than a button's, with its height.
@@ -1630,10 +1588,9 @@ mod tests {
         assert!(!plain, "not inset where a row has no room");
     }
 
-    /// A button in a row between lines (`Grid::row_button`) is 32 px on a row of 50, 9 px
-    /// clear of the row, and its words' ink, a capital's top to a "p"'s tail, stands in its
-    /// middle with 4 px or more under the tail: at 27 px the tail of Keep's "p" ended on its
-    /// foot.
+    /// A button at a row's end (`Grid::row_button`) is 32 px on a row of 50, and its words'
+    /// ink, a capital's top to a "p"'s tail, stands in its middle with 4 px or more under the
+    /// tail: at 27 px the tail of Keep's "p" ended on its foot.
     #[test]
     fn a_row_buttons_words_stand_in_its_middle_tails_and_all() {
         let Some(r) = SoftwareRasterizer::new(17, 50) else {
@@ -1642,6 +1599,7 @@ mod tests {
         let mut r = r.with_type_row(36);
         let mut grid = Grid::new(16, 1, style());
         grid.roomy = true;
+        grid.row_air = 139;
         grid.row_button((2, 0), "            ", "Keep", Rgb(255, 0, 0), style());
         let image = r.row(&grid, 0);
         let at = |x: usize, y: usize| {
@@ -1655,12 +1613,9 @@ mod tests {
             "{} px of button",
             button.len()
         );
+        // Clear of the row over it; under it, it's gone down onto the row's baseline.
         let (top, foot) = (button[0], *button.last().unwrap());
-        assert!(
-            top >= 8 && image.height - 1 - foot >= 8,
-            "{top} px over it, {} under",
-            image.height - 1 - foot
-        );
+        assert!(top >= 8, "{top} px over it");
         // Its words, white on its red: from the capital's top to the tail's foot.
         let ink: Vec<usize> = (0..image.height)
             .filter(|y| (100..170).any(|x| at(x, *y).1 > 90))
@@ -1711,82 +1666,86 @@ mod tests {
         ]
     }
 
-    /// A button's words stand by their ink in its middle, with tails or without, on a row
-    /// with room and on the terminal's line alike: a capital's top as far from the button's
-    /// top as a tail's foot, or the baseline where there's no tail, is from its foot. In the
-    /// font's line "Show Source" stood 5 px under its button's top and 10 over its foot, and a
-    /// card's "Accept Rewrite" 9 under and 6 over; raised a pixel for tails on the terminal's
-    /// line, words without them stood higher still. Buttons side by side keep one baseline,
-    /// the ink they have together in their middle: each by its own, "Next" stood 3 px under
-    /// "Reject All" beside it. And a button at a row's end stands a pixel under the row's
-    /// middle with its words, which are then no more than 2 px over the baseline of the words
-    /// beside them, where they were 3: as low as a "p" lets them stand.
+    /// A button's words stand by their font's span in its middle, a capital's top to a tail's
+    /// foot, whatever their letters, on a row with room and on the terminal's line alike: so
+    /// every label of a size has one baseline, and a row of buttons with it. In the font's
+    /// line "Show Source" stood 5 px under its button's top and 10 over its foot; each by its
+    /// own ink, "Dismiss" stood 4 px under its top and 10 over its foot beside "Keep", and a
+    /// row's labels rode high whenever one of them had a "p" (0.11.0's polish review). A button
+    /// in a row of words, at its end or on its own, goes down onto the words' baseline with its
+    /// words (`Grid::beside_words`): "Reject" rode 3 px over the hunk's heading beside it.
     #[test]
-    fn a_buttons_words_stand_by_their_ink_in_its_middle() {
+    fn a_buttons_words_stand_on_one_baseline_by_their_fonts_span() {
         let red = Rgb(255, 0, 0);
         for (row, line, roomy) in [(50, 36, true), (37, 37, false)] {
             let Some(r) = SoftwareRasterizer::new(17, row) else {
                 return;
             };
             let mut r = r.with_type_row(line);
-            for label in ["Show Source", "Accept Rewrite", "Next", "Keep"] {
-                for large in [false, true] {
+            for large in [false, true] {
+                let mut baselines = Vec::new();
+                for label in ["Show Source", "Accept Rewrite", "Next", "Keep", "Dismiss"] {
                     let mut grid = Grid::new(24, 1, style());
                     grid.roomy = roomy;
                     let cells = " ".repeat(20);
                     if large {
                         grid.large_button(1, 0, &cells, label, red, style());
                     } else {
-                        grid.row_button((1, 0), &cells, label, red, style());
+                        grid.button(1, 0, &cells, label, red, style());
                     }
                     let image = r.row(&grid, 0);
-                    let [top, foot, caps, tails, _] = chip_and_ink(&image, 21, (40, 330));
-                    let (over, under) = (caps - top, foot - tails);
-                    assert!(
-                        over.abs_diff(under) <= 1 && under >= 4,
-                        "{label} on a row of {row}: {over} px over its ink, {under} under"
-                    );
+                    let [top, foot, caps, tails, baseline] = chip_and_ink(&image, 21, (40, 330));
+                    baselines.push((label, baseline - top, foot - baseline));
+                    // A capital and a tail: the span itself, in the middle.
+                    if label == "Keep" {
+                        let (over, under) = (caps - top, foot - tails);
+                        assert!(
+                            over.abs_diff(under) <= 1 && under >= 4,
+                            "{label} on a row of {row}: {over} px over its ink, {under} under"
+                        );
+                    }
                 }
+                let first = baselines[0];
+                assert!(
+                    baselines.iter().all(|b| (b.1, b.2) == (first.1, first.2)),
+                    "one baseline on a row of {row}: {baselines:?}"
+                );
             }
-            // Side by side, one with tails and one without: the one ink in the middle.
-            let mut grid = Grid::new(40, 1, style());
-            grid.roomy = roomy;
-            grid.button(1, 0, &" ".repeat(14), "Reject All", red, style());
-            grid.button(18, 0, &" ".repeat(10), "Next", red, style());
-            grid.button(30, 0, &" ".repeat(9), "Keep", red, style());
-            let image = r.row(&grid, 0);
-            let [top, foot, caps, tails, reject] = chip_and_ink(&image, 21, (40, 250));
-            let [.., next] = chip_and_ink(&image, 18 * 17 + 4, (18 * 17 + 20, 27 * 17));
-            let [.., keep] = chip_and_ink(&image, 30 * 17 + 4, (30 * 17 + 20, 38 * 17));
-            assert!(
-                reject == next && next == keep,
-                "baselines {reject}, {next} and {keep} on a row of {row}"
-            );
-            let (over, under) = (caps - top, foot - tails);
-            assert!(over.abs_diff(under) <= 1, "{over} px over, {under} under");
         }
-        // Beside words of the row's own size, on a row with room.
+        // Beside words of 13 pt, on a row with room: at a row's end, and on its own.
         let Some(r) = SoftwareRasterizer::new(17, 50) else {
             return;
         };
         let mut r = r.with_type_row(36);
-        for (label, highest) in [("Keep", 2), ("Install", 1)] {
-            let mut grid = Grid::new(32, 1, style());
-            grid.roomy = true;
-            grid.label(1, 0, "Say what a caller", style(), 14);
-            grid.row_button((18, 0), &" ".repeat(10), label, red, style());
-            let image = r.row(&grid, 0);
-            let [.., words] = chip_and_ink(&image, 18 * 17 + 4, (17, 14 * 17));
-            let [top, foot, .., own] = chip_and_ink(&image, 18 * 17 + 4, (18 * 17 + 20, 27 * 17));
-            assert!(
-                own <= words + 1 && words.saturating_sub(own) <= highest,
-                "{label}: its baseline at {own}, the words' at {words}"
-            );
-            let (over, under) = (top, image.height - 1 - foot);
-            assert!(
-                over == under + 1 || over == under + 2,
-                "a pixel under the row's middle: {over} px over it, {under} under"
-            );
+        for label in ["Keep", "Install", "Reject"] {
+            for own in [false, true] {
+                let mut grid = Grid::new(32, 1, style());
+                grid.roomy = true;
+                grid.row_air = 139;
+                grid.label(1, 0, "Say what a caller", style(), 14);
+                let cells = " ".repeat(10);
+                if own {
+                    let from = grid.painted_so_far();
+                    grid.button(18, 0, &cells, label, red, style());
+                    grid.beside_words(from);
+                } else {
+                    grid.row_button((18, 0), &cells, label, red, style());
+                }
+                let image = r.row(&grid, 0);
+                let [.., words] = chip_and_ink(&image, 18 * 17 + 4, (17, 14 * 17));
+                let [top, foot, .., baseline] =
+                    chip_and_ink(&image, 18 * 17 + 4, (18 * 17 + 20, 27 * 17));
+                assert!(
+                    baseline.abs_diff(words) <= 1,
+                    "{label}: its baseline at {baseline}, the words' at {words}"
+                );
+                // Its chip went down with its words, from the row's middle.
+                let (over, under) = (top, image.height - 1 - foot);
+                assert!(
+                    over >= under + 4,
+                    "{label}: {over} px over it, {under} under"
+                );
+            }
         }
     }
 

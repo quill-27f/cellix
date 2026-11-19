@@ -1095,7 +1095,7 @@ fn words_in(
         align_right,
         centred: false,
         underline: false,
-        ink_centred: false,
+        span_centred: false,
     });
     (end, row)
 }

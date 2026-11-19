@@ -6132,7 +6132,7 @@ impl App {
             let top = chip.y as f32 - lift;
             let painted = grid.painted_so_far();
             grid.text_run((x, top), chip.right() as f32, name, (words, false), font);
-            grid.centre_ink_since(painted);
+            grid.centre_span_since(painted);
         }
         grid.put_str(chip.x + 1, chip.y, name, style, chip.right());
     }
@@ -17263,6 +17263,7 @@ impl App {
         grid.bands = self.tile_bands();
         grid.cursor = None;
         grid.roomy = measures::roomy(self.measure.as_ref());
+        grid.row_air = (self.measure.row_air() * 100.0).round() as u16;
         let theme = &self.theme;
         // The frame, which the views, the sidebar and the bar are and the sheets stand on.
         grid.fill(grid.area(), theme.activity);
@@ -32708,8 +32709,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     }
 
     /// Where a row has room, the button on a pointed row is shorter than the wash behind it:
-    /// the height it has on the terminal's line, 32 px, which shows the wash 5 px over it and 3
-    /// under, a pixel under its middle. Both were a control's height, 39 px in a row of 50: the button's edges lay on
+    /// the height it has on the terminal's line, 32 px, on the row's baseline with its words, so
+    /// the wash shows 7 px over it and its foot is on the wash's. Both were a control's height,
+    /// 39 px in a row of 50: the button's edges lay on
     /// the wash's, and the two read as one shape with a step in it. At 27 px, for 6 px of
     /// wash, a "g"'s tail ended a pixel off its foot.
     #[test]
@@ -32764,11 +32766,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // Rows of 50 px, the airy height on a line of 36.
         let ((wash_top, wash), (top, button)) = shapes(&mut app, 50);
         assert!((wash - 39.0).abs() < 0.5, "the wash is a control: {wash}");
-        // A pixel under the wash's middle, with its words, so they're nearer the baseline of
-        // the words beside it (`ROW_BUTTON_DROP`).
+        // Down with its words onto the row's baseline (`WORDS_BASELINE`), 3 px under the
+        // wash's middle, its foot on the wash's.
         let (over, under) = (top - wash_top, wash_top + wash - top - button);
         assert!(
-            under >= 2.5 && (1.0..=2.0).contains(&(over - under)),
+            under >= 0.0 && (5.0..=7.5).contains(&(over - under)),
             "{over} px of the wash over the button and {under} under it"
         );
         assert!(

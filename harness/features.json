@@ -6813,8 +6813,8 @@
   {
     "id": "button-words-by-ink",
     "milestone": 15,
-    "title": "A button's words stand by their ink in its middle, with tails or without, and buttons side by side keep one baseline",
-    "test": "a_buttons_words_stand_by_their_ink_in_its_middle",
+    "title": "A button's words stand by their font's span in its middle, so labels have one baseline, and a button in a row of words stands on the words' baseline",
+    "test": "a_buttons_words_stand_on_one_baseline_by_their_fonts_span",
     "passes": true
   },
   {

@@ -1356,7 +1356,7 @@ mod tests {
             align_right: false,
             centred: false,
             underline: false,
-            ink_centred: false,
+            span_centred: false,
         };
         let mut grid = Grid::new(20, 8, Style::default());
         grid.paint.extend([text(1), text(4)]);

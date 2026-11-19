@@ -323,6 +323,25 @@ pub fn bar_chip_height(measure: &dyn Measure) -> (f32, bool) {
     }
 }
 
+/// How far a button at a row's end (`Grid::row_button`) is lifted back after it goes down onto
+/// the words' baseline, in rows, so it keeps `LINE_AIR` from its row's foot where that foot is
+/// an edge: the line under peek's header, or a wash the row's whole height in Settings. There
+/// it goes down a pixel where the baseline wants 3, and its words stand 2 px over the row's.
+pub fn row_button_foot_lift(measure: &dyn Measure) -> f32 {
+    let Some((_, tall)) = measure
+        .cell_pixels()
+        .filter(|_| roomy(measure) && !measure.in_cells())
+    else {
+        return 0.0;
+    };
+    let row = tall as f32;
+    let line = row / measure.row_air().max(1.0);
+    let (_, foot) = cellix_render::row_button_in_row(row, line);
+    // In whole paint units, rounded up, as paint moves: rounded to the nearest, it kept 7.7 px.
+    let unit = cellix_render::UNIT as f32;
+    ((foot - (row - LINE_AIR)) / row * unit).ceil().max(0.0) / unit
+}
+
 /// How tall the band behind a picked or pointed row of a list is, in rows: 33 px of 36,
 /// which holds an icon of 16 pt and a letter's tail. A menu's and a palette's are this.
 pub const BAND_HEIGHT: f32 = 0.92;

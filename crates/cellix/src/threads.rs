@@ -1786,7 +1786,7 @@ fn draw_control(
         end,
         BUTTON_TEXT,
     );
-    grid.centre_ink_since(painted);
+    grid.centre_span_since(painted);
     grid.lift_since(from, -drop);
 }
 
@@ -3292,7 +3292,7 @@ pub fn draw(
                         x + whole as u16,
                         BUTTON_TEXT,
                     );
-                    grid.centre_ink_since(painted);
+                    grid.centre_span_since(painted);
                 }
                 // Ending on the cards' right edge.
                 grid.nudge_since(from, head_end(area, view).1);

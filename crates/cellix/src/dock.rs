@@ -3802,7 +3802,7 @@ pub fn initial_over(
         align_right: false,
         centred: true,
         underline: false,
-        ink_centred: false,
+        span_centred: false,
     });
 }
 

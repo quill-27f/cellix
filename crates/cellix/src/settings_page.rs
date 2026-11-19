@@ -1857,8 +1857,11 @@ impl SettingsPage {
                     (theme.secondary(theme.page_hover, on_it), theme.text.fg)
                 };
                 let style = Style { fg, ..theme.text };
-                // On the row's wash, and inside it where a row has room.
+                // On the row's wash, and inside it where a row has room: the wash is the
+                // row's whole height, so the button keeps `LINE_AIR` from its foot.
+                let from = grid.painted_so_far();
                 grid.row_button((x, rect.y), &cells, label, fill, style);
+                grid.lift_since(from, crate::measures::row_button_foot_lift(measure));
             } else {
                 // Its word where Found stands on the rows beside it.
                 let word = Style {

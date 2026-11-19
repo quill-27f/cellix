@@ -137,11 +137,11 @@ pub enum Paint {
         centred: bool,
         /// Drawn under the text at its true width.
         underline: bool,
-        /// Its ink, from its highest mark to its lowest, stands in the middle of the row `y`
-        /// starts, as a button's words do, rather than the font's line: in the line's middle,
-        /// words without tails stood high in a button and words with them low. Words beside
-        /// each other in a row keep the line, which gives them one baseline.
-        ink_centred: bool,
+        /// It's a button's words: its font's span, a capital's top to a tail's foot, stands in
+        /// the middle of the row `y` starts, rather than the font's line, which stood words of
+        /// 13 pt a pixel or two high in a button. Every such run of one size stands the same
+        /// whatever its letters, so a row of buttons has one baseline.
+        span_centred: bool,
     },
     Icon {
         bounds: Bounds,

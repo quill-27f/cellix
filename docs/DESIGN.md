@@ -1110,8 +1110,8 @@ Comfortable), words stand in the middle of what holds them, as they do in the de
 terminal's line a box or a chip is too short for a tail, and its words are raised a pixel or
 two: `FIELD_LIFT`, the bar's `BAR_LIFT` and `WORD_LIFT`. None of those apply on a roomy row,
 where they put a capital 6 px under a box's top and 13 over its foot (the user's second and
-fourth points on trying 0.10.0 in Ghostty). A button's words stand by their ink on either
-(see Look). Three more follow from the same room:
+fourth points on trying 0.10.0 in Ghostty). A button's words stand by their font's span on
+either (see Look). Three more follow from the same room:
 
 - A card (the offer to install a language's server, the notice about logout, a stopped
   session's) has about a quarter of a row over its first row and under its last, as the
@@ -1129,13 +1129,15 @@ fourth points on trying 0.10.0 in Ghostty). A button's words stand by their ink 
   that's 0.78 of one.
 - That button stands inside the wash (`Grid::row_button`, `raster::inset`): it's the
   height it has on the terminal's line, 32 px, in a row of 50, and the wash, a control of 39
-  px, shows round it. Its words' ink, a capital's top to a tail's foot, stands in its middle,
-  5 px clear of it either way, as every button's does. It stands a pixel under the row's
-  middle with its words (`ROW_BUTTON_DROP`: 10 px over it and 9 under in the row, 5 and 3 of
-  the wash), which brings its words nearer the baseline of the row's own: a label in 90 per
-  cent of the row's size, with a tail, rode 3 px over them (0.11.0's release check, R2:
-  Keep, Ask Agent, Keep as Tab), and stands 2 over; words without one stand on it. Lower
-  than that, Keep as Tab would stand within 8 px of the line under peek's header. As tall
+  px, shows over it. Its words' span, a capital's top to a tail's foot, stands in its middle,
+  5 px clear of it either way, as every button's does, and it goes down with its words onto
+  the baseline of the row's own words (`Grid::beside_words`, `WORDS_BASELINE`, 3 px on a row
+  of 50): 12 px over it and 6 under in the row, its foot on a pointed row's wash's. A label
+  in 90 per cent of the row's size rode 3 px over the words beside it (0.11.0's release check,
+  R2, and the polish review: Keep, Ask Agent, Keep as Tab). Peek's header has its line at the
+  row's foot, so there Keep as Tab goes down only as far as keeps 8 px from it, a pixel, and
+  its words stand 2 px over the name's; so does Install on a server's row in Settings, whose
+  wash is the row's whole height (`measures::row_button_foot_lift`). As tall
   as the wash, its edges lay on the wash's and the two read as one shape with a step in it; at
   27 px, for 6 px of wash, a "p"'s tail ended on its foot (0.11.0's release review: Keep, Keep
   as Tab, Show Source, Ask Agent, Install). Its corners are 6 px where a button's are 8 (`ROW_BUTTON_RADIUS`),
@@ -1324,17 +1326,19 @@ reaches 4 px further down than an "h" reaches up. A text box is seven eighths of
 which leaves a tail as far from the box's foot as a tall letter is from its top; the caret
 stands in the box's middle, and what shares the box's line, a search box's switches and the
 Find bar's count, is raised with the words. The band behind a picked or pointed row, a
-palette's and a menu's, is 33 px of 36 (`BAND_HEIGHT`). A button's words stand by their ink
-in its chip (`Grid::button_label`, `Paint::Text`'s `ink_centred`): a capital's top as far from
-the chip's top as a tail's foot, or the baseline where there's none, is from its foot. In the
-font's line, as other words stand, "Show Source" had 5 px over its capitals and 10 under, and a
-card's "Accept Rewrite" 9 over and 6 under its tails (0.11.0's release check, P2); now 7 and 7,
-and 8 and 7. Buttons side by side on a row keep one baseline: the rasterizer takes the ink all
-their words have together, in one band of the row, and stands that in the middle
-(`shared_inks`). Each by its own, "Keep" stood 2 px over "Dismiss" beside it and "Next" 3
-under "Reject All", which read as words jumping along the row; together, words without tails
-stand as high as their neighbours' with them. A selection's buttons, the conflict header's,
-the pane's order and Check My Review stand the same way. A workspace's chip is three quarters of the bar's row, keeps 8 px from the
+palette's and a menu's, is 33 px of 36 (`BAND_HEIGHT`). A button's words stand by their
+font's span in its chip (`Grid::button_label`, `Paint::Text`'s `span_centred`): a capital's
+top to a tail's foot in their font, "Hg", whatever letters they have, is in its middle, so
+every label of a size has one baseline and a row of buttons with it. In the font's line, as
+other words stand, "Show Source" had 5 px over its capitals and 10 under, and a card's "Accept
+Rewrite" 9 over and 6 under its tails (0.11.0's release check, P2). Centred on its own ink
+for a while, each label had its own baseline, and a row's rode high whenever one had a "p":
+"Dismiss" stood 4 px under its button's top and 10 over its foot (0.11.0's polish review). A
+button in a row of words, at the row's end or on its own, goes down with its words onto the
+row's baseline (`Grid::beside_words`), the box moving and not the words: Reject and Accept
+on a hunk's heading, Keep and Dismiss on a suggestion's row, Ask Agent, Install. A button by
+itself is 38 px, one in a row 30 (32 nominal). A selection's buttons, the conflict header's,
+the pane's order and Check My Review stand by the span too. A workspace's chip is three quarters of the bar's row, keeps 8 px from the
 window's edge where the terminal has no padding of its own, and its words and icons are
 raised a pixel and a half in it; a pill in the comments pane is three quarters of a row too,
 its words in its middle. An icon inside a text box or a chip is 13 pt (`SMALL_GLYPH`), an

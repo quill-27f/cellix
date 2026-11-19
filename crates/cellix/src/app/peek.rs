@@ -343,11 +343,14 @@ impl App {
         let y = card.y;
         let hovered = self.over_button((keep_x, y), keep.chars().count() as u16);
         // A quiet button, as every one that isn't the answer is, at its height on the
-        // terminal's line (`Grid::row_button`), so on a taller row it keeps 9 px from the card's
-        // edge and the line under the header.
+        // terminal's line (`Grid::row_button`).
         let fill = theme.secondary(theme.popup, hovered);
         // Its cells keep the header's colour: the button is shorter than its row.
+        let from = grid.painted_so_far();
         grid.row_button((keep_x, y), &keep, KEEP, fill, base);
+        // It goes down onto the name's baseline only as far as keeps `LINE_AIR` from the line
+        // under the header, which is its row's foot. A taller header would cost the pane a row.
+        grid.lift_since(from, measures::row_button_foot_lift(&*self.measure));
         let shut = Style {
             fg: if self.hover == Some((close, y)) || self.hover == Some((close + 1, y)) {
                 theme.text.fg

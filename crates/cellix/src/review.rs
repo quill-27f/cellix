@@ -1154,6 +1154,8 @@ impl Review {
             } else {
                 theme.button
             };
+            // On the file's name's baseline, as a hunk's are on its heading's.
+            let from = grid.painted_so_far();
             grid.button(
                 reject,
                 y,
@@ -1170,6 +1172,7 @@ impl Review {
                 accept_fill,
                 primary,
             );
+            grid.beside_words(from);
             return;
         }
         if narrow {
@@ -1346,6 +1349,8 @@ impl Review {
         } else {
             rest
         };
+        // On the hunk's heading's baseline (`Grid::beside_words`): they rode 3 px over it.
+        let from = grid.painted_so_far();
         grid.button(
             accept,
             y,
@@ -1362,6 +1367,7 @@ impl Review {
             reject_fill,
             quiet,
         );
+        grid.beside_words(from);
     }
 
     fn draw_note(&self, grid: &mut Grid, card: Rect, y: u16, text: &str, theme: &Theme) {

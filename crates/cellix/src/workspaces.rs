@@ -1169,6 +1169,7 @@ impl Workspaces {
         let base = theme.text;
         let (width, height) = self.size;
         grid.roomy = crate::measures::roomy(self.measure().as_ref());
+        grid.row_air = (self.measure().row_air() * 100.0).round() as u16;
         grid.fill(Rect::new(0, 0, width, height), base);
         // The frame round it, as round any page: the rail where there is one, and the bar at
         // the foot. What's between is a sheet, as the file is, so the terminal's window
