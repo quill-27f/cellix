@@ -165,14 +165,15 @@ pub fn draw_through(
     }
 }
 
-/// A commit's row: lanes, the branches at it, its message and its age.
+/// A commit's row: lanes, the branches and tags at it, its message and its age. `ground` is
+/// what the row stands on in paint, a band's colour where it's pointed at or open.
 pub fn draw_commit(
     grid: &mut Grid,
     graph: &Graph,
     (index, row, now): (usize, Rect, i64),
     measure: &dyn Measure,
     theme: &Theme,
-    behind: Style,
+    (behind, ground): (Style, Rgb),
 ) {
     let (Some(commit), Some(lanes)) = (graph.commits.get(index), graph.rows.get(index)) else {
         return;
@@ -185,19 +186,143 @@ pub fn draw_commit(
     let age = cellix_review::age(commit.time, now);
     let right = row.right();
     grid.label_right(right, row.y, &age, quiet, 90);
-    let end = right.saturating_sub(age.chars().count() as u16 + 1);
-    let mut x = row.x + graph.text_from();
-    // A branch's name only where the message keeps room to be read.
-    let room = end.saturating_sub(x) as usize;
-    let fits = |name: &String| room >= name.chars().count() + 1 + MESSAGE_ROOM;
-    if let Some(name) = commit.refs.first().filter(|n| fits(n)) {
-        let mark = Style {
-            fg: theme.accent,
-            ..behind
+    // The cells the message may take end two before the age's; in paint it ends a column
+    // before the age's measured words, where the cells' count left 72 px empty after
+    // "Bound the queue" and cut the message for nothing.
+    let cells_end = right.saturating_sub(age.chars().count() as u16 + 2);
+    let stop = if measure.in_cells() {
+        f32::from(cells_end)
+    } else {
+        let small = cellix_render::Font {
+            size: 90,
+            ..cellix_render::Font::default()
         };
-        x = grid.label(x, row.y, name, mark, end) + 1;
+        f32::from(right) - measure.width(&age, small) - 1.0
+    };
+    let start = f32::from(row.x + graph.text_from());
+    let chips = ref_chips(&commit.refs, (start, stop), measure);
+    let colour = lane_colour(lanes.lane, theme);
+    let mut x = start;
+    for (name, at, wide) in &chips {
+        draw_ref(
+            grid,
+            (*at, *wide, row.y),
+            name,
+            (colour, ground),
+            behind,
+            measure,
+        );
+        x = at + wide + ref_gap(measure);
     }
-    let room = end.saturating_sub(x + 1) as f32;
-    let summary = crate::source::clip(&commit.summary, room, measure);
-    grid.label(x, row.y, &summary, behind, end.saturating_sub(1));
+    let summary = crate::source::clip(&commit.summary, stop - x, measure);
+    let painted = Style {
+        painted: true,
+        ..behind
+    };
+    grid.put_str(x.ceil() as u16, row.y, &summary, painted, cells_end);
+    let font = cellix_render::Font::default();
+    grid.text_run(
+        (x, f32::from(row.y)),
+        stop,
+        &summary,
+        (behind.fg, false),
+        font,
+    );
+}
+
+/// A branch's or tag's chip before a commit's message, as VS Code's graph has them: its name
+/// in the colour of the commit's lane on a wash of it, in a chip's words (nine tenths of the
+/// interface's) and at a chip's height, which the rasterizer stands at 0.714 of a taller row.
+const REF_SIZE: u8 = 90;
+const REF_HIGH: f32 = 0.72;
+/// How strong the lane's colour is in a chip's wash: the "needs you" chip's.
+const REF_WASH: f32 = 0.16;
+/// Columns either side of a chip's words, 10 px of a 17 px column, as the status bar's chips
+/// have; and between two chips, or the last and the message, 8.5 px.
+const REF_PAD: f32 = 0.6;
+const REF_GAP: f32 = 0.5;
+/// The fewest letters a chip cut short keeps.
+const REF_LETTERS: usize = 3;
+
+fn ref_font() -> cellix_render::Font {
+    cellix_render::Font {
+        size: REF_SIZE,
+        ..cellix_render::Font::default()
+    }
+}
+
+/// Columns between two chips, and between the last and the message: a space on cells.
+fn ref_gap(measure: &dyn Measure) -> f32 {
+    if measure.in_cells() { 1.0 } else { REF_GAP }
+}
+
+/// The chips before a commit's message, as the name each shows, the column it starts at and
+/// how many it takes, laid from `from` toward `end`, where the message has to end. They take
+/// what the message leaves past `MESSAGE_ROOM`, and at least half of it, so in a narrow
+/// sidebar both are cut rather than the names dropped. A name too long for its room is cut in
+/// its middle, so both ends of "agent/queue-bound" show; one that can't keep three letters
+/// isn't shown, nor any after it. On cells a chip is its name on the wash, a space before what
+/// follows.
+pub fn ref_chips(
+    refs: &[String],
+    (from, end): (f32, f32),
+    measure: &dyn Measure,
+) -> Vec<(String, f32, f32)> {
+    let pad = if measure.in_cells() { 0.0 } else { REF_PAD };
+    let gap = ref_gap(measure);
+    let font = ref_font();
+    let room = (end - from).max(0.0);
+    let budget = (room - MESSAGE_ROOM as f32).max(room / 2.0);
+    let mut chips = Vec::new();
+    let mut at = from;
+    for name in refs {
+        let words = from + budget - at - gap - pad * 2.0;
+        let shown = crate::source::clip_middle_as(name, words, font, measure);
+        let wide = measure.width(&shown, font);
+        let letters = shown.chars().filter(|c| *c != '…').count();
+        if wide > words || letters < REF_LETTERS.min(name.chars().count()) {
+            break;
+        }
+        // Its ink in its middle: the measure runs on past the last letter.
+        let chip = wide - crate::measures::words_run_on(measure) + pad * 2.0;
+        chips.push((shown, at, chip));
+        at += chip + gap;
+    }
+    chips
+}
+
+/// One chip, `wide` columns from `x` on row `y`, in `colour` washed over `ground`: on a band
+/// it's washed over the band, which where a commit is open is the blue over the sidebar, so
+/// main's chip was the band's own colour and went. On cells, its name in the lane's colour on
+/// the wash, the cells it takes.
+fn draw_ref(
+    grid: &mut Grid,
+    (x, wide, y): (f32, f32, u16),
+    name: &str,
+    (colour, ground): (Rgb, Rgb),
+    behind: Style,
+    measure: &dyn Measure,
+) {
+    let cells = measure.in_cells();
+    let under = if cells { behind.bg } else { ground };
+    let wash = crate::theme::mix(under, colour, REF_WASH);
+    let style = Style {
+        fg: colour,
+        // In paint the row keeps its own ground and only the chip is washed.
+        bg: if cells { wash } else { behind.bg },
+        painted: true,
+        ..behind
+    };
+    let (cell, end) = (x.floor() as u16, (x + wide).ceil() as u16);
+    grid.put_str(cell, y, name, style, end);
+    if cells {
+        return;
+    }
+    let top = f32::from(y) + (1.0 - REF_HIGH) / 2.0;
+    grid.panel(Bounds::cells(x, top, wide, REF_HIGH), 22, Some(wash), None);
+    // Its words by their font's span in the chip's middle, as a button's are, and their ink,
+    // not their measure, in the middle across: centred by the measure, it had 10 px before it
+    // and 13 after.
+    let middle = x + (wide + crate::measures::words_run_on(measure)) / 2.0;
+    grid.button_label(middle, f32::from(y), name, colour, REF_SIZE);
 }

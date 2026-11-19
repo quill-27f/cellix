@@ -1131,24 +1131,25 @@ mod tests {
         let grid = screen(&app);
         let text = grid.text();
         assert!(text.contains("GRAPH"), "{text}");
+        // Each message after its branch's chip, which shares the narrow sidebar's row.
         assert!(
-            text.contains("Merge branch") && text.contains("Work on the s"),
+            text.contains("main Merge br") && text.contains("side Work on"),
             "{text}"
         );
         // The merge is a hollow dot, and the side branch has a lane of its own.
-        let (_, merge) = find(&grid, "Merge branch");
+        let (_, merge) = find(&grid, "Merge br");
         assert!(
             grid.row_text(merge).contains('○'),
             "{}",
             grid.row_text(merge)
         );
         // Main's line runs past the side commit in a lane of its own.
-        let (_, side) = find(&grid, "Work on the s");
+        let (_, side) = find(&grid, "Work on");
         let lanes = grid.row_text(side);
         assert!(lanes.contains('●') && lanes.contains('│'), "{lanes}");
         assert_eq!(app.source.graph.lanes(), 2);
         // A commit opens to its files; a file shows its diff against the commit before.
-        let (x, y) = find(&grid, "Work on the s");
+        let (x, y) = find(&grid, "Work on");
         click(&mut app, x, y);
         let (x, y) = find_in_sidebar(&app, "side.txt");
         click(&mut app, x, y);
@@ -1199,16 +1200,225 @@ mod tests {
                 .unwrap_or_else(|| panic!("{row}"))
         };
         assert!(
-            dot("Bound it on") > dot("Say what it"),
+            dot("Bound") > dot("Say what"),
             "the branch stands aside:\n{}",
             grid.text()
         );
         assert_eq!(
             dot("Start the"),
-            dot("Say what it"),
+            dot("Say what"),
             "main's line is straight:\n{}",
             grid.text()
         );
+    }
+
+    /// The graph the tour shows (81): main checked out, a tag on the first commit, and an
+    /// agent's branch beside main.
+    fn branched() -> TempDir {
+        let dir = repo();
+        let path = dir.path();
+        git(path, &["tag", "v1"]);
+        git(path, &["checkout", "-q", "-b", "agent/queue-bound"]);
+        fs::write(path.join("queue.rs"), "fn push() {\n    bounded();\n}\n").unwrap();
+        git(
+            path,
+            &["commit", "-qam", "Return the item when the queue is full"],
+        );
+        git(path, &["checkout", "-q", "main"]);
+        fs::write(path.join("notes.md"), "notes\n").unwrap();
+        git(path, &["add", "."]);
+        git(path, &["commit", "-qm", "Say what it is"]);
+        dir
+    }
+
+    /// 0.11.0's release review (C3): a branch's name stood before its commit's message in
+    /// plain blue words, and only where the message kept 14 columns, so the tour's sidebar
+    /// showed none. Each branch and tag is a chip, as VS Code's graph has them, in its lane's
+    /// colour on a wash of it, its words in the chip's middle; in a narrow sidebar the chips
+    /// and the message share the row, a long name cut in its middle so both ends show.
+    #[test]
+    fn branches_and_tags_stand_as_chips_before_their_commits_messages() {
+        use cellix_render::{FontMeasure, Measure, Paint, UNIT, stood};
+        let dir = branched();
+        let mut app = App::new(dir.path().to_path_buf(), (120, 40));
+        // The tour's terminal: columns of 17 px, rows of 50 with words sized for 36.
+        app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+        app.run(Command::ShowHistory);
+        settle_reads(&mut app);
+        app.source.show_graph();
+        let grid = screen(&app);
+        let theme = app.theme;
+        let px = |units: i32| units as f32 * 17.0 / UNIT as f32;
+        // What's painted on the row whose message starts with `words`: its texts, by where
+        // they start (or, centred, their middle), and its panels.
+        let row_of = |words: &str| {
+            grid.paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Text { y, text, .. } if text.starts_with(words) => Some(*y),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{words:?} isn't painted:\n{}", grid.text()))
+        };
+        let texts = |y: i32| -> Vec<(f32, String, Rgb, u8, bool)> {
+            grid.paint
+                .iter()
+                .filter_map(|p| match p {
+                    Paint::Text {
+                        x,
+                        y: at,
+                        text,
+                        color,
+                        font,
+                        span_centred,
+                        ..
+                    } if *at == y => Some((px(*x), text.clone(), *color, font.size, *span_centred)),
+                    _ => None,
+                })
+                .collect()
+        };
+        let chips = |y: i32| -> Vec<(f32, f32, f32, f32, Rgb)> {
+            grid.paint
+                .iter()
+                .filter_map(|p| match p {
+                    Paint::Panel {
+                        bounds,
+                        fill: Some(fill),
+                        border: None,
+                        ..
+                    } if bounds.y >= y && bounds.y < y + UNIT && bounds.h < UNIT => {
+                        let (top, tall) = stood(bounds.y, bounds.h, 50.0, 36.0);
+                        let row_top = y as f32 * 50.0 / UNIT as f32;
+                        Some((
+                            px(bounds.x),
+                            px(bounds.x + bounds.w),
+                            top - row_top,
+                            tall,
+                            *fill,
+                        ))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+        // The wash over the row's own ground, which in the sidebar is the frame's.
+        let wash = |colour: Rgb, middle: f32, y: i32| {
+            let ground = grid
+                .cell((middle / 17.0) as u16, (y / UNIT) as u16)
+                .style
+                .bg;
+            crate::theme::mix(ground, colour, 0.16)
+        };
+        // Each chip: its name in its lane's colour, at a chip's size, centred in it by the
+        // font's span; a chip's height in the middle of the row; and the message after it.
+        let check = |words: &str, name: &dyn Fn(&str) -> bool, colour: Rgb| {
+            let y = row_of(words);
+            let texts = texts(y);
+            let (middle, shown, _, size, centred) = texts
+                .iter()
+                .find(|(_, t, c, _, _)| *c == colour && name(t))
+                .unwrap_or_else(|| panic!("no chip's name by {words:?}: {texts:?}"))
+                .clone();
+            assert!(
+                size == 90 && centred,
+                "{shown}: size {size}, centred {centred}"
+            );
+            let (left, right, top, tall, _) = *chips(y)
+                .iter()
+                .find(|c| c.4 == wash(colour, middle, y))
+                .unwrap_or_else(|| panic!("no chip by {words:?}: {:?}", chips(y)));
+            // Its ink in its middle: the measure runs on past the last letter's ink.
+            let ink = middle - crate::measures::WORDS_RUN_ON / 2.0;
+            assert!((ink - (left + right) / 2.0).abs() < 0.5, "{shown}");
+            assert!((tall - 35.7).abs() < 0.5 && (top - (50.0 - tall) / 2.0).abs() < 0.5);
+            let message = texts
+                .iter()
+                .find(|(_, t, _, _, _)| t.starts_with(words))
+                .unwrap();
+            assert!(
+                message.0 >= right + 8.0 && message.0 <= right + 9.0,
+                "{words:?} starts {} px after its chip",
+                message.0 - right
+            );
+            (shown, left, right)
+        };
+        let (main, ..) = check("Say what", &|t| t == "main", theme.accent);
+        assert_eq!(main, "main");
+        check("Start the", &|t| t == "v1", theme.accent);
+        // The agent's branch, in its own lane's colour, is cut in its middle where the row
+        // is narrow, and the message keeps at least half of what they share.
+        let (agent, left, _) = check(
+            "Ret",
+            &|t| t.starts_with("ag") && t.ends_with("nd"),
+            theme.git_modified,
+        );
+        assert!(agent.contains('…'), "{agent}");
+        let y = row_of("Ret");
+        let message = texts(y)
+            .into_iter()
+            .find(|t| t.1.starts_with("Ret"))
+            .unwrap();
+        // The age, "now", ends the row; what's shared ends a column before its words.
+        let age = texts(y).into_iter().find(|t| t.1 == "now").unwrap();
+        let small = cellix_render::Font {
+            size: 90,
+            ..cellix_render::Font::default()
+        };
+        let measure = FontMeasure::new(17, 50).with_type_row(36);
+        let stop = age.0 - (measure.width("now", small) + 1.0) * 17.0;
+        assert!(
+            message.0 - left <= (stop - left) / 2.0 + 1.0,
+            "{agent}: {message:?}"
+        );
+        // A message that fits whole beside its chip isn't cut: "Say what it is" by main's.
+        let y = row_of("Say what");
+        assert!(
+            texts(y).iter().any(|t| t.1 == "Say what it is"),
+            "{:?}",
+            texts(y)
+        );
+        // Opened, main's row stands on the blue band, and its chip is washed over the band:
+        // washed over the sidebar it was the band's own colour, and went (82).
+        let (x, y) = find(&grid, "Say what");
+        click(&mut app, x, y);
+        assert!(app.source.graph.is_open(0) || app.source.graph.is_open(1));
+        let grid = screen(&app);
+        let on_row: Vec<(f32, Rgb)> = grid
+            .paint
+            .iter()
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if bounds.y >= y as i32 * UNIT && bounds.y < (y as i32 + 1) * UNIT => {
+                    Some((px(bounds.w), *fill))
+                }
+                _ => None,
+            })
+            .collect();
+        let band = on_row
+            .iter()
+            .max_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("the open row's band")
+            .1;
+        let chip = crate::theme::mix(band, theme.accent, 0.16);
+        assert_ne!(chip, band);
+        assert!(on_row.iter().any(|p| p.1 == chip), "{band:?}: {on_row:?}");
+        // On cells, each name in its lane's colour, a space before the message.
+        let mut cells = App::new(dir.path().to_path_buf(), (120, 40));
+        cells.run(Command::ShowHistory);
+        settle_reads(&mut cells);
+        cells.source.show_graph();
+        let grid = screen(&cells);
+        let (x, y) = find(&grid, "main Say what");
+        let ground = grid.cell(x + 4, y).style.bg;
+        assert_eq!(grid.cell(x, y).style.fg, theme.accent);
+        assert_eq!(
+            grid.cell(x, y).style.bg,
+            crate::theme::mix(ground, theme.accent, 0.16)
+        );
+        find(&grid, "v1 Start the");
     }
 
     #[test]

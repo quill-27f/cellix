@@ -1101,6 +1101,17 @@ lines with square joins, box-drawing characters on cells and hairlines on pixels
 is a hollow dot. A commit opens to its files under it; a file opens the diff view against the
 commit's first parent. The open file's commits are the Explorer's Timeline.
 
+The branches and tags at a commit stand before its message as chips, as VS Code's graph has
+them: each name in its commit's lane colour on a wash of it, in a chip's words and at a
+chip's height, its words in its middle by their font's span. They share the row with the
+message: they take what leaves the message 14 columns, and at least half of what the two
+share, so in the sidebar, 28 columns at most, both are cut rather than the names left out
+(as plain words, and only where the message kept 14 columns, no name ever showed there). A
+name too long for its room is cut in its middle, as the merge panel cuts a branch's, so
+"agent/queue-bound" keeps both ends, and one that can't keep three letters isn't shown, nor
+any after it. On cells a chip is its name on the wash. In paint the message runs to a column
+before the age's measured words; the age's count of cells left 72 px empty after it.
+
 Commits, stashes and Compare With use the diff view read-only: no Accept or Reject, a list of
 what's in them, and a title naming both sides. A stash is named by its commit, never its
 place in the list, since every worktree shares one list and agents push and pop it.

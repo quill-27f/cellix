@@ -914,7 +914,8 @@ def git_scenes(scratch):
     shoot("81-git-graph", graph, "README.md", size="120x40", cwd=root)
     # The newest commit's row, opened to its files.
     # The newest commit's row, opened to its files: the graph's heading is the panel's top row.
-    shoot("82-git-commit-open", [*graph, ["wait", 3.0], ["click", *ON("Bound the")], ["wait", 2.0]], "README.md", size="120x40", cwd=root)
+    # Its message shares the row with main's chip, so the screen's letters hold only "Bound t".
+    shoot("82-git-commit-open", [*graph, ["wait", 3.0], ["click", *ON("Bound")], ["wait", 2.0]], "README.md", size="120x40", cwd=root)
     shoot("83-git-timeline", [["wait", 1.5]], "src/queue.rs", size="120x40", cwd=root)
     compare = [["wait", 1.0], ["keys", "\x1b[112;6u"], ["until", PALETTE_UP], ["keys", "Compare With"],
                ["until", "Compare With"], ["keys", "\r"], ["until", "Compare the file"]]

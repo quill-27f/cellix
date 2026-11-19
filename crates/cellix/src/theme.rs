@@ -700,7 +700,7 @@ impl Default for Theme {
 }
 
 /// `by` of the way from `from` to `to`: a wash of one colour over another.
-fn mix(from: Rgb, to: Rgb, by: f32) -> Rgb {
+pub(crate) fn mix(from: Rgb, to: Rgb, by: f32) -> Rgb {
     let channel = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * by).round() as u8;
     Rgb(
         channel(from.0, to.0),

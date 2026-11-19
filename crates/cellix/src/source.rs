@@ -531,6 +531,7 @@ impl Source {
                 }
                 Line::Commit(index) => {
                     let open = self.graph.is_open(*index);
+                    let mut ground = theme.sidebar.bg;
                     if hovered || open {
                         let tone = if open {
                             theme.row_active
@@ -539,6 +540,7 @@ impl Source {
                         };
                         let wash = crate::measures::band(whole, 0.0, 0.06, measure);
                         grid.panel(wash, 14, Some(tone), None);
+                        ground = tone;
                     }
                     let row = Rect::new(left, y, right.saturating_sub(left + SIDE), 1);
                     let place = (*index, row, now());
@@ -548,7 +550,7 @@ impl Source {
                         place,
                         measure,
                         theme,
-                        theme.sidebar,
+                        (theme.sidebar, ground),
                     );
                 }
                 Line::CommitFile(index, file) => {
@@ -1020,7 +1022,12 @@ pub fn clip_as(text: &str, room: f32, font: Font, measure: &dyn Measure) -> Stri
 
 /// Text cut to `room` cells from the middle, so both ends of a branch's name still show.
 fn clip_middle(text: &str, room: f32, measure: &dyn Measure) -> String {
-    let wide = |t: &str| measure.width(t, Font::default());
+    clip_middle_as(text, room, Font::default(), measure)
+}
+
+/// The same for words set in `font`.
+pub fn clip_middle_as(text: &str, room: f32, font: Font, measure: &dyn Measure) -> String {
+    let wide = |t: &str| measure.width(t, font);
     let chars: Vec<char> = text.chars().collect();
     if wide(text) <= room || chars.len() < 5 {
         return text.to_string();
@@ -1037,7 +1044,7 @@ fn clip_middle(text: &str, room: f32, measure: &dyn Measure) -> String {
         }
         keep -= 1;
     }
-    clip(text, room, measure)
+    clip_as(text, room, font, measure)
 }
 
 fn now() -> i64 {
