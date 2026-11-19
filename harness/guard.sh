@@ -3,8 +3,10 @@
 #
 #   harness/guard.sh [--mem-mb N] [--timeout S] [--wait S] [--gpu] [--gpu-mb N] [--label L] -- cmd...
 #
-# One guarded job runs at a time across every worktree. macOS has no cgroups and
-# ignores `ulimit -v`, so memory is enforced by watching the whole process tree.
+# One guarded job runs at a time across every worktree, or up to CELLIX_GUARD_SLOTS when
+# the person says the machine has room; a job past the first is only admitted with 30%
+# of memory free. macOS has no cgroups and ignores `ulimit -v`, so memory is enforced by
+# watching the whole process tree.
 #
 # Exit codes: the command's own, or
 #   75  never admitted: the machine stayed too busy for --wait seconds
@@ -15,6 +17,7 @@ set -u
 mem_mb=${CELLIX_GUARD_MEM_MB:-8192}
 timeout_s=${CELLIX_GUARD_TIMEOUT:-1800}
 wait_s=${CELLIX_GUARD_WAIT:-900}
+slots=${CELLIX_GUARD_SLOTS:-1}
 gpu=0
 gpu_mb=1024
 label=""
@@ -62,21 +65,37 @@ tree() {
     }'
 }
 
+# Takes the first free slot: `lock`, then `lock.2` and on, up to $slots. A guard from before
+# slots takes only `lock`, so old and new copies in other worktrees still count each other.
+slot=1
 acquire() {
-  while ! mkdir "$lock" 2>/dev/null; do
-    holder=$(cat "$lock/pid" 2>/dev/null)
-    if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$lock"; continue; fi
+  while :; do
+    slot=1
+    while [ "$slot" -le "$slots" ]; do
+      try=$state/lock
+      [ "$slot" -eq 1 ] || try=$state/lock.$slot
+      if mkdir "$try" 2>/dev/null; then
+        lock=$try
+        echo $$ > "$lock/pid"
+        return 0
+      fi
+      holder=$(cat "$try/pid" 2>/dev/null)
+      if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$try"; continue; fi
+      slot=$((slot + 1))
+    done
     [ "$SECONDS" -lt "$wait_s" ] || return 1
     sleep 2
   done
-  echo $$ > "$lock/pid"
 }
 
 admit() {
+  # A job beside another needs more room, so the two can't take the machine down together.
+  need=20
+  [ "$slot" -eq 1 ] || need=30
   while :; do
     free=$(free_pct); level=$(pressure); disk=$(disk_gb)
     reason=""
-    [ "${free:-0}" -ge 20 ] || reason="memory free ${free:-?}%"
+    [ "${free:-0}" -ge "$need" ] || reason="memory free ${free:-?}%"
     [ "${level:-1}" -lt 4 ] || reason="critical memory pressure"
     [ "${disk:-0}" -ge 20 ] || reason="disk free ${disk:-?} GB"
     if [ "$gpu" = 1 ] && [ "$(gpu_stat 'Device Utilization %')" -ge 70 ] 2>/dev/null; then

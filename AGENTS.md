@@ -15,7 +15,9 @@ work. Read `docs/DESIGN.md` for what it is and why. This file says how to work h
 `harness/x`, or `harness/guard.sh -- <command>` for anything else that is heavy. This
 machine is shared with other work and is often under memory pressure. A hook refuses
 direct runs. The guard runs one job at a time, across all worktrees, and may wait for
-memory. Exit 75 means it was never admitted, 137 that it was killed for memory or GPU
+memory. `CELLIX_GUARD_SLOTS=2` lets a second job run beside it when the person says the
+machine has room; that job waits for 30% of memory free, and the limits that stop a job
+stay the same. Exit 75 means it was never admitted, 137 that it was killed for memory or GPU
 use, and 124 that it timed out. Treat 137 as a bug to find. Do not raise budgets to
 get past it.
 
