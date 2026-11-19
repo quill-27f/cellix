@@ -3762,3 +3762,10 @@ The relC track, from the release review's C5.
 
 - 81-context cut skills' descriptions beside their names to "Revi…" and "Rea…", which said nothing. A quiet detail beside a name (a skill's description, an instruction's scope, a file's folder) is shown whole, or cut with twelve letters or more kept, or not at all; the name and the tail at the right are as before.
 - Test: `a_detail_is_shown_whole_or_with_twelve_letters_kept_or_not_at_all`.
+
+## A branch's age is said as a commit's (2026-11-19)
+
+The relC track, from the release review's C5.
+
+- 84-git-compare said one time three ways: "63 seconds ago" by a branch, git's own words, "tour, 1 min" by a commit and "1 min" in the graph. Branches are read with their commit time and said as commits are ("now", "4 min", "3 hr", "yesterday"), in Compare With and in the branch menu; a commit keeps its author before it.
+- Test: `compare_with_says_a_branchs_age_as_a_commits`.

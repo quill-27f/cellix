@@ -6690,5 +6690,12 @@
     "title": "A quiet detail beside a name in Agent Context is shown whole, or cut with twelve letters or more kept, or not at all",
     "test": "a_detail_is_shown_whole_or_with_twelve_letters_kept_or_not_at_all",
     "passes": true
+  },
+  {
+    "id": "branch-age-as-commits",
+    "milestone": 15,
+    "title": "A branch's age is said as a commit's is, in Compare With and the branch menu",
+    "test": "compare_with_says_a_branchs_age_as_a_commits",
+    "passes": true
   }
 ]

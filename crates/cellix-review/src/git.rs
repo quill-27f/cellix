@@ -225,9 +225,13 @@ pub struct Branch {
     pub when: String,
 }
 
-/// Local branches, most recently moved first.
+/// Local branches, most recently moved first, each with how long ago as the graph and the
+/// commits beside them say it ("4 min"), where git's own words were "4 minutes ago".
 pub fn branches(root: &Path) -> Vec<Branch> {
-    let format = "--format=%(refname:short)%09%(committerdate:relative)";
+    let format = "--format=%(refname:short)%09%(committerdate:unix)";
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
     let args = [
         "for-each-ref",
         "--sort=-committerdate",
@@ -242,7 +246,7 @@ pub fn branches(root: &Path) -> Vec<Branch> {
         .filter_map(|line| line.split_once('\t'))
         .map(|(name, when)| Branch {
             name: name.to_string(),
-            when: when.to_string(),
+            when: crate::log::age(when.trim().parse().unwrap_or(now), now),
         })
         .collect()
 }

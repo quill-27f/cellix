@@ -998,6 +998,30 @@ mod tests {
         assert!(text.contains("pasted words"), "{text}");
     }
 
+    /// 0.11.0's tour (84): Compare With said one time three ways, "63 seconds ago" by a
+    /// branch, "tour, 1 min" by a commit and "1 min" in the graph. A branch's age is said as
+    /// a commit's is.
+    #[test]
+    fn compare_with_says_a_branchs_age_as_a_commits() {
+        let dir = repo();
+        let path = dir.path();
+        git(path, &["branch", "earlier"]);
+        let mut app = App::new(path.to_path_buf(), (150, 40));
+        app.open(&path.join("queue.rs")).unwrap();
+        app.run(Command::CompareWith);
+        let grid = screen(&app);
+        let text = grid.text();
+        assert!(!text.contains(" ago"), "{text}");
+        let (_, y) = find(&grid, "earlier");
+        assert!(grid.row_text(y).contains("now"), "{}", grid.row_text(y));
+        let (_, y) = find(&grid, "Start the queue");
+        assert!(
+            grid.row_text(y).contains("Tester, now"),
+            "{}",
+            grid.row_text(y)
+        );
+    }
+
     /// main with a merged branch: Start, then Mine on main and Side on side, then the merge.
     fn merged() -> TempDir {
         let dir = repo();
