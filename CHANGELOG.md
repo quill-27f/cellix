@@ -2,6 +2,88 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.11.0] - 2026-11-19
+
+Agents among themselves: they can start, message and wait for each other, and you see at a glance which one is working, which finished and which needs you. Reviewing a document goes further: your comments reach the agent from a page as from code, a card shows what changed since you wrote it, an agent's suggestion is accepted where it stands, and the review comes out as Markdown. Shift+click selects across a whole document, a link can be copied, and Cellix is calmer: idle, it draws and sends nothing. The dark theme is herdr's graphite.
+
+### Added
+- `cellix agent run`, `send`, `read`, `wait`, `ls` and `stop`: an agent can start another in the side pane with a task, message it, read what it last said, and wait until it stops working. A message waits while you're halfway through typing in that agent, and is never typed into an agent that's asking you something. Between agents a message arrives marked with who sent it. `cellix agent --skill` prints how agents use them, and the Claude Code, Codex and Gemini plugins carry it as a skill.
+- The first time an agent starts another in a folder, Cellix asks you: Allow, Always Allow Here, or Deny. While it asks, that agent's tab and row say it needs you.
+- An agent started by another is its helper. The agent that started it hears when it needs you, fails or ends, can wait for all of its helpers, and takes them with it when it ends. A helper has no tab of its own: it stands under its agent in the Agents list with its own mark (a helper asking you something brings its agent up to Needs you), and a click there opens it live over the pane (peek), with Keep as Tab.
+- Ctrl+click an agent's name in a terminal's text to peek at it.
+- A right click on a link, in a comment or a reply, on a page, in code or in a terminal's output, has Open Link and Copy Link. Copy Link takes the link's real address (a Markdown link's target, not its words) to your clipboard, over SSH too. A link to a file has Open File and Copy Path.
+- Shift+click selects from your last click to here, on any page (Markdown, LaTeX, a notebook, a plan, a transcript, a CSV), in code and in a terminal's output, however far you scrolled in between. Another Shift+click moves the end. Cellix asks the terminal for Shift+click, which Ghostty and xterm otherwise keep for their own selection.
+- Dragging a selection past the top or bottom of a pane scrolls it, faster the further past you hold, and turning the wheel while dragging scrolls with the selection following.
+- A comment waiting for an agent says on its card how it gets there: with your next prompt to Claude Code, Codex or Gemini, or with Ask Agent. "Send N to Claude" in the Comments pane sends everything waiting in one message.
+- An agent can say it addressed a comment, with `cellix reply <id> --done "…"`: the card says "Addressed by Claude" with Resolve and Not Done, and Resolve N addressed settles them together. You resolve, not the agent.
+- When the words you commented on change, the card keeps what you quoted and shows, a word at a time, what changed since; if they're gone, it says so.
+- Comments and replies show when they were made. A press on a kind's pill in the Comments pane shows only that kind; you pick a comment's kind from chips as you write it; and you can reply on an agent's suggestion without keeping it.
+- Next Comment, Previous Comment and Check My Review are in the palette, and a press on a line's ◆ in code opens its comment. In a narrow pane cards stay short until one is lit.
+- A tracked change on a page (Markdown's CriticMarkup, LaTeX's `changes` package) has Accept and Reject chips beside it when the caret or the pointer is on it. The Comments pane counts the suggestions and has Accept All, Reject All and Next.
+- Accept Rewrite takes an agent's rewrite in one step over every line you commented on, as one edit you can undo.
+- Comments: Copy Review as Markdown and Save Review as Markdown… (in the palette, and on a right click on the Comments tab) write the whole review out to share: each file's comments by kind, with their quotes, your words and every reply. Saving writes `review.md` into the project and opens it.
+- With the Comments pane shut, resting the pointer on commented words on a page shows the comment on a card under them, with its last reply; a press on the card opens it in Comments.
+- Review with… (in Review, and the palette's Agent: Review Changes with…) starts an agent on your changes as a reviewer. What it finds shows under the lines it's about, with Keep and Dismiss; a kept one becomes your comment.
+- + after the side pane's tabs drops a menu: Terminal, each agent you have (keys 1–9), and roles. A role is a prompt file in `.cellix/roles` or `~/.config/cellix/roles`; Reviewer and Tester come built in.
+- New Worktree… (on that menu and in the palette) makes a branch of its own for an agent, beside the project, opens it as a workspace and starts the agent in it. A worktree's row in the Agents list has Remove Worktree…, which never deletes the branch.
+- A button at the end of the views hides the sidebar, and the same mark at the start of the tabs brings it back. Ctrl+B still does both.
+- A spinner where something is working: on an agent's tab and its row in the Agents list, on a shell's tab while a command runs, and where Cellix itself waits (a language server indexing, a search, a push or pull, an install). Settings › Appearance › Motion stills it, and inside Claude Code's pane, where each turn would cost a new picture, it stands still.
+- Any program in the side pane can say how it is with one line, the open OSC 7501 status sequence (`printf '\e]7501;state=blocked:app=my-agent\e\\'`), and shows as an agent does: working, needs you, done.
+- OpenCode, GitHub Copilot CLI and Cursor's agent CLI connect as Claude Code, Codex and Gemini do: `cellix setup opencode|copilot|cursor` (and `--remove`). Cursor's agent has no hook for asking you something, so it never shows as needing you.
+- `CELLIX_PROF=1` writes a line a second of what Cellix's loop did, and `harness/x perf` measures it against the last release.
+
+### Changed
+- The dark theme is herdr's graphite: near-black greys, herdr's softer blue, and its colours for working, needs you and done. The frame still takes your terminal's background, so on a terminal whose background isn't #101114 every surface keeps graphite's steps from that colour instead. The light theme is unchanged.
+- An agent's tab has its mark, its own name (from the agent's title, or the one you give it with Rename), its context, and what it's doing: a spinner while it works, a dot when it needs you or finished while you were elsewhere. In a narrow pane a tab keeps its mark and its state.
+- A shell's tab is named after the program running in it, with a spinner once it's run a second.
+- The Agents list stands by what needs you: Needs you, Done, Working and Idle, each with how long since it changed.
+- The marks for agents are Cellix's own: a burst for Claude Code, a hexagon for Codex, a star for Gemini, a prompt for a shell.
+- The mouse wheel over a row of tabs that don't all fit moves it sideways.
+- Idle, Cellix draws and sends nothing, and wakes only when something is due (twice a second, where it looked twenty times); it used to lay the window out and send a little twice a second, which over SSH woke tmux and your terminal each time. A program printing in a tab you can't see no longer redraws the window. Output on screen is drawn as it comes, at most once a frame, and what you type in the side pane is echoed at once: about a frame per key, where it was two or three.
+- In Ghostty on the same machine, pictures go as files Ghostty reads, about a twentieth of the bytes. `CELLIX_TILE_FILES=0` turns it off.
+- On a terminal without pictures, the cursor is hidden while a frame is written, so it doesn't run across the screen.
+- The narrowest sidebar is 23 columns, to hold every view beside its button.
+- In the dark theme, a picked row is tinted with the accent, as in the light one, and plain hovering stays grey; Find's other matches are stronger and the one you're on has a ring of its own.
+- Every action that isn't the main one is one quiet button with a hover you can see, and a row of choices (in Settings, in a dialog) is one track.
+- Every menu has the same half row over and under its rows, and hangs 8 px under the line it drops from. Every menu is one colour, over a card too; a submenu's first row is level with the row that opened it; Comments' order menu drops from its button; and menus, palettes and tips stand clear of the lines round a file.
+- Every tab in the side pane has a mark, the Inbox, Comments, Preview, Problems and Log tabs too, and a program that names itself (`app=deploy`) names its tab. In a narrow pane the tabs behind the one in front are cut to their marks before the + after them goes, and their names come back as room allows. Editor, Task, Settings and side pane tabs share one shape: the same room before the mark, before the × and after it. The workspace tiles, the workspace picker and peek use the tabs' marks, and Cursor's agent has a mark of its own.
+- A selection on a page reads as one shape: its lines touch, it runs under inline code and highlights, a list's bullets and numbers and a paper's section numbers are inside it, and a table's cells taken whole are filled from line to line. The buttons for a selection stand over its first line (over its paragraph or table when it starts inside one), clear of the words.
+- Dialogs and cards have even room round them and before their buttons, and a box (the new file prompt, the branch chip, peek, Show Source, a button on a row) holds its words in its middle.
+- A comment card has the same room on every side and starts at the pane's text edge, as the Agents list does. An agent's rewrite stands in a box of its own over quiet buttons, a reply sits under a hairline, and where Edit and Delete don't fit, ⋯ holds them. An agent's suggestion is a card with a dashed edge; the accent is the lit card's. Buttons on cards are named as in the palette: Ask Agent, Check My Review, Not Done.
+- A kind's pill in the Comments pane is an outline, and the one you picked is filled, with × to show every kind again; the head says "Evidence · 1 of 4". An empty list with suggestions in the text says how many and that Next goes to each, and a long list has a scrollbar.
+- What an agent took out is drawn in one colour for removed words everywhere: on a card's "Words gone" and in what changed.
+- The Task page's divider is one line and its step control stands centred between its arrows.
+- Nothing stands within 8 px of a line: the Find bar over a terminal, Show Source, tooltips, a tab's menu, the header chips in the docked pane, the conflict header's buttons.
+
+### Fixed
+- Quitting Cellix ended it with a crash: what came in with the quit (the release of the click on Stop and Quit, say) went to the workspace that had just closed. Your work was saved first, and the message went with the screen, so it went unseen, but Cellix ended with code 101. It ends with 0.
+- Ctrl+click on a web address in a terminal's output looked for a file of that name. It opens the address.
+- A selection in a terminal's output stayed on the same screen rows as the output scrolled. It stays on its words.
+- A selected formula on a page wasn't drawn selected, and a paper's selected words were counted by Markdown's rules ("75 of 58 words").
+- Letting go of a drag over the status bar left the selection stuck.
+- Send Comments to Agent sent only comments on code: on a page it said there were none. It sends a document's comments too, and suggestions you kept.
+- Inside Claude Code, the count of comments waiting and `/cellix-send` left out a page's comments and the suggestions you kept: with only those waiting, `/cellix-send` said none were. They count and send them now, through `cellix comments --waiting`, which lists everything no agent has had yet.
+- A comment on words across lines held only the first line: Apply replaced that line with the whole rewrite, and only it was tinted. A comment holds the whole selection.
+- When an agent reworded commented words, the card showed the new words as if you'd commented on them.
+- Check My Review sent your comments to the agent twice; "Waiting for…" could name an agent other than the one asked; and the coverage strip counted suggestions you hadn't kept.
+- In a paper, a `\replaced` whose words ran onto another line showed a stray brace and lost its new words on the page.
+- With two agents reporting at once, a workspace's tile could say "done" while one of its tabs needed you. The tile, the Agents badge and the status bar count what every tab shows.
+- A rule across a page was drawn in two tones; it's one hairline. A reviewer's note beside a line stood against the text in a box of its own; it stands apart, with the comment's mark and tint. A one-line preamble said "1 lines".
+- A task's box on a page was a wide rectangle with its words against it. It's square, with room before the words.
+- `->` in a code snippet written in the interface's font showed as an arrow. It shows as typed.
+- A long path is cut at its start (`~/…/parent/name`), so its name stays; cut rows in Compare with and in search results end in "…" clear of their band.
+- An install card could run out of the side pane, and Find over a list left an empty slot in its box and a stray line under the pane.
+- A message in the status bar was cut short though the bar had room for it, and the word count said "1 words".
+- The Git graph could put the branch you have checked out in its second lane when commits were made in the same second. Its first lane is always the checked-out branch's.
+- A terminal's text ran to within a few pixels of its pane's right edge.
+- The same file listed twice in Agent Context showed as picked twice.
+- A large paste into a program that wasn't reading (a shell running a long command) held up all of Cellix until it read. Writes to programs wait their turn now, and a viewer that stops reading holds up neither the program nor anyone else watching it.
+- A program that ended in the middle of a screen update left its pane frozen. The update ends after 150 ms.
+- Moving the pointer steadily kept Cellix from noticing a file changed on disk.
+- Turning smooth scrolling back on over SSH lost the slower pace scrolling keeps there.
+- While an agent needed you, the file's details at the end of the status bar turned the colour that says so.
+- Tests started by `harness/x` no longer leave sessions in your cache, or programs running after them.
+
 ## [0.10.2] - 2026-11-17
 
 The new look, tightened after a first day in a real window: words in the middle of what holds them, less left over at the foot, and one measure for cards and buttons on Airy rows.

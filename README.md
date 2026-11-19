@@ -29,16 +29,19 @@ tmux to keep it running there.
   the laptop or lose the connection and they carry on; the next `cellix` has them back, with your
   tabs and unsaved edits, and a bar along the bottom says which agent is working, done or waiting
   for you. After a reboot, Resume picks up each agent's own conversation.
+- **Agents that work together.** An agent can start another as its helper, message it and wait
+  for it, with `cellix agent`; you see each one's state on its tab, and the Agents list puts the one
+  that needs you first. A reviewer agent's findings arrive as comments you keep or dismiss.
 - **Review before it lands.** Plans wait for your Approve, edits stack hunk by hunk, each agent turn
   is checkpointed, and one changed line can be put back without touching the rest.
 - **Talk about anything you can see.** A sentence, a formula, a diagram, a cell of a table or a spot
   in a PDF: select it, comment, and the agent gets the file, the line and the quote.
 - **Documents are pages, not markup.** Markdown and LaTeX open typeset, with math, diagrams,
   citations, Track Changes and offline spelling, while the file stays plain text for git.
-- **A second reader for your review.** Check my review has the agent weigh each of your comments and
+- **A second reader for your review.** Check My Review has the agent weigh each of your comments and
   suggest the ones you missed, without editing a word.
-- **Or inside your agent.** A pane inside Claude Code, plugins for Codex and Gemini CLI, and
-  the same thing over SSH and in tmux. One static binary in Rust, drawing real pixels in Ghostty, Kitty
+- **Or inside your agent.** A pane inside Claude Code, plugins for Codex, Gemini CLI, OpenCode,
+  Copilot CLI and Cursor's agent, and the same thing over SSH and in tmux. One static binary in Rust, drawing real pixels in Ghostty, Kitty
   and WezTerm, and text cells everywhere else.
 
 ## Install
@@ -115,7 +118,7 @@ edits what you edit and git sees every change.
 ## Review a document or paper, with the agent as your second reader
 
 You read and you comment; the agent checks your review and points at what you missed. Select any
-words and Comment as you go, then press **Check my review** in the Comments pane.
+words and Comment as you go, then press **Check My Review** in the Comments pane.
 
 - **Each of your comments gets a verdict.** The agent answers under it, *agrees* or *pushes back*,
   with why, so a weak point is caught before it reaches the author.
@@ -140,7 +143,7 @@ words and Comment as you go, then press **Check my review** in the Comments pane
 
 - **You settle what's done.** An agent that did what a comment asks says so with
   `cellix reply <id> --done "what it did"`, and the card says *Addressed by Claude*, with
-  **Resolve** and **Not done**; **Resolve N addressed** settles them all.
+  **Resolve** and **Not Done**; **Resolve N addressed** settles them all.
 
 ## Review what it did
 
@@ -172,7 +175,8 @@ beside your file.
 
 The window is your terminal's own colour, and the file and the side pane are sheets on it. The
 views (files, search, outline, source control, agent context, and Settings at the end) run across
-the top of the sidebar. Every file has an icon of its kind, in the tree and on its tab. One bar at
+the top of the sidebar, and the button after them hides it; the same mark at the start of the tabs
+brings it back. Every file has an icon of its kind, in the tree and on its tab. One bar at
 the foot holds your workspaces, the branch, the file's details, the bell, and the button that
 quits. In Ghostty and kitty a row has more air than a line of your terminal, and your terminal's
 own settings aren't touched: Row height in Settings is Airy unless you choose Comfortable or the
@@ -326,9 +330,9 @@ pointer, and a PDF or image in the side pane's Preview takes one too. Comments a
 kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file, line and quote, the
 agent answers with `cellix reply <id> "text"`, and the answer lands under your question. A comment
 not sent yet says on its card how it gets there: with your next prompt to Claude Code, Codex or
-Gemini CLI, whose hooks hand it over, or now with Ask agent. **Send Comments to Agent** sends
+Gemini CLI, whose hooks hand it over, or now with Ask Agent. **Send Comments to Agent** sends
 everything waiting, on code and on pages, in one message, as does **Send 3 to Claude Code** under
-Check my review. Each comment and answer says how long ago
+Check My Review. Each comment and answer says how long ago
 it was written, and a suggestion can be answered with **Reply** without keeping it. A comment is
 about all you selected, across lines; when an agent rewords those words the card keeps what you
 commented on and says *Changed since your comment*, and a click on that shows the change word by
@@ -408,6 +412,47 @@ that don't resolve, memory past the 200 lines or 25 KB that load, and hooks whos
 Every row opens its file to edit. It reads Claude Code, Codex and Gemini CLI.
 
 Getting Started, in the command palette or on the empty window, is a short guide.
+
+## Agents among themselves
+
+An agent's tab in the side pane says what it's doing: its mark, the name it gives itself (or the one
+you give it with Rename on the tab's menu), how full its context is, and a spinner while it works or
+a dot when it needs you or finished while you were looking elsewhere. A shell's tab is named after
+the program running in it, and turns while it runs. The Agents list stands by what needs you:
+Needs you, Done, Working and Idle, each agent with how long since it changed.
+
+The + after the tabs starts things: a terminal, any agent you have (keys 1–9), or a role. A role is
+a prompt for an agent, as a file in `.cellix/roles` or `~/.config/cellix/roles` with the agent named
+at its top; Reviewer and Tester come with Cellix. New Worktree… makes a branch of its own for an
+agent beside the project, opens it as a workspace and starts the agent there.
+
+Agents can run agents. In a terminal of the side pane, an agent can use:
+
+```bash
+cellix agent run codex --name reviewer "Review the diff in src/queue.rs"
+cellix agent send reviewer "Look at the error path too"
+cellix agent wait reviewer        # until it stops working, or --children all
+cellix agent read reviewer        # what it last said
+cellix agent ls                   # the agents here, as JSON
+cellix agent stop reviewer
+```
+
+`cellix agent --skill` prints how an agent should use these, and the Claude Code, Codex and Gemini
+plugins carry it as a skill. The first time an agent starts another in a folder, Cellix asks you.
+A message waits while you're typing in the agent it's for, and is never typed into one that's
+asking you something. An agent started by another is its helper: the one that started it hears when
+it needs you, fails or ends, and a helper ends with it. Helpers have no tabs: each stands under its
+agent in the Agents list, and a click opens it live over the pane, with Keep as Tab. Ctrl+click an
+agent's name in a terminal does the same.
+
+Review with… in Review starts an agent on your changes as a reviewer. What it finds stands under
+the lines it's about, with Keep and Dismiss, and what you keep becomes your comment.
+
+Any program can show its state the same way, with the open OSC 7501 status sequence:
+
+```bash
+printf '\e]7501;state=blocked:app=my-script\e\\'   # also working, done, idle, clear
+```
 
 ## Source Control
 
@@ -500,6 +545,8 @@ If pixels look wrong or scrolling is heavy, these commands help:
 ```sh
 tmux show -g allow-passthrough   # should say on
 CELLIX_TIER=cells cellix         # text cells only, for one run
+CELLIX_TILE_FILES=0 cellix       # in Ghostty, pictures in the stream rather than as files
+CELLIX_PROF=1 cellix             # a line a second of what Cellix did, in ~/.cache/cellix/prof.log
 ```
 
 A thin line under every row means tmux doesn't know how many pixels a cell has, and assumes 16 by
@@ -581,6 +628,13 @@ for your comments as JSON, or `cellix open <file>` to show you something.
 The IDE connection follows what Claude Code's VS Code extension does, which isn't a
 published protocol, so a Claude Code update could change it. It was built against 2.1.309.
 
+### OpenCode, Copilot CLI and Cursor's agent
+
+`cellix setup opencode`, `cellix setup copilot` or `cellix setup cursor` connects each through its
+own hooks or plugin, and `--remove` takes it back. They say when they're working, done or need you,
+and Resume finds their sessions. Cursor's agent has no hook for asking you something. None of the
+three has been tried on the real tool yet.
+
 ### Codex and Gemini CLI
 
 Settings, Integrations has an Install button for each, and the plugins' source is under
@@ -609,12 +663,13 @@ saved to `~/.config/cellix/settings.json`. You can also edit that file, or
 ```
 
 `keymap` is `simple`, `vim` or `neovim`, which runs your own `nvim` and config behind the
-editor. `theme` is `auto`, `dark` or `light` (Catppuccin Latte's surfaces, with text and code deepened to read clearly), and `auto` also matches your
+editor. `theme` is `auto`, `dark` (herdr's graphite: near-black greys and a soft blue) or `light` (Catppuccin Latte's surfaces, with text and code deepened to read clearly), and `auto` also matches your
 terminal's background. Either theme sets its frame on your terminal's own background, so the window's
 padding shows no seam; on a light terminal that makes the light theme a shade paler than Latte. `tier` is `direct`, `placeholder` or `cells`. `row_height` is `airy` (a row 1.4 times your terminal's line, which is what a new install has),
 `comfortable` (1.2 times) or `terminal`; it takes effect in Ghostty and kitty outside tmux, where Cellix can lay out rows of its own, and
 everywhere else a row is the terminal's line. On rows of its own the wheel moves a row at a time. `smooth_scroll: false` makes the
-wheel jump by lines, for a slow link, and `minimap: false` hides the minimap. `word_wrap`,
+wheel jump by lines, for a slow link, and `minimap: false` hides the minimap. `motion: false`
+stills the spinners (Motion under Settings › Appearance). `word_wrap`,
 `sticky_scroll` (with `sticky_scroll_lines`, 5 unless set), `bracket_pairs` and `inlay_hints` turn
 those on or off for code. `reading_width: false` lets a page's text run the whole width of its pane
 rather than keep to 88 columns; it's Reading width under Settings › Editor.
