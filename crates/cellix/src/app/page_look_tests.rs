@@ -215,3 +215,32 @@ fn a_heading_waiting_to_fit_draws_no_mark_under_the_page() {
         (grid.paint.iter()).any(|paint| matches!(paint, Paint::Text { text, .. } if text == "#"));
     assert!(marked, "the mark beside a heading that's drawn");
 }
+
+/// A deletion's spaces at its ends aren't struck. Struck, the space between "baseline" and
+/// what a suggestion takes out read as a hyphen joining them, "baseline-by" (69 to 71, 82).
+#[test]
+fn a_deletions_spaces_at_its_ends_are_not_struck() {
+    let text = "The model improves on the baseline{-- by a wide margin --}, and holds.\n";
+    let deleted = crate::theme::Theme::default().deleted();
+    let (_dir, app) = open("gone.md", text, 150, true);
+    let grid = screen(&app);
+    let (by, row) = spot(&app, "by a wide");
+    let (end, _) = spot(&app, " --}");
+    let lines: Vec<(f32, f32)> = (grid.paint.iter())
+        .filter_map(|paint| match paint {
+            Paint::Hairline { bounds, color }
+                if *color == deleted && cells(bounds.y).floor() == f32::from(row) =>
+            {
+                Some((cells(bounds.x), cells(bounds.x + bounds.w)))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines.len(), 1, "one line through it: {lines:?}");
+    let (from, to) = lines[0];
+    assert!(
+        (from - by).abs() < 0.05,
+        "from its first letter at {by}: {lines:?}"
+    );
+    assert!((to - end).abs() < 0.05, "to its last at {end}: {lines:?}");
+}

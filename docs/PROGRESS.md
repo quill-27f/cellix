@@ -3748,3 +3748,10 @@ Release track B, from the release review of 0.11.0's B6.
 - Measured in the tour (2x): 104-logout-card 15 px from the pane's left line and 16 from its right, its title 25 px in, the box from 9 px inside the card's edge to 9 px short of its right with the command on the title's column, 23 px of air between the box and the buttons and under the buttons; 108-install-card-pane 15 and 16 px, its title 26 px in; 102-stopped-card 15 and 16 px.
 - Unverified in a test: the stopped card, which needs a stopped session's record to build; it has the same frame and was looked at in 102.
 - Test: `a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in` (the install and logout cards: 14.5 to 17.5 px from the pane's lines, words 22.5 to 26.5 px in, buttons ending inside, the box 16 px outside the words with the command on them).
+
+## A deletion's spaces at its ends aren't struck (2026-11-19)
+
+The relC track, from the release review's C5.
+
+- A suggestion that takes out " by a wide margin" struck its leading space too, and the line through the space after "baseline" read as a hyphen: "baseline-by" (69 to 71, 82-paper-changes). The line through what's taken out, or through `~~struck~~` words, starts at its first letter and ends at its last now; the spaces stay in the deleted colour, unstruck.
+- Test: `a_deletions_spaces_at_its_ends_are_not_struck`.

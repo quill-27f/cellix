@@ -6676,5 +6676,12 @@
     "title": "A card over the side pane stands 16 px from the pane's lines with its words 24 px in and a command's box 16 px outside them",
     "test": "a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in",
     "passes": true
+  },
+  {
+    "id": "deletion-ends-unstruck",
+    "milestone": 15,
+    "title": "A deletion's or struck words' spaces at either end aren't struck, so no struck space reads as a hyphen",
+    "test": "a_deletions_spaces_at_its_ends_are_not_struck",
+    "passes": true
   }
 ]

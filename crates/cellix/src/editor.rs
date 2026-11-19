@@ -5277,8 +5277,20 @@ impl Editor {
                     let color = (fg_of(g.tone), inked);
                     grid.text_run((x, text_y + shift), right, &text, color, g.font);
                     if matches!(g.tone, Tone::Struck | Tone::Deleted) {
-                        let line = Bounds::cells(x, text_y + 0.5, width, 0.0);
-                        grid.hairline(line, fg_of(g.tone));
+                        // A space at either end isn't struck: struck, the space after a word
+                        // read as a hyphen joining it to what was taken out ("baseline-by").
+                        let glyphs = &row.glyphs[run.clone()];
+                        let space = |g: &&Glyph| g.ch.is_whitespace();
+                        let lead: f32 = glyphs.iter().take_while(space).map(|g| g.advance).sum();
+                        let trail: f32 = (glyphs.iter().rev())
+                            .take_while(space)
+                            .map(|g| g.advance)
+                            .sum();
+                        let inked = width - lead - trail;
+                        if inked > 0.0 {
+                            let line = Bounds::cells(x + lead, text_y + 0.5, inked, 0.0);
+                            grid.hairline(line, fg_of(g.tone));
+                        }
                     }
                 }
             }
