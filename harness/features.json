@@ -6963,5 +6963,12 @@
     "title": "The buttons by selected terminal output stand 12 px over it, as a page's do",
     "test": "the_buttons_by_selected_output_stand_twelve_pixels_over_it",
     "passes": true
+  },
+  {
+    "id": "tabs-share-letters",
+    "milestone": 15,
+    "title": "Tabs behind show the same number of letters, fill the row before the +, and go to their marks only all together",
+    "test": "tabs_behind_share_the_room_evenly",
+    "passes": true
   }
 ]

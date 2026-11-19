@@ -35010,16 +35010,15 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // The pane's first column is the frame's, between the two sheets, and the tabs
         // start after it, so the row has a column less to give than it had.
         // The + and the button that maximizes the pane keep their places after them: a tab
-        // behind is cut to its mark first, the terminal to its prompt here, the last of those
-        // that can't all keep three letters giving way first, and the others then stand at
-        // three letters, alike, keeping none of the room it freed (the user's choice after
-        // 0.11.0's release check, R3: it gave Comments a letter back, "Comm…"). The + went
-        // whenever the names had less than three letters each (0.11.0's final review), and the
-        // button with it, and a pane this narrow, as Cellix's is inside Claude Code, couldn't
-        // be maximized by anything in sight. The icons end the row now that the button that
-        // quits is at the foot, a column from the window's edge, so the tabs have the other
-        // column it took.
-        assert_eq!(strip.trim_end(), "  Com… Agents ×  >  +   ⤢", "{row}");
+        // behind shares the room with the others, each showing as many letters as the rest,
+        // and the row is theirs up to the +, before any goes to its mark (the user's choice
+        // after 0.11.0's release check, R3: the terminal went to its prompt beside "Comm…",
+        // and then beside "Com…" with a column empty after the +). The + went whenever the
+        // names had less than three letters each (0.11.0's final review), and the button with
+        // it, and a pane this narrow, as Cellix's is inside Claude Code, couldn't be maximized
+        // by anything in sight. The icons end the row now that the button that quits is at the
+        // foot, a column from the window's edge, so the tabs have the other column it took.
+        assert_eq!(strip.trim_end(), "  Co…  Agents ×  Te… +  ⤢", "{row}");
         for x in area.x..first_icon {
             let hit = app.dock.hit(title, x);
             assert_ne!(hit, Some(TabHit::Pick), "no chevron at {x}");

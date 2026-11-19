@@ -1678,13 +1678,15 @@ A side pane whose tabs don't all fit before the icons at the top right keeps eve
 the row. The one in front, a tab in the shape every tab has, hugs its measured name and its ×, with none
 of the slack a tab has when there's room, since that slack is what would cut its neighbours.
 Those behind it stand as names alone, half a column of air either side, whole while they
-fit and then cut short with a "…", sharing the room evenly as VS Code's shrink mode does: every
-name longer than a level is cut to it, the highest level that fits, so names are cut alike, and
-a name shorter than that stays whole (the user's choice, 2026-11-19; the widest gave a column
-at a time, and Gemini CLI went to its mark while Claude Code kept "pricing p…", 0.11.0's
-release check, R3). None goes below three letters and its "…" while another is longer; only
-when all of them at that can't fit does one go to its mark, the last first, and the others
-then stand at three letters, alike, keeping none of the room it freed. Two of
+fit and then cut short with a "…", sharing the room evenly as VS Code's shrink mode does: each
+shows the same number of letters, as many as fit; one whose whole name is shorter keeps it and
+leaves the rest to the others; and what whole columns leave over goes a column at a time to the
+tabs cut short, as air after their names where it would hold a letter one has and the others
+haven't, so no room stands empty after the + while a name is cut. No tab is at its
+mark while another shows any of its name: where even one letter each has no room, they go to
+their marks together (the user's choice, 2026-11-19; the widest gave a column at a time, and
+Gemini CLI went to its mark while Claude Code kept "pricing p…", 0.11.0's release check, R3,
+and then, one going to its mark first, "pri…" with the room it freed after the +). Two of
 them side by side have a hairline between them, in the middle of the air from the ink of one
 to the ink of the next, as between two whole tabs behind, so what
 one is doing at its end is never read as the next one's. Its mark and its name stand where
@@ -1695,8 +1697,8 @@ as one (0.11.0's release review, m1-agent-tabs). A dot follows the name as on a 
 in the middle of the room a spinner would have there, about 14 px to its ink, and what the
 tab's last column has to spare is after it: at the tab's end, the spare room stood
 between the name and the dot, 33 px, and the dot read as the next tab's (0.11.0's release
-check, m1-agent-tab-done). Short of three letters and the "…", a
-tab behind is cut to its mark, and what its program is doing beside it: the mark in the tab's
+check, m1-agent-tab-done). Short of a letter and the "…" each, the
+tabs behind are cut to their marks, and what their programs are doing beside them: the mark in the tab's
 middle with the same air either side, about 16 px to its ink, in three columns, or five with
 its state, and under the pointer a chip that's exactly the mark and that air (it kept a chip
 five columns wide with the mark at its left, 16 px before it and 47 after). The first tab in
@@ -1707,7 +1709,7 @@ centred its chip would have come 4 px from it; 0.11.0's release review, A4), whe
 has that column; where it hasn't, every tab staying in the row comes first, and the mark
 stands in the middle of its three (three agents in the tour's narrow window). Every tab has a
 mark, and marks tell tabs apart, as herdr's narrow tabs do; letters come back, to every name
-cut alike, as room allows. On cells a view's tab, a name elsewhere, is cut to the
+alike, as room allows. On cells a view's tab, a name elsewhere, is cut to the
 letter its icon has at the top right. The + keeps its place after the tabs while any tab is
 cut rather than listed, and the button that maximizes the pane its three columns at the end
 of the pane's part of the row: the names are cut to their marks before either gives way. With
@@ -1757,8 +1759,9 @@ idle before it, and the tab grows by the state's width when its agent starts (de
 been kept so a tab didn't move as its agent started and stopped). Behind the tab in front, in
 a row too short for every tab
 whole, a program's tab keeps its mark and what it's doing at either end, and its name between
-them only where three letters and the "…" have room; with less, the mark and the state stand
-side by side in its middle: three letters didn't tell Comments from Codex, and the marks do. Where there are pictures the Agents tab has the mark its icon at the
+them only where every tab behind has room for a letter and the "…"; with less, the mark and
+the state stand side by side in its middle, on every tab behind alike: letters didn't tell
+Comments from Codex, and the marks do. Where there are pictures the Agents tab has the mark its icon at the
 top right has, and is cut short as an agent's tab is, its mark kept.
 The page's menu folds formatting and inserting into Format › and Insert ›, and the agents
 panel gives each agent one row under two lines of how-to. At every width a page keeps a

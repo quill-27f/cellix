@@ -75,9 +75,11 @@ const CONTEXT_AIR: f32 = 0.9;
 const CONTEXT_SIZE: u8 = 85;
 /// Columns for the chevron on the tab in front that lists every tab, when they don't all fit.
 const PICK_WIDTH: u16 = 2;
-/// The fewest letters a tab behind the one in front shows of a name cut short, before its "…":
-/// two don't tell Comments from Codex. Short of room for them, the tab is cut to its mark.
-const CUT_LETTERS: usize = 3;
+/// The fewest letters a tab behind the one in front shows of a name cut short, before its "…".
+/// Tabs behind share the room evenly, so where even one letter each has no room they go to
+/// their marks together, and the marks tell them apart (the user's choice after 0.11.0's
+/// release check, R3). It was three, and one tab went to its mark beside another's name.
+const CUT_LETTERS: usize = 1;
 /// The air a tab behind the one in front has either side of its name, in cells: about 8 px.
 /// Its chip under the pointer is exactly its name and that air.
 const CUT_AIR: f32 = 0.5;
@@ -2653,11 +2655,92 @@ impl Dock {
         (parts.icon.0, parts.name.0)
     }
 
-    /// Columns a tab behind needs to show any of its name: three letters and the "…", or the
-    /// whole name where that's shorter. With less, it's cut to its mark.
-    fn named_least(&self, face: &Face) -> u16 {
-        self.stub_of(&least_cut(&face.text), face)
-            .min(self.stub(face))
+    /// Columns a tab behind takes to show `letters` of its name and the "…", or the whole
+    /// name where that's no longer.
+    fn letters_wide(&self, face: &Face, letters: usize) -> u16 {
+        if letters >= face.text.chars().count() {
+            return self.stub(face);
+        }
+        let kept: String = face.text.chars().take(letters).collect();
+        let cut = format!("{}…", kept.trim_end());
+        self.stub_of(&cut, face).min(self.stub(face))
+    }
+
+    /// How many letters of its name a tab behind `width` columns wide shows, as `cut_tab`
+    /// cuts it: all of them, or those before its "…".
+    fn letters_shown(&self, face: &Face, width: u16) -> usize {
+        let cells = cellix_render::CellMeasure;
+        let measure: &dyn cellix_render::Measure = self.measure.as_deref().unwrap_or(&cells);
+        let (icon, marked) = (face.icon.is_some(), face.state.is_some());
+        let room = if !icon && !marked {
+            f32::from(width) - CUT_AIR * 2.0
+        } else if measure.in_cells() {
+            f32::from(width) - if icon { 3.0 } else { 1.0 } - if marked { 3.0 } else { 1.0 }
+        } else {
+            let lead = if icon {
+                self.cut_lead(face, measure).1
+            } else {
+                CUT_AIR
+            };
+            let end = CUT_AIR + if marked { CUT_SIDE } else { 0.0 };
+            f32::from(width) - lead - end
+        };
+        let text = crate::context::elide(&face.text, room, measure);
+        if text == face.text {
+            text.chars().count()
+        } else {
+            text.chars().count().saturating_sub(1)
+        }
+    }
+
+    /// What each tab behind the one in front gets in a row too short for them whole, `rest`
+    /// columns, as VS Code's shrink mode shares a row: each shows the same number of letters,
+    /// as many as fit, and one whose whole name is shorter keeps it and leaves the rest to the
+    /// others; what the columns leave over goes a column at a time to the name cut shortest,
+    /// so no room stands empty while a name is cut. Where even one letter each has no room,
+    /// they go to their marks together (`least`). It was the widest giving a column at a
+    /// time, one short of three letters going to its mark: Gemini CLI stood at its mark while
+    /// Claude Code kept "pricing p…", and then "pri…" with the room it freed left after the +
+    /// (0.11.0's release check, R3, m1-agent-tabs; the user's choice, 2026-11-19).
+    fn shared(
+        &self,
+        (faces, behind): (&[Face], &[usize]),
+        least: impl Fn(usize) -> u16,
+        rest: u16,
+    ) -> Vec<(usize, u16)> {
+        let most = (behind.iter())
+            .map(|index| faces[*index].text.chars().count())
+            .max()
+            .unwrap_or(0);
+        let wide = |letters: usize| -> Vec<(usize, u16)> {
+            (behind.iter())
+                .map(|index| (*index, self.letters_wide(&faces[*index], letters)))
+                .collect()
+        };
+        let total = |widths: &[(usize, u16)]| widths.iter().map(|w| w.1).sum::<u16>();
+        let level = (CUT_LETTERS..=most)
+            .rev()
+            .find(|letters| total(&wide(*letters)) <= rest);
+        let Some(level) = level else {
+            return behind.iter().map(|index| (*index, least(*index))).collect();
+        };
+        let mut widths = wide(level);
+        let mut spare = rest.saturating_sub(total(&widths));
+        // To the one that a column leaves showing fewest letters: a column can hold two narrow
+        // letters, and given to the shortest as it stood, it left one name two letters longer.
+        while spare > 0 {
+            let whole = |at: usize| self.stub(&faces[widths[at].0]);
+            let shown = |at: usize, more: u16| {
+                self.letters_shown(&faces[widths[at].0], widths[at].1 + more)
+            };
+            let cut = (0..widths.len())
+                .filter(|at| widths[*at].1 < whole(*at))
+                .min_by_key(|at| (shown(*at, 1), shown(*at, 0), *at));
+            let Some(at) = cut else { break };
+            widths[at].1 += 1;
+            spare -= 1;
+        }
+        widths
     }
 
     /// Columns a tab behind takes cut to its mark: the mark, and what its program is doing
@@ -2723,7 +2806,6 @@ impl Dock {
             return (widths, Fit::Front);
         };
         let stubs: Vec<u16> = faces.iter().map(|face| self.stub(face)).collect();
-        let named: Vec<u16> = faces.iter().map(|face| self.named_least(face)).collect();
         for (index, width) in widths.iter_mut().enumerate() {
             *width = if index == front {
                 kept
@@ -2748,10 +2830,7 @@ impl Dock {
         };
         let taken = behind.iter().map(|index| widths[*index]).sum::<u16>();
         if taken > rest {
-            // What each takes besides its name: its mark, what it's doing and their air.
-            let around: Vec<u16> = faces.iter().map(|face| self.stub_of("", face)).collect();
-            let tabs = (&stubs[..], &named[..], &around[..]);
-            for (index, width) in shared(&behind, tabs, least, rest) {
+            for (index, width) in self.shared((&faces, &behind), least, rest) {
                 widths[index] = width;
             }
         }
@@ -3310,6 +3389,18 @@ impl Dock {
         let cuts = self.cut_short(area);
         let faces = self.faces();
         let views = self.views();
+        // As many letters as the name cut shortest shows, which every name cut short shows,
+        // so the tabs behind show the same number: what a column's rounding gives one more
+        // than another stands as air (the user's choice after 0.11.0's release check, R3).
+        let widths = self.tab_widths(area);
+        let letters = (0..faces.len())
+            .filter(|index| cuts[*index] && widths[*index] > 0)
+            .filter_map(|index| {
+                let shown = self.letters_shown(&faces[index], widths[index]);
+                (shown < faces[index].text.chars().count()).then_some(shown)
+            })
+            .min()
+            .filter(|letters| *letters >= CUT_LETTERS);
         let chevron = |grid: &mut Grid, at: (f32, u16), style: Style| {
             let quiet = Style {
                 bold: false,
@@ -3391,7 +3482,7 @@ impl Dock {
                 };
                 let ink = cut_tab(
                     grid,
-                    (tab, lead, edge),
+                    (tab, lead, edge, letters),
                     face,
                     (style, hovered, marks),
                     (measure, theme),
@@ -3721,7 +3812,7 @@ pub fn initial_over(
 /// pointer its chip is the tab's width. Where its ink starts and ends, for the line beside it.
 fn cut_tab(
     grid: &mut Grid,
-    (tab, lead, edge): (Rect, (f32, f32), f32),
+    (tab, lead, edge, letters): (Rect, (f32, f32), f32, Option<usize>),
     face: &Face,
     (style, hovered, (mark, cut_mark)): (Style, bool, (Option<ProgramMark>, ProgramMark)),
     (measure, theme): (&dyn cellix_render::Measure, &Theme),
@@ -3738,12 +3829,20 @@ fn cut_tab(
     // As many letters as a name cut short shows at the least.
     let least = least_cut(&face.text).chars().count();
     let named = |text: &str| text == face.text || text.chars().count() >= least;
+    // Cut short, no more letters than every name cut short shows.
+    let alike = |text: String| match letters {
+        Some(most) if text != face.text && text.chars().count() > most + 1 => {
+            let kept: String = face.text.chars().take(most).collect();
+            format!("{}…", kept.trim_end())
+        }
+        _ => text,
+    };
     // A name alone, as a view's is on cells: as much of it as the stub holds, with half a
     // column of air either side, and under the pointer a chip that's that name and the air
     // around it.
     if !icon && !marked {
         let room = f32::from(tab.w) - CUT_AIR * 2.0;
-        let text = crate::context::elide(&face.text, room, measure);
+        let text = alike(crate::context::elide(&face.text, room, measure));
         if named(&text) {
             let wide = measure.width(&text, font);
             if hovered {
@@ -3761,7 +3860,7 @@ fn cut_tab(
             (measure, theme),
         ));
     }
-    // The name, between the mark and the state, where three letters and a "…" have room.
+    // The name, between the mark and the state, where a letter and a "…" have room.
     let from = if icon { x + lead.1 } else { x + CUT_AIR };
     let to = if marked {
         right - CUT_AIR - CUT_SIDE
@@ -3775,7 +3874,7 @@ fn cut_tab(
     } else {
         to - from
     };
-    let text = crate::context::elide(&face.text, room, measure);
+    let text = alike(crate::context::elide(&face.text, room, measure));
     if !named(&text) {
         return Some(marks_alone(
             grid,
@@ -3863,57 +3962,7 @@ fn marks_alone(
     (ink, state_ink(state, at, measure).1)
 }
 
-/// What each tab behind the one in front gets, `behind` being their places among `stubs`
-/// (what each takes whole), `named` (three letters and the "…") and `around` (what each takes
-/// besides its name), in a row with `rest` columns for them, as VS Code's shrink mode shares
-/// it: every name longer than a level is cut to it, the highest level that fits, so names
-/// are cut alike, and none goes below three letters and its "…" while another is longer.
-/// Only when all of them at that can't fit does one go to its mark (`least`), the last first,
-/// and the rest then stand at three letters, alike, keeping none of the room it freed. It was
-/// the widest giving a column at a time, one short of three letters going to its mark and the
-/// room that freed going back to the first: Gemini CLI stood at its mark beside "pricing p…"
-/// (0.11.0's release check, R3, m1-agent-tabs; the user's choice, 2026-11-19).
-fn shared(
-    behind: &[usize],
-    (stubs, named, around): (&[u16], &[u16], &[u16]),
-    least: impl Fn(usize) -> u16,
-    rest: u16,
-) -> Vec<(usize, u16)> {
-    let floor = |index: usize| named[index].min(stubs[index]);
-    let mut marked: Vec<usize> = Vec::new();
-    loop {
-        let names: Vec<usize> = (behind.iter().copied())
-            .filter(|index| !marked.contains(index))
-            .collect();
-        let room = rest.saturating_sub(marked.iter().map(|index| least(*index)).sum());
-        let floors: u16 = names.iter().map(|index| floor(*index)).sum();
-        // The last whose mark takes less than its three letters goes to its mark.
-        let gives = (names.iter().rev().copied()).find(|index| least(*index) < floor(*index));
-        if floors > room
-            && let Some(at) = gives
-        {
-            marked.push(at);
-            continue;
-        }
-        let width =
-            |index: usize, level: u16| (around[index] + level).min(stubs[index]).max(floor(index));
-        let top = (names.iter())
-            .map(|index| stubs[*index].saturating_sub(around[*index]))
-            .max()
-            .unwrap_or(0);
-        let fits = |level: u16| names.iter().map(|i| width(*i, level)).sum::<u16>() <= room;
-        let level = if marked.is_empty() {
-            (0..=top).rev().find(|level| fits(*level)).unwrap_or(0)
-        } else {
-            0
-        };
-        let mut out: Vec<(usize, u16)> = names.iter().map(|i| (*i, width(*i, level))).collect();
-        out.extend(marked.iter().map(|index| (*index, least(*index))));
-        return out;
-    }
-}
-
-/// The least of a name a tab cut short shows: three letters and the "…".
+/// The least of a name a tab cut short shows: `CUT_LETTERS` and the "…".
 fn least_cut(text: &str) -> String {
     let letters: String = text.chars().take(CUT_LETTERS).collect();
     format!("{}…", letters.trim_end())

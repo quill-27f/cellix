@@ -337,7 +337,8 @@ fn tabs_are_cut_to_their_marks_before_the_plus_gives_way() {
         longest_first |= !long && short;
         // A tab whose name has gone is its mark alone, in its middle.
         let (from, to) = tab_span(&app, row, 0);
-        let named = names.iter().any(|w| w.0.starts_with("the"));
+        // Any letter of its name and the "…" is a name: tabs behind share the row by letters.
+        let named = shown_name(&app, &grid, row, 0).is_some();
         if from >= to || named {
             continue;
         }
@@ -1351,18 +1352,20 @@ fn shown_name(app: &App, grid: &Grid, row: cellix_render::Rect, index: usize) ->
 }
 
 /// In a row too short for every tab whole, those behind the one in front share the room
-/// evenly, as VS Code's shrink mode does: every name longer than a level is cut to it, so
-/// names are cut alike, and none goes to its mark while another keeps more than three letters.
-/// Gemini CLI stood at its mark while Claude Code kept "pricing p…" (0.11.0's release check,
-/// R3, m1-agent-tabs; the user's choice).
+/// evenly, as VS Code's shrink mode does: each shows the same number of letters, as many as
+/// fit; one whose whole name is shorter keeps it; no room stands
+/// empty after the + while a name is cut; and none goes to its mark while another shows any of
+/// its name, so where even a letter each has no room, all go to their marks together. Gemini
+/// CLI stood at its mark while Claude Code kept "pricing p…", and then "pri…" with the room it
+/// freed left after the + (0.11.0's release check, R3, m1-agent-tabs; the user's choice).
 #[test]
 #[cfg(unix)]
 fn tabs_behind_share_the_room_evenly() {
     let (_dir, mut app) = project((150, 44));
     let names = [
         "the documentation's navigation",
+        "docs",
         "pricing page and refunds",
-        "landing hero section copy",
         "og tags",
     ];
     for name in names {
@@ -1372,8 +1375,7 @@ fn tabs_behind_share_the_room_evenly() {
     }
     app.dock.active = Some(3);
     app.dock.front = Front::Session;
-    let font = Font::default();
-    let (mut alike, mut marks) = (0, 0);
+    let (mut alike, mut whole, mut marks) = (0, 0, 0);
     for width in (16..100).rev() {
         app.dock.width = Some(width);
         app.handle(Event::Resize(150, 44));
@@ -1384,47 +1386,68 @@ fn tabs_behind_share_the_room_evenly() {
         }
         let text = grid.row_text(row.y);
         let shown: Vec<Option<String>> = (0..3).map(|i| shown_name(&app, &grid, row, i)).collect();
-        let cut: Vec<&String> = shown
-            .iter()
-            .flatten()
-            .filter(|name| name.ends_with('…'))
-            .collect();
-        if shown.iter().any(Option::is_none) {
-            // One at its mark: the others show three letters and the "…", alike.
-            for name in shown.iter().flatten() {
-                assert!(
-                    name.trim_end_matches('…').chars().count() <= 3,
-                    "{width}: {name:?} beside a tab at its mark: {text}"
-                );
-            }
+        // None at its mark while another shows any of its name: all of them or none.
+        let at_marks = shown.iter().filter(|name| name.is_none()).count();
+        assert!(
+            at_marks == 0 || at_marks == shown.len(),
+            "{width}: a tab at its mark beside a name: {text}"
+        );
+        if at_marks > 0 {
             marks += 1;
             continue;
         }
-        // Each cut to the same width, give or take a letter and the column it rounds to.
-        let widths: Vec<f32> = cut.iter().map(|name| measure().width(name, font)).collect();
-        let (least, most) = (
-            widths.iter().copied().fold(f32::MAX, f32::min),
-            widths.iter().copied().fold(0.0, f32::max),
-        );
+        let shown: Vec<&String> = shown.iter().flatten().collect();
+        let letters = |name: &str| name.trim_end_matches('…').chars().count();
+        let cut: Vec<usize> = (shown.iter())
+            .filter(|name| name.ends_with('…'))
+            .map(|name| letters(name))
+            .collect();
+        if cut.is_empty() {
+            continue;
+        }
+        // The same number of letters each, but where a name's cut falls on a space, which
+        // goes with it and leaves that one a letter fewer ("the documentation's…").
+        let (least, most) = (*cut.iter().min().unwrap(), *cut.iter().max().unwrap());
+        let spaced = (shown.iter().zip(names)).any(|(name, full)| {
+            let kept = letters(name);
+            name.ends_with('…') && full.chars().nth(kept) == Some(' ')
+        });
         assert!(
-            most - least <= 1.6,
-            "{width}: {cut:?} measure {widths:?}: {text}"
+            most == least || (spaced && most == least + 1),
+            "{width}: {shown:?}: {text}"
         );
-        // A name shorter than that stays whole.
+        // A name no wider than that cut, its "…" and a column it rounds to stays whole: "docs"
+        // takes no more room whole than cut to "do…".
+        let font = Font::default();
+        let widest = (shown.iter())
+            .filter(|name| name.ends_with('…'))
+            .map(|name| measure().width(name, font))
+            .fold(0.0, f32::max);
         for (name, full) in shown.iter().zip(names) {
-            let name = name.as_ref().unwrap();
-            if !name.ends_with('…') && !cut.is_empty() {
-                assert_eq!(name, full, "{width}: {text}");
-                assert!(measure().width(full, font) <= most + 0.6, "{width}: {text}");
+            if !name.ends_with('…') {
+                assert_eq!(name.as_str(), full, "{width}: {text}");
+                assert!(
+                    measure().width(full, font) <= widest + 1.0,
+                    "{width}: {text}"
+                );
+                whole += 1;
             }
         }
+        // No room after the + while a name is cut: the tabs take all of it, up to the button
+        // that maximizes the pane, or where that gave way, up to its place.
+        let plus = app.dock.plus_x(row);
+        let button = app.dock.maximize_button(row);
+        assert!(
+            plus + 3 >= button,
+            "{width}: the + at {plus}, the button at {button}: {text}"
+        );
         if cut.len() >= 2 {
             alike += 1;
         }
     }
     assert!(
-        alike > 3 && marks > 0,
-        "{alike} widths cut alike, {marks} with marks"
+        alike > 3 && whole > 0 && marks > 0,
+        "{alike} widths cut alike, {whole} names whole, {marks} all at their marks"
     );
 }
 
