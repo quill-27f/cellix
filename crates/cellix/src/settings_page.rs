@@ -1849,16 +1849,19 @@ impl SettingsPage {
         }
     }
 
-    /// Where the cards' buttons sit on a page already laid out.
+    /// Where the cards' buttons sit on a page already laid out: at the card's right, as wide
+    /// as a button or as its words and a column either side, whichever is wider. At twelve
+    /// columns, Copy Install Command ran past its chip at both ends.
     fn controls_at(&self, page: Rect) -> Vec<(Rect, Control)> {
-        let x = page.right().saturating_sub(BUTTON_WIDTH + 2);
         let blocks = self.blocks();
         let placed = blocks.iter().enumerate();
         placed
             .filter_map(|(index, block)| {
-                let (_, _, control) = block.action?;
+                let (label, _, control) = block.action?;
+                let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
+                let x = page.right().saturating_sub(wide + 2);
                 let y = page.y + 3 + index as u16 * BLOCK_STEP;
-                Some((Rect::new(x, y, BUTTON_WIDTH, 2), control))
+                Some((Rect::new(x, y, wide, 2), control))
             })
             .collect()
     }
@@ -2221,6 +2224,72 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// A card's button holds its words where there are pictures: Copy Install Command ran past
+    /// a chip of twelve columns, its first and last letters outside it.
+    #[test]
+    fn a_cards_button_holds_its_words() {
+        let settings = page(Section::Integrations);
+        let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        let theme = Theme::default();
+        let values = Values {
+            theme: "dark",
+            row_height: "airy",
+            keymap: "default",
+            smooth_scroll: false,
+            motion: false,
+            minimap: false,
+            view: EditorView::default(),
+            inlay_hints: false,
+            format_on_save: false,
+            reading_width: false,
+            auto_save: "off",
+            notify: false,
+        };
+        let mut grid = Grid::new(AREA.w, AREA.h, theme.text);
+        settings.draw(&mut grid, AREA, &values, (None, &measure), &theme);
+        let label = "Copy Install Command";
+        let unit = cellix_render::UNIT as f32;
+        let middle = grid.paint.iter().find_map(|p| match p {
+            cellix_render::Paint::Text {
+                x,
+                text,
+                centred: true,
+                ..
+            } if text == label => Some(*x as f32 / unit),
+            _ => None,
+        });
+        let middle = middle.expect("the button's words");
+        let font = cellix_render::Font {
+            size: 90,
+            ..cellix_render::Font::default()
+        };
+        let half = measure.width(label, font) / 2.0;
+        let chip = grid.paint.iter().find_map(|p| match p {
+            cellix_render::Paint::Panel {
+                bounds,
+                fill: Some(_),
+                ..
+            } if bounds.h < cellix_render::UNIT
+                && (bounds.x as f32) / unit <= middle
+                && middle <= (bounds.x + bounds.w) as f32 / unit =>
+            {
+                Some((bounds.x as f32 / unit, (bounds.x + bounds.w) as f32 / unit))
+            }
+            _ => None,
+        });
+        let (left, right) = chip.expect("its chip");
+        assert!(
+            left <= middle - half,
+            "its words start {left} before {}",
+            middle - half
+        );
+        assert!(
+            right >= middle + half,
+            "and end {right} after {}",
+            middle + half
+        );
     }
 
     #[test]

@@ -3776,3 +3776,10 @@ The relC track, from the release review's C5.
 
 - s1-paper-shift-select drew an equation's number "(1)" selected as a box of its own, 395 px right of the formula's. A selected display equation with a number is one band across the text column now, from the column's edge to the number's end, the height the formula's was; a formula with no number keeps its own box, and a picture its wash.
 - Test: `a_papers_numbers_are_inside_its_selection` asks for (1) in one shape that holds the formula too, where it asked only for (1) to be inside some shape.
+
+## A card's button in Settings holds its words (2026-11-19)
+
+Release track B, after B7.
+
+- "Copy Install Command", named so for B7, ran past its chip at both ends in Integrations (17-settings-integrations): the cards' buttons were twelve columns, and the chip no wider. A card's button is as wide as a button or as its words and a column either side, whichever is wider, from the card's right; the chip is no wider than its words need, as before.
+- Test: `a_cards_button_holds_its_words` (painted, the chip under Copy Install Command reaches past both ends of its words).

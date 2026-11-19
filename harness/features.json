@@ -6704,5 +6704,12 @@
     "title": "A selected equation with a number is one band across the text column, number and all",
     "test": "a_papers_numbers_are_inside_its_selection",
     "passes": true
+  },
+  {
+    "id": "settings-button-holds-words",
+    "milestone": 15,
+    "title": "A card's button in Settings is as wide as its words where they're longer than a button",
+    "test": "a_cards_button_holds_its_words",
+    "passes": true
   }
 ]
