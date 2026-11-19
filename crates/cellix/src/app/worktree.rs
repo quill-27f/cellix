@@ -524,6 +524,9 @@ mod tests {
                 let rows = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
                 app.set_measure(std::rc::Rc::new(rows));
             }
+            // Two agents to choose between whatever this machine has: on CI's, with none,
+            // the choice had one segment and the press on the second found none.
+            app.agents.pretend_installed(&["codex", "gemini"]);
             app.run(Command::NewWorktree);
             let grid = screen(&app);
             let (agents, buttons) = (row_of(&grid, "Start in it"), row_of(&grid, "Create"));
