@@ -1835,6 +1835,137 @@ fn coming_back_to_a_terminal_that_turned_dark_turns_cellix_dark() {
     screen.send(b"\x11");
 }
 
+/// Waits until the status bar's column moves off where it is at the start of the line, and
+/// gives it: the place the caret has once what came before the key that moved it is read.
+#[cfg(unix)]
+fn column_moved(screen: &mut Screen) -> usize {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let contents = screen.contents();
+        let column = contents.split("Ln 1, Col ").nth(1).and_then(|rest| {
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().ok()
+        });
+        if let Some(column) = column.filter(|&column| column != 1) {
+            return column;
+        }
+        if Instant::now() > deadline {
+            let story = screen.story();
+            panic!("the caret never moved:\n{contents}\n{story}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// An answer the terminal sends after Cellix has stopped waiting for it is the terminal's and
+/// never keys. On a loaded machine the background's answer came late and was typed into the
+/// open file as `11;rgb:1010/1111/1414`, and its tab showed it changed. Here the terminal
+/// starts its answer about the colour in time and ends it late, then answers late in full,
+/// as a slow link does, and the same again once Cellix asks on coming back into focus.
+/// Nothing is typed, nothing changes, and a key typed right after the answers arrives.
+#[test]
+#[cfg(unix)]
+fn pty_an_answer_that_comes_late_is_never_typed() {
+    let dir = project();
+    // Asked its colour, the terminal gets as far as this before the wait runs out.
+    let started = (b"]11;?".to_vec(), b"\x1b]11;rgb:10".to_vec());
+    let mut screen = Screen::start_with_answers(dir.path(), &["hello.txt"], vec![started]);
+    screen.wait_for("hello from a file");
+    screen.wait_for("Ln 1, Col 1");
+    assert!(!screen.contents().contains('●'), "{}", screen.contents());
+    // The rest of that answer, and of the others asked with it.
+    screen.send(b"10/1111/1414\x1b\\\x1b[6;37;17t\x1b[?1016;2$y\x1b[?62;22c");
+    // Answers in full, as to questions asked again, ended both ways an OSC can end.
+    screen.send(b"\x1b]11;rgb:1010/1111/1414\x1b\\\x1b[6;37;17t\x1b[?62;22c");
+    screen.send(b"\x1b]11;rgb:1010/1111/1414\x07\x1b[?62;22c");
+    // The graphics answers, where the wait had read as far as the mode's report before them.
+    screen.send(b"\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;EINVAL:refused\x1b\\\x1b[?5522;2$y\x1b[?62;22c");
+    // End: the caret goes to the end of the line, as far as the line is long.
+    screen.send(b"\x1b[F");
+    let column = column_moved(&mut screen);
+    let contents = screen.contents();
+    assert_eq!(column, 18, "the line is as it was:\n{contents}");
+    assert!(!contents.contains("rgb"), "{contents}");
+    assert!(
+        !contents.contains('●'),
+        "the tab shows no change:\n{contents}"
+    );
+
+    // Back in focus, Cellix asks the colour again, and the answer starts and ends late again.
+    let asked = |screen: &Screen| {
+        let all = screen.all.lock().unwrap();
+        let at = all.windows(5).rposition(|w| w == b"]11;?");
+        let count = all.windows(5).filter(|w| *w == b"]11;?").count();
+        // The pointer's shape is said in the frame drawn after it, once the wait has run out.
+        let drawn = at.is_some_and(|at| all[at..].windows(4).any(|w| w == b"]22;"));
+        count >= 2 && drawn
+    };
+    screen.send(b"\x1b[I");
+    let deadline = Instant::now() + WAIT;
+    while !asked(&screen) {
+        assert!(
+            Instant::now() < deadline,
+            "never asked again: {}",
+            screen.story()
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The rest of it, and a key right after.
+    screen.send(b"10/1111/1414\x1b\\\x1b[?62;22cx");
+    screen.wait_for("hello from a filex");
+    screen.send(b"\x13"); // Ctrl+S
+    screen.wait_for("Saved hello.txt");
+    let contents = screen.contents();
+    assert!(!contents.contains("rgb"), "{contents}");
+    screen.send(b"\x11");
+    screen.wait_exit();
+    let saved = std::fs::read_to_string(dir.path().join("hello.txt")).unwrap();
+    assert_eq!(saved, "hello from a filex\n");
+}
+
+/// How bright the editor's background is drawn, red, green and blue added up, once it's drawn.
+#[cfg(unix)]
+fn editor_brightness(screen: &Screen) -> u32 {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let cell = {
+            let parser = screen.parser.lock().unwrap();
+            parser.screen().cell(10, 60).map(|c| c.bgcolor())
+        };
+        match cell {
+            Some(vt100::Color::Rgb(r, g, b)) => return u32::from(r) + u32::from(g) + u32::from(b),
+            other => assert!(Instant::now() < deadline, "no colour: {other:?}"),
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// What a late answer says of the colour still counts: started in a terminal that doesn't
+/// answer in time, Cellix keeps its own dark colours, and turns light when the answer comes.
+#[test]
+#[cfg(unix)]
+fn pty_a_late_answer_about_the_colour_still_counts() {
+    let dir = project();
+    let mut screen = Screen::start(dir.path(), &["hello.txt"]);
+    screen.wait_for("hello from a file");
+    let dark = editor_brightness(&screen);
+    assert!(dark < 300, "dark at first: {dark}");
+    screen.send(b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\\x1b[?62;22c");
+    let deadline = Instant::now() + WAIT;
+    while editor_brightness(&screen) < 600 {
+        assert!(
+            Instant::now() < deadline,
+            "still dark: {}",
+            screen.contents()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    screen.send(b"x");
+    screen.wait_for("xhello from a file");
+    assert!(!screen.contents().contains("rgb"), "{}", screen.contents());
+    screen.send(b"\x11");
+}
+
 #[test]
 fn cli_reads_comments_over_socket() {
     let dir = project();

@@ -7068,5 +7068,19 @@
     "title": "A pointed row of a list that holds a button is washed its whole height, its button 8 px and more from the wash's edges",
     "test": "a_pointed_row_with_a_button_is_washed_whole_round_it",
     "passes": true
+  },
+  {
+    "id": "late-answers-never-typed",
+    "milestone": 15,
+    "title": "An answer the terminal sends after Cellix stopped waiting for it is dropped wherever it arrives, whole, in pieces or as the rest of one a wait began, and never typed into a file",
+    "test": "pty_an_answer_that_comes_late_is_never_typed",
+    "passes": true
+  },
+  {
+    "id": "late-colour-answer-counts",
+    "milestone": 15,
+    "title": "A background answer that comes after its wait still sets Cellix's colours",
+    "test": "pty_a_late_answer_about_the_colour_still_counts",
+    "passes": true
   }
 ]

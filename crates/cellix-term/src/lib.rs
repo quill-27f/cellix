@@ -7,13 +7,15 @@ mod files;
 mod notify;
 mod pixels;
 mod probe;
+pub mod replies;
 
 pub use cells::CellBackend;
-pub use detect::{background, cell_size, detect};
+pub use detect::{background, background_in, cell_size, detect};
 pub use files::TileFiles;
 pub use notify::{Notice, sequence as notification, terminal_names};
 pub use pixels::{Bleed, DEFAULT_QUOTA, OwnRows, PixelBackend, Placement, Smooth, row_key};
 pub use probe::{Env, Multiplexer, Tier, select_tier};
+pub use replies::{Replies, owed};
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant};

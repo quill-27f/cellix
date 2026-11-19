@@ -320,6 +320,21 @@ tmux swallows the replies, so under tmux Cellix asks tmux for the client termina
 because the window size call was not reliable under Zellij at startup. Window size is
 polled as well as signalled, because a resize during font loading is otherwise lost.
 
+The answers come on the input the keys come on, and one that comes after its wait (250 ms,
+three times that past tmux) has run out, over a slow link or on a loaded machine, is read by
+the loop. crossterm makes keys of what it doesn't know, so a late background answer was typed
+into the open file as `11;rgb:1010/1111/1414`. Everything the loop reads goes through
+`cellix_term::Replies` first, before the clipboard's reader, which knows the shape of every
+answer the questions bring (the background's, the cell size, the modes' reports, the graphics',
+device attributes, past tmux or not) and drops it wherever it arrives: whole, in pieces across
+reads, after a lone Esc where a read ended on an answer's ESC, or as the rest of one whose start
+a wait read, which the wait says (`replies::owed`). What may start an answer is held until it's
+clear, and goes on as it was if it isn't one: for ten seconds after a wait runs out an Esc,
+Alt+] or Alt+_ alone waits up to 100 ms for an answer's rest, and otherwise not at all, except
+where paste events are on, where it always waited that long for a clipboard message's rest. A late
+background answer still sets the colour, and a wait takes the last colour and cell size it read,
+since one before may be an earlier question's.
+
 ### Known rendering problems
 
 - The placeholder seams from the spike are gone at the screenshot's zoom. The spike

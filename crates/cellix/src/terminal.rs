@@ -575,6 +575,43 @@ fn sent(event: &ct::Event) -> Option<Vec<Sent>> {
     }
 }
 
+/// The bytes the terminal sent for a key crossterm made of them, for telling its answers from
+/// keys (`cellix_term::Replies`); `None` for anything that isn't such a key. A Windows console
+/// hands over key events, and nothing is asked there, so nothing is answered.
+fn bytes_of(event: &ct::Event) -> Option<Vec<u8>> {
+    if cfg!(windows) {
+        return None;
+    }
+    let mut bytes = Vec::new();
+    for sent in sent(event)? {
+        match sent {
+            Sent::Esc => bytes.push(0x1b),
+            Sent::Bell => bytes.push(0x07),
+            Sent::Char(c) => bytes.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes()),
+        }
+    }
+    Some(bytes)
+}
+
+/// How long to wait for more input before giving back what's held. Inside a clipboard message
+/// the rest is on its way: it's waited for, rather than drawing a frame each time the
+/// terminal's pipe runs dry. So is what may start an answer while answers are owed, and,
+/// where paste events are on, whatever the answers' filter holds, since it's held before the
+/// clipboard's reader sees it and may start a message: an Alt+] alone waited there before.
+fn patience(osc: &Osc, replies: &cellix_term::Replies<ct::Event>, now: Instant) -> Duration {
+    let waiting = osc.reading() || replies.waiting(now) || (osc.on && replies.holding());
+    if waiting { OSC_PATIENCE } else { LOOK }
+}
+
+/// Gives what the answers' filter let through to `osc`, and what that makes of it.
+fn through_osc(osc: &mut Osc, event: ct::Event, keys: &mut Vec<ct::Event>, said: &mut Vec<String>) {
+    match osc.take(event) {
+        Took::Held => {}
+        Took::Message(body) => said.push(body),
+        Took::Keys(more) => keys.extend(more),
+    }
+}
+
 impl Osc {
     fn new(on: bool) -> Self {
         Self {
@@ -1132,6 +1169,8 @@ pub fn run(options: Options) -> io::Result<()> {
         write!(out, "{}", cellix_term::clipboard::PASTE_EVENTS_ON)?;
     }
     let mut osc = Osc::new(display.paste_events);
+    // The terminal's answers that come after their questions' waits, never keys.
+    let mut replies = cellix_term::Replies::default();
     let mut clipboard = cellix_term::clipboard::Reader::default();
     let mut redraw = true;
     let mut shape = None;
@@ -1403,6 +1442,10 @@ pub fn run(options: Options) -> io::Result<()> {
                 let started = Instant::now();
                 lively = started;
                 pace.typed(started);
+                // A question asked since input was last read may have answers still to come.
+                if let Some(owed) = cellix_term::owed() {
+                    replies.owe(owed);
+                }
                 // Drain everything queued, so a fast wheel doesn't redraw per event.
                 let mut batch = Vec::new();
                 let mut came_back = false;
@@ -1410,14 +1453,20 @@ pub fn run(options: Options) -> io::Result<()> {
                 let mut messages = Vec::new();
                 loop {
                     let read = ct::read()?;
-                    let events = match osc.take(read) {
-                        Took::Held => Vec::new(),
-                        Took::Message(body) => {
-                            messages.push(body);
-                            Vec::new()
+                    let bytes = bytes_of(&read);
+                    let mut events = Vec::new();
+                    // The terminal's answers first, then its clipboard's messages.
+                    for event in replies.take(read, bytes.as_deref()) {
+                        through_osc(&mut osc, event, &mut events, &mut messages);
+                    }
+                    let more = ct::poll(patience(&osc, &replies, Instant::now()))?;
+                    // An Alt+] or an Esc with nothing after it, even after waiting, was a key.
+                    if !more {
+                        for event in replies.release() {
+                            through_osc(&mut osc, event, &mut events, &mut messages);
                         }
-                        Took::Keys(keys) => keys,
-                    };
+                        events.extend(osc.release());
+                    }
                     let mut typing = false;
                     for event in events {
                         // Anything but the wheel or a passing pointer may change what's under a scroll.
@@ -1457,14 +1506,6 @@ pub fn run(options: Options) -> io::Result<()> {
                         // Keys that type are taken whole on Windows, where a paste comes as them.
                         typing |= cfg!(windows) && typed(&event).is_some();
                         batch.push(event);
-                    }
-                    // Inside a message the rest is on its way: it's waited for, rather than
-                    // drawing a frame each time the terminal's pipe runs dry.
-                    let patience = if osc.reading() { OSC_PATIENCE } else { LOOK };
-                    let more = ct::poll(patience)?;
-                    // An Alt+] with nothing after it, even after waiting, was only a key.
-                    if !more {
-                        batch.extend(osc.release());
                     }
                     // A stream of input mustn't hold up the frames it's asking for, but a
                     // pasted picture is read whole first.
@@ -1531,9 +1572,14 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 // The terminal may have turned dark or light while Cellix was away, as a Mac
                 // does at sunset, or a reattach finds it changed: its colour is asked again.
-                if came_back
-                    && let Some((light, background)) =
-                        cellix_term::background(display.multiplexer, display.passthrough)
+                // An answer that came after its wait says the colour too, if none newer does.
+                let late = replies
+                    .take_background()
+                    .and_then(|answer| cellix_term::background_in(&answer));
+                let asked = came_back
+                    .then(|| cellix_term::background(display.multiplexer, display.passthrough))
+                    .flatten();
+                if let Some((light, background)) = asked.or(late)
                     && (display.light != Some(light) || display.background != Some(background))
                 {
                     display.light = Some(light);
@@ -2038,6 +2084,86 @@ mod tests {
         let (messages, keys) = osc_messages(&mut Osc::new(false), sent_as_keys(two, false));
         assert!(messages.is_empty());
         assert!(keys > 0);
+    }
+
+    /// What reaches Cellix of keys read in one go, as the loop takes them: through the
+    /// answers' filter, then the clipboard's reader, with what's held given back at the end.
+    fn through(events: Vec<ct::Event>) -> (Vec<ct::Event>, Vec<String>) {
+        let mut replies = cellix_term::Replies::default();
+        let mut osc = Osc::new(true);
+        let (mut keys, mut said) = (Vec::new(), Vec::new());
+        for event in events {
+            let bytes = bytes_of(&event);
+            for event in replies.take(event, bytes.as_deref()) {
+                through_osc(&mut osc, event, &mut keys, &mut said);
+            }
+        }
+        for event in replies.release() {
+            through_osc(&mut osc, event, &mut keys, &mut said);
+        }
+        keys.extend(osc.release());
+        (keys, said)
+    }
+
+    /// An answer that comes after its wait is read by the loop as the keys crossterm makes of
+    /// it, and none of them reach Cellix: they were typed into the open file.
+    #[test]
+    fn an_answer_crossterm_makes_keys_of_never_reaches_cellix() {
+        let x = sent_as_keys("x", false);
+        // Alt+] and a key a character, or Esc and the rest where a read ends after an ESC.
+        for answer in [
+            "\x1b]11;rgb:1010/1111/1414\x1b\\",
+            "\x1b]11;rgb:1010/1111/1414\x07",
+            "\x1b_Gi=31;OK\x1b\\",
+            "\x1b_Gi=32;EINVAL:refused\x1b\\",
+        ] {
+            for split in [false, true] {
+                let (keys, said) = through(sent_as_keys(&format!("{answer}x"), split));
+                assert_eq!(keys, x, "{answer:?}, split {split}");
+                assert!(said.is_empty());
+            }
+        }
+        // crossterm swallows these when it reads them whole, but not after a lone ESC.
+        for answer in [
+            "\x1b[?62;22c",
+            "\x1b[6;37;17t",
+            "\x1b[?1016;2$y",
+            "\x1b[?5522;2$y",
+        ] {
+            let (keys, _) = through(sent_as_keys(&format!("{answer}x"), true));
+            assert_eq!(keys, x, "{answer:?}");
+        }
+        // The clipboard's messages still reach its reader, and what's typed still arrives.
+        let (keys, said) = through(sent_as_keys("\x1b]5522;type=read:status=OK\x1b\\", false));
+        assert_eq!(said, ["type=read:status=OK"]);
+        assert!(keys.is_empty());
+        for typed in [
+            "\x1b]",
+            "\x1b",
+            "\x1b]1x",
+            "11;rgb:1010/1111/1414",
+            "\x1b_Gx",
+        ] {
+            let (keys, _) = through(sent_as_keys(typed, false));
+            assert_eq!(keys, sent_as_keys(typed, false), "{typed:?}");
+        }
+    }
+
+    /// An Alt+] alone, held by the answers' filter before the clipboard's reader sees it, is
+    /// still waited for a moment where paste events are on, as when the reader held it: a
+    /// message the terminal's write split after its `ESC ]` comes back whole. Anywhere else,
+    /// with no answers owed, it goes at once, and so does what isn't held.
+    #[test]
+    fn what_may_start_a_clipboard_message_is_still_waited_for() {
+        let now = Instant::now();
+        let alt_bracket = sent_as_keys("\x1b]", false).remove(0);
+        let mut replies = cellix_term::Replies::default();
+        let bytes = bytes_of(&alt_bracket);
+        assert!(replies.take(alt_bracket, bytes.as_deref()).is_empty());
+        assert_eq!(patience(&Osc::new(true), &replies, now), OSC_PATIENCE);
+        assert_eq!(patience(&Osc::new(false), &replies, now), LOOK);
+        let nothing = cellix_term::Replies::default();
+        assert_eq!(patience(&Osc::new(true), &nothing, now), LOOK);
     }
 
     #[test]

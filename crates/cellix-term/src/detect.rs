@@ -112,8 +112,18 @@ pub fn background(multiplexer: Multiplexer, passthrough: bool) -> Option<(bool, 
         })
         .ok()?
     };
-    let light = parse_background_is_light(&reply)?;
-    let (r, g, b) = parse_background(&reply)?;
+    colour_in(&reply)
+}
+
+/// Whether the background an answer that came after its wait gives is light, and its colour,
+/// from the `rgb:…` that `Replies::take_background` hands over.
+pub fn background_in(answer: &[u8]) -> Option<(bool, (u8, u8, u8))> {
+    colour_in(&[b"]11;".as_slice(), answer].concat())
+}
+
+fn colour_in(reply: &[u8]) -> Option<(bool, (u8, u8, u8))> {
+    let light = parse_background_is_light(reply)?;
+    let (r, g, b) = parse_background(reply)?;
     let byte = |channel: f32| (channel * 255.0).round() as u8;
     Some((light, (byte(r), byte(g), byte(b))))
 }
@@ -191,7 +201,10 @@ fn ask(out: &mut impl Write, asking: Asking, files: &str) -> io::Result<Vec<u8>>
 }
 
 /// Writes `question`, which ends by asking for device attributes, and reads the replies
-/// until those come and `done` is satisfied, or the timeout.
+/// until those come and `done` is satisfied, or the timeout. What comes after that is read by
+/// the loop, which drops it as answers (`replies.rs`): so a wait that runs out says so, with how
+/// far into an answer it read. So does one asked while an earlier question's answers may still
+/// come, since those may be what it read, and its own then come after it.
 #[cfg(unix)]
 fn ask_for(
     out: &mut impl Write,
@@ -199,6 +212,24 @@ fn ask_for(
     asking: Asking,
     done: impl Fn(&[u8]) -> bool,
 ) -> io::Result<Vec<u8>> {
+    let owing = crate::replies::owing(Instant::now());
+    let mut read = crate::replies::Read::default();
+    let reply = read_answers(out, question, asking, done, &mut read);
+    if !matches!(reply, Ok((_, true))) || owing {
+        crate::replies::owe(&read);
+    }
+    reply.map(|(reply, _)| reply)
+}
+
+/// The wait itself: the replies, and whether they were all there.
+#[cfg(unix)]
+fn read_answers(
+    out: &mut impl Write,
+    question: &str,
+    asking: Asking,
+    done: impl Fn(&[u8]) -> bool,
+    read: &mut crate::replies::Read,
+) -> io::Result<(Vec<u8>, bool)> {
     write!(out, "{question}")?;
     out.flush()?;
     // tmux answers device attributes at once, but the terminal outside answers through it a
@@ -230,11 +261,12 @@ fn ask_for(
             break;
         }
         reply.extend_from_slice(&buf[..n as usize]);
+        read.feed(&buf[..n as usize]);
         if ends_device_attributes(&reply) && done(&reply) {
-            break;
+            return Ok((reply, true));
         }
     }
-    Ok(reply)
+    Ok((reply, false))
 }
 
 fn parse_background_is_light(reply: &[u8]) -> Option<bool> {
@@ -242,10 +274,11 @@ fn parse_background_is_light(reply: &[u8]) -> Option<bool> {
     Some(0.2126 * r + 0.7152 * g + 0.0722 * b > 0.5)
 }
 
-/// Reads `ESC ] 11 ; rgb:RRRR/GGGG/BBBB`, as fractions of full brightness.
+/// Reads `ESC ] 11 ; rgb:RRRR/GGGG/BBBB`, as fractions of full brightness. The last such
+/// answer: one before it may be an earlier question's, come late.
 fn parse_background(reply: &[u8]) -> Option<(f32, f32, f32)> {
     let needle = b"]11;rgb:";
-    let start = reply.windows(needle.len()).position(|w| w == needle)? + needle.len();
+    let start = reply.windows(needle.len()).rposition(|w| w == needle)? + needle.len();
     let rest = std::str::from_utf8(&reply[start..]).ok()?;
     let mut channels = rest.split(['/', '\x1b', '\x07']).take(3).map(|part| {
         let digits = part.len().clamp(1, 4) as u32;
@@ -256,9 +289,9 @@ fn parse_background(reply: &[u8]) -> Option<(f32, f32, f32)> {
     Some((channels.next()??, channels.next()??, channels.next()??))
 }
 
-/// Finds a `ESC [ 6 ; height ; width t` reply.
+/// Finds a `ESC [ 6 ; height ; width t` reply, the last, as for the background.
 fn parse_cell_size(reply: &[u8]) -> Option<(usize, usize)> {
-    let start = reply.windows(4).position(|w| w == b"\x1b[6;")? + 4;
+    let start = reply.windows(4).rposition(|w| w == b"\x1b[6;")? + 4;
     let rest = std::str::from_utf8(&reply[start..]).ok()?;
     let (body, _) = rest.split_once('t')?;
     let (height, width) = body.split_once(';')?;
