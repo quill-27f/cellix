@@ -5,8 +5,14 @@
 #
 # One guarded job runs at a time across every worktree, or up to CELLIX_GUARD_SLOTS when
 # the person says the machine has room; a job past the first is only admitted with 30%
-# of memory free. macOS has no cgroups and ignores `ulimit -v`, so memory is enforced by
-# watching the whole process tree.
+# of memory free and the 1-minute load average under CELLIX_GUARD_SLOT_LOAD (1.5) times
+# the cores, since other work here, such as a Linux VM, can take half the cores without
+# using our memory, and tests beside it ran ten times slower. macOS has no cgroups and
+# ignores `ulimit -v`, so memory is enforced by watching the whole process tree.
+#
+# Each job's line in guard.log has the load when it started and when it ended. A job stopped
+# for its timeout leaves what each of its processes was doing, and a 3 s sample of each test
+# binary, in timeouts/ beside guard.log, so a hang can be told from a slow machine.
 #
 # Exit codes: the command's own, or
 #   75  never admitted: the machine stayed too busy for --wait seconds
@@ -18,6 +24,7 @@ mem_mb=${CELLIX_GUARD_MEM_MB:-8192}
 timeout_s=${CELLIX_GUARD_TIMEOUT:-1800}
 wait_s=${CELLIX_GUARD_WAIT:-900}
 slots=${CELLIX_GUARD_SLOTS:-1}
+slot_load=${CELLIX_GUARD_SLOT_LOAD:-1.5}
 gpu=0
 gpu_mb=1024
 label=""
@@ -48,6 +55,11 @@ log=$state/guard.log
 free_pct() { memory_pressure -Q 2>/dev/null | awk '/free percentage/ { gsub("%", ""); print $NF }'; }
 pressure() { sysctl -n kern.memorystatus_vm_pressure_level 2>/dev/null; } # 1 normal, 2 warn, 4 critical
 disk_gb() { df -g . | awk 'NR == 2 { print $4 }'; }
+load1() { sysctl -n vm.loadavg 2>/dev/null | awk '{ print $2 }'; } # "{ 1-min 5-min 15-min }"
+# The load a job past the first may start under: the cores times the factor.
+load_limit() { awk -v c="$(sysctl -n hw.ncpu 2>/dev/null)" -v f="$slot_load" 'BEGIN { print c * f }'; }
+# Whether load $1 is at or over limit $2. Decimals, so awk compares them.
+over() { awk -v l="${1:-0}" -v m="$2" 'BEGIN { exit !(l >= m) }'; }
 gpu_stat() { ioreg -r -d 1 -w 0 -c IOAccelerator 2>/dev/null | grep -o "\"$1\"=[0-9]*" | head -1 | cut -d= -f2; }
 
 # Prints "total_mb pid pid ..." for pid and all its descendants. Walks parents
@@ -88,14 +100,33 @@ acquire() {
   done
 }
 
+# A job waiting in a slot past the first moves to the first once it's free: alone there, the
+# rules for a job beside another don't hold it back, and no later job takes the slot first.
+to_first() {
+  [ "$slot" -gt 1 ] || return 1
+  holder=$(cat "$state/lock/pid" 2>/dev/null)
+  if [ -n "$holder" ] && ! kill -0 "$holder" 2>/dev/null; then rm -rf "$state/lock"; fi
+  mkdir "$state/lock" 2>/dev/null || return 1
+  echo $$ > "$state/lock/pid"
+  rm -rf "$lock"
+  lock=$state/lock
+  slot=1
+}
+
 admit() {
-  # A job beside another needs more room, so the two can't take the machine down together.
-  need=20
-  [ "$slot" -eq 1 ] || need=30
   while :; do
+    to_first
+    # A job beside another needs more room, so the two can't take the machine down together,
+    # and spare cores, or both crawl and the tests that wait on the clock lose to it.
+    need=20
+    [ "$slot" -eq 1 ] || need=30
     free=$(free_pct); level=$(pressure); disk=$(disk_gb)
     reason=""
     [ "${free:-0}" -ge "$need" ] || reason="memory free ${free:-?}%"
+    if [ "$slot" -gt 1 ]; then
+      load=$(load1); limit=$(load_limit)
+      if over "$load" "$limit"; then reason="load ${load}, a second job waits for under ${limit}"; fi
+    fi
     [ "${level:-1}" -lt 4 ] || reason="critical memory pressure"
     [ "${disk:-0}" -ge 20 ] || reason="disk free ${disk:-?} GB"
     if [ "$gpu" = 1 ] && [ "$(gpu_stat 'Device Utilization %')" -ge 70 ] 2>/dev/null; then
@@ -108,8 +139,34 @@ admit() {
   done
 }
 
-record() { printf '%s\t%s\t%s\texit=%s\tpeak=%sMB\t%ss\tjobs=%s\t%s\n' \
-  "$(date '+%F %T')" "${label:-$1}" "$(pwd -P | sed 's|.*/||')" "$2" "$peak" "$SECONDS" "$jobs" "$3" >> "$log"; }
+record() { printf '%s\t%s\t%s\texit=%s\tpeak=%sMB\t%ss\tjobs=%s\tload_start=%s\tload_end=%s\t%s\n' \
+  "$(date '+%F %T')" "${label:-$1}" "$(pwd -P | sed 's|.*/||')" "$2" "$peak" "$SECONDS" "$jobs" \
+  "${load_start:--}" "$(load1)" "$3" >> "$log"; }
+
+# Before a job is stopped for its timeout: what each of its processes was doing, with its state
+# and what it waits on, and a 3 s sample of each test binary's threads, in a folder of their
+# own in timeouts/ beside the log. A test stuck in a call shows where; one only slow shows
+# that. Folders over a week old go. Prints the folder.
+snapshot() {
+  find "$state/timeouts" -mindepth 1 -maxdepth 1 -mtime +7 -exec rm -rf {} + 2>/dev/null
+  name=$(printf '%s' "${label:-$1}" | tr -c 'A-Za-z0-9._-' '_')
+  dir=$state/timeouts/$(date '+%Y%m%d-%H%M%S')-$name-$$
+  pids=$(tree "$child" | cut -s -d' ' -f2-)
+  [ -n "$pids" ] && mkdir -p "$dir" || return 1
+  ps -o pid=,ppid=,stat=,wchan=,etime=,%cpu=,command= -p "$(echo $pids | tr ' ' ,)" \
+    > "$dir/processes.txt" 2>&1
+  samplers=""
+  for p in $pids; do
+    # By the program itself, not its arguments: rustc's name its output in target/*/deps.
+    case $(ps -o comm= -p "$p" 2>/dev/null) in
+      */target/*/deps/*) sample "$p" 3 -file "$dir/sample-$p.txt" > /dev/null 2>&1 &
+        samplers="$samplers $!" ;;
+    esac
+  done
+  # Only the samplers: a bare wait would wait for the job too.
+  [ -z "$samplers" ] || wait $samplers
+  echo "$dir"
+}
 
 # Only ever signals real descendant pids. An empty tree must stay empty: `kill 0`
 # would signal the guard's own process group, including whatever launched it.
@@ -131,6 +188,7 @@ acquire || { echo "guard: another guarded job held the lock for ${wait_s}s" >&2;
 trap 'rm -rf "$lock"' EXIT
 trap '[ -n "${child:-}" ] && stop_tree; exit 130' INT TERM
 admit || { record "$1" 75 "not admitted"; exit 75; }
+load_start=$(load1)
 
 # Fewer parallel rustc processes when memory is tighter; each can peak near 1 GB.
 if [ "$free" -ge 40 ]; then jobs=4; else jobs=2; fi
@@ -165,6 +223,9 @@ while kill -0 "$child" 2>/dev/null; do
     fi
   fi
   if [ -n "$killed" ]; then
+    case $killed in
+      timeout*) if where=$(snapshot "$1"); then killed="$killed; what it was doing: $where"; fi ;;
+    esac
     echo "guard: stopping job: $killed" >&2
     stop_tree
     wait "$child" 2>/dev/null

@@ -16,10 +16,13 @@ work. Read `docs/DESIGN.md` for what it is and why. This file says how to work h
 machine is shared with other work and is often under memory pressure. A hook refuses
 direct runs. The guard runs one job at a time, across all worktrees, and may wait for
 memory. `CELLIX_GUARD_SLOTS=2` lets a second job run beside it when the person says the
-machine has room; that job waits for 30% of memory free, and the limits that stop a job
-stay the same. Exit 75 means it was never admitted, 137 that it was killed for memory or GPU
-use, and 124 that it timed out. Treat 137 as a bug to find. Do not raise budgets to
-get past it.
+machine has room; that job waits for 30% of memory free and for the 1-minute load average
+to be under 1.5 times the cores (`CELLIX_GUARD_SLOT_LOAD`), since tests beside other work
+on a busy machine ran ten times slower, and the limits that stop a job stay the same. Exit 75
+means it was never admitted, 137 that it was killed for memory or GPU use, and 124 that it
+timed out; a job that timed out leaves what each of its processes was doing, and a sample of
+each test binary, in `.git/cellix-guard/timeouts`, named in its line of `guard.log`. Treat
+137 as a bug to find. Do not raise budgets to get past it.
 
 **Nothing GPU runs by default.** Cellix has no GPU code. Windows opened for real-terminal
 checks, as in `harness/visual.sh` and `harness/live/scroll.sh`, go through
