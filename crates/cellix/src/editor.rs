@@ -74,7 +74,9 @@ pub const READING_WIDTH: u16 = 88;
 #[derive(Default)]
 pub struct Marks {
     pub comments: Vec<usize>,
-    pub errors: Vec<usize>,
+    /// The file's problems, from its language server and from tasks: each one's line and
+    /// column, counting from zero, and its severity, 1 an error and 2 a warning.
+    pub problems: Vec<(usize, usize, u64)>,
 }
 
 /// Something drawn about a row of the screen, for what would stand beside it: from and to
@@ -4437,8 +4439,13 @@ impl Editor {
             let bg = if active { theme.line } else { theme.text.bg };
             let text_style = cellix_render::Style { bg, ..theme.text };
             grid.fill(Rect::new(area.x, y, area.w, 1), text_style);
-            let number_fg = if marks.errors.contains(&(line + 1)) {
-                theme.error
+            // In its worst problem's colour, from the problems underlined on it.
+            let worst = (marks.problems.iter())
+                .filter(|problem| problem.0 == line)
+                .map(|problem| problem.2)
+                .min();
+            let number_fg = if let Some(severity) = worst {
+                problem_colour(severity, theme)
             } else if active {
                 theme.number_active
             } else {
@@ -4566,6 +4573,7 @@ impl Editor {
             self.draw_brackets(grid, area, gutter, theme, focused);
         }
         self.draw_hints(grid, area, gutter, &hint_rows, theme);
+        self.draw_problems(grid, area, (gutter, &rows), &marks.problems, theme);
         if self.shows_minimap(full) {
             self.draw_minimap(grid, full, theme);
         }
@@ -4608,6 +4616,58 @@ impl Editor {
             }
         }
         self.draw_sticky(grid, area, (gutter, &rows), theme);
+    }
+
+    /// Each problem's word underlined in dots of its colour, as a page marks a misspelling,
+    /// or its cells underlined on the cell tier: the word where it starts, or the line's
+    /// letters where it starts on none. Its line's number takes its worst one's colour from
+    /// the same problems: line 2's was red with nothing under `count`, and line 1's warning
+    /// tinted nothing (132-task-problems).
+    fn draw_problems(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (gutter, rows): (u16, &Rows),
+        problems: &[(usize, usize, u64)],
+        theme: &Theme,
+    ) {
+        /// A dot's width and the step from one to the next, in columns, and where they stand
+        /// in their row, as a page's are.
+        const DOT: f32 = 0.18;
+        const STEP: f32 = 0.4;
+        const UNDER: f32 = 0.9;
+        let rope = self.buffer.rope();
+        for &(line, column, severity) in problems {
+            if line >= rope.len_lines() {
+                continue;
+            }
+            let chars: Vec<char> = self.line_text(line).chars().collect();
+            let Some((from, to)) = problem_span(&chars, column) else {
+                continue;
+            };
+            let start = rope.line_to_char(line);
+            let colour = problem_colour(severity, theme);
+            for (y, a, b) in self.pieces(area, rows, start + from, start + to) {
+                let x = (area.x + gutter) as usize + a;
+                let width = (b.saturating_sub(a)).min((area.right() as usize).saturating_sub(x));
+                if width == 0 {
+                    continue;
+                }
+                if self.measure.in_cells() {
+                    let cells = Rect::new(x as u16, y, width as u16, 1);
+                    grid.set_style(cells, |style| cellix_render::Style {
+                        underline: true,
+                        ..style
+                    });
+                    continue;
+                }
+                for dot in 0..(width as f32 / STEP).ceil() as usize {
+                    let left = x as f32 + dot as f32 * STEP;
+                    let spot = Bounds::cells(left, f32::from(y) + UNDER, DOT, 0.07);
+                    grid.panel(spot, 0, Some(colour), None);
+                }
+            }
+        }
     }
 
     /// Each hint quiet on a chip of its own, as VS Code draws them: on the cell tier the
@@ -5834,6 +5894,41 @@ fn check_box(x: f32, y: u16, width: f32, measure: &dyn Measure) -> Bounds {
     let side = (rendered::CHECK_SIDE * line).min(room);
     let tall = side / line;
     Bounds::cells(x, f32::from(y) + (1.0 - tall) / 2.0, side / wide, tall)
+}
+
+/// A problem's colour: an error's, a warning's, and the accent for what only informs.
+fn problem_colour(severity: u64, theme: &Theme) -> Rgb {
+    match severity {
+        0 | 1 => theme.error,
+        2 => theme.warning(),
+        _ => theme.accent,
+    }
+}
+
+/// What of a line a problem at `column` marks, from and to, in chars: the word it starts in,
+/// or the mark there, or where nothing is there, the line's letters from first to last.
+fn problem_span(chars: &[char], column: usize) -> Option<(usize, usize)> {
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    let at = column.min(chars.len());
+    match chars.get(at) {
+        Some(c) if word(*c) => {
+            let from = (0..at)
+                .rev()
+                .take_while(|i| word(chars[*i]))
+                .last()
+                .unwrap_or(at);
+            let to = (at..chars.len())
+                .find(|i| !word(chars[*i]))
+                .unwrap_or(chars.len());
+            Some((from, to))
+        }
+        Some(c) if !c.is_whitespace() => Some((at, at + 1)),
+        _ => {
+            let first = chars.iter().position(|c| !c.is_whitespace())?;
+            let last = chars.iter().rposition(|c| !c.is_whitespace())?;
+            Some((first, last + 1))
+        }
+    }
 }
 
 /// How thick a block's sideways thumb is, in rows; how far under a table it stands, about

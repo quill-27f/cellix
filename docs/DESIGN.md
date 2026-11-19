@@ -737,7 +737,13 @@ Scrolled out of view, the selection's buttons go until it's back. The agent hear
 was typed while the shell was at its prompt, read off the screen when it's asked. A comment on output
 has no file, so it shows in the Comments tab whatever file is in view, and opening it goes to the
 first place it names. A row of the Problems tab gets Ask Agent under the pointer, which sends what the
-checker said, the file and line, and three lines of code either side. With no file in view the tab lists every file's
+checker said, the file and line, and three lines of code either side. In the code, every problem
+the tab lists, a language server's or a task's, marks its line the same two ways: the line's number
+in its worst problem's colour, a warning's as well as an error's, and the word the problem starts
+at underlined in dots of its colour (its cells underlined on the cell tier), or the line's letters
+where it starts on none. A problem says only where it starts, so its word is what's marked. Until
+19 November 2026 the number was red for a language server's problems alone and nothing was
+underlined (132-task-problems: line 2 red with nothing under `count`, line 1's warning unmarked). With no file in view the tab lists every file's
 comments, so each file's stand under a heading with its icon, its name and how many, as in VS Code's
 Comments view: a file at a time by name, a terminal's output last. A click on a heading opens the
 file, and the list is then that file's alone.

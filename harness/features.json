@@ -7005,5 +7005,12 @@
     "title": "The line over an agent's answer stands 16 px from the words over it and from the answer's own",
     "test": "the_line_over_an_answer_has_16_px_either_side",
     "passes": true
+  },
+  {
+    "id": "problem-number-and-word",
+    "milestone": 15,
+    "title": "A problem's line number takes its worst problem's colour, warnings too, and its word is underlined in it",
+    "test": "a_problems_line_number_and_its_word_take_its_colour",
+    "passes": true
   }
 ]

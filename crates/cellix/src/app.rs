@@ -17387,6 +17387,7 @@ impl App {
             self.draw_welcome(grid);
         }
         self.draw_breadcrumbs(grid);
+        let problems = self.all_problems();
         for (pane, index) in self.panes.iter().enumerate() {
             if let Some(editor) = self.editors.get(*index) {
                 let area = self.pane_area(pane);
@@ -17398,11 +17399,13 @@ impl App {
                     comments: file
                         .as_ref()
                         .map_or_else(Vec::new, |f| self.comment_lines(f)),
-                    errors: editor
-                        .buffer
-                        .path()
-                        .and_then(|p| self.diagnostics.get(p))
-                        .map_or_else(Vec::new, |d| d.iter().map(|d| d.line + 1).collect()),
+                    // Every problem, a task's as a language server's.
+                    problems: (editor.buffer.path())
+                        .and_then(|p| problems.get(p))
+                        .map_or_else(Vec::new, |found| {
+                            let each = |d: &Diagnostic| (d.line, d.column, d.severity);
+                            found.iter().map(each).collect()
+                        }),
                 };
                 // While a comment is being written the keys go to it, and so does the caret.
                 let focused = pane == self.focus && self.dock.draft.is_none();
@@ -38095,6 +38098,99 @@ while True:
             );
             app.poll();
             std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// A line's number takes its worst problem's colour, a warning's too, and the word each
+    /// problem starts at is underlined in that colour, in dots where there are pixels and with
+    /// its cells underlined on the cell tier: line 2's number was red with nothing under
+    /// `count`, and line 1's warning tinted nothing (132-task-problems).
+    #[test]
+    fn a_problems_line_number_and_its_word_take_its_colour() {
+        let theme = Theme::default();
+        for pixels in [false, true] {
+            let (dir, mut app) = project();
+            let file = dir.path().join("src/main.c");
+            fs::write(&file, "int main(void) {\n    return count;\n}\n").unwrap();
+            if pixels {
+                app.set_measure(Rc::new(cellix_render::FontMeasure::new(17, 37)));
+            }
+            app.open(&file).unwrap();
+            let problem = |line: usize, column: usize, severity: u64| Diagnostic {
+                line,
+                column,
+                message: "a problem".to_string(),
+                severity,
+            };
+            app.diagnostics
+                .insert(file.clone(), vec![problem(1, 11, 1), problem(0, 4, 2)]);
+            let grid = screen(&app);
+            let left = app.focused_area().x;
+            let number = |grid: &Grid, y: u16, digit: char| {
+                (left..grid.width())
+                    .map(|x| grid.cell(x, y))
+                    .find(|cell| cell.symbol.starts_with(digit))
+                    .map(|cell| cell.style.fg)
+            };
+            let (count_x, count_y) = find(&grid, "return count");
+            let count_x = count_x + 7;
+            let (main_x, main_y) = find(&grid, "int main");
+            let main_x = main_x + 4;
+            assert_eq!(
+                number(&grid, count_y, '2'),
+                Some(theme.error),
+                "pixels: {pixels}"
+            );
+            assert_eq!(
+                number(&grid, main_y, '1'),
+                Some(theme.warning()),
+                "pixels: {pixels}"
+            );
+            if pixels {
+                // Dots under the word, from its first letter to its last, in its colour.
+                let dots = |colour: Rgb, y: u16| -> Vec<f32> {
+                    (grid.paint.iter())
+                        .filter_map(|p| match p {
+                            Paint::Panel {
+                                bounds,
+                                fill: Some(fill),
+                                ..
+                            } if *fill == colour
+                                && bounds.y / cellix_render::UNIT == i32::from(y) =>
+                            {
+                                Some(bounds.x as f32 / cellix_render::UNIT as f32)
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
+                let under = dots(theme.error, count_y);
+                assert!(!under.is_empty(), "dots under count");
+                let (from, to) = (f32::from(count_x), f32::from(count_x) + 5.0);
+                assert!(
+                    under.iter().all(|x| *x >= from - 0.01 && *x < to),
+                    "{under:?}"
+                );
+                assert!(under.iter().any(|x| *x > to - 1.0), "to its last letter");
+                let under = dots(theme.warning(), main_y);
+                assert!(!under.is_empty(), "dots under main");
+                let (from, to) = (f32::from(main_x), f32::from(main_x) + 4.0);
+                assert!(
+                    under.iter().all(|x| *x >= from - 0.01 && *x < to),
+                    "{under:?}"
+                );
+            } else {
+                for x in count_x..count_x + 5 {
+                    assert!(grid.cell(x, count_y).style.underline, "count's cells");
+                }
+                assert!(
+                    !grid.cell(count_x - 2, count_y).style.underline,
+                    "not the word before"
+                );
+                for x in main_x..main_x + 4 {
+                    assert!(grid.cell(x, main_y).style.underline, "main's cells");
+                }
+            }
         }
     }
 
