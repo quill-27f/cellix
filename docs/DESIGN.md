@@ -1282,11 +1282,16 @@ that was 5 px from the tab row's line. So, where a row has room: a control on a 
 lines keeps the height it has on the terminal's line (a button at a pointed row's end, Show
 Source under the tab row, the conflict header's buttons, the chip of the view showing in a
 docked pane's header: a panel's `inset`; Show Source stands as far under the tab line as its end
-is from the sheet's side, 15 px); a tooltip stands 8 px under its row's top, where the
-line it hangs from is, ends 8 px from the line down the window's side (`App::tip_end`), and
-never covers part of a chip, as the branch's on the heading under the views, or the top of a
-minimap: there's no room between them, so it stands the other side of that edge, 8 px under
-it (`App::tip_clear`); a menu that opens on the row under a tab row starts 8 px down it and
+is from the sheet's side, 15 px); a tooltip under a bar stands under its control 8 px under
+its row's top, where the line it hangs from is (10 px from the line's top), and ends 8 px from
+the line down the window's side (`App::tip_end`). It's a layer, and covers the top of what's
+under it, the branch's chip on the heading under the views or a minimap's first lines: moved
+past them, as it was for a night, the rail's tip and Hide Sidebar's stood 85 px under their
+icons and cut a folder's name in half, and a pane view's 60 px under its line (0.11.0's release
+review). A pane's tab's tip, a cut name or an agent's context, stands from the tab's start,
+inside the pane and 8 px from its lines, and is cut with "…" where it's longer: from the
+pointer, the context's ran over the file's sheet's line and to 9 px from the window's side; a
+menu that opens on the row under a tab row starts 8 px down it and
 takes another row where it needs one (`Menu::hang`), and one dropped from a button stands on
 the button's left edge 8 px under its foot (`Menu::under`), the Comments pane's order menu
 too, in a menu's colour as every menu is; a submenu's first row is level with the row that

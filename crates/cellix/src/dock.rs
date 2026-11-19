@@ -2832,6 +2832,14 @@ impl Dock {
         Some(usage.describe())
     }
 
+    /// The column the tab under `x` starts at, a view's or a session's, which its tip
+    /// stands from.
+    pub fn tab_start_at(&self, area: Rect, x: u16) -> Option<u16> {
+        let tabs = self.tab_rects(area);
+        let under = tabs.into_iter().find(|tab| x >= tab.x && x < tab.right());
+        under.map(|tab| tab.x)
+    }
+
     /// The full name of a tab too narrow to show it, for a tooltip.
     pub fn cut_name(&self, area: Rect, x: u16) -> Option<String> {
         let wanted = self.wanted_widths();

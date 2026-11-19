@@ -16919,11 +16919,25 @@ impl App {
             ..Font::default()
         };
         let wide = |name: &str| self.measure.width(name, font) + 3.0;
+        // A pane's tab's tip stands under the tab from where it starts, inside the pane, cut
+        // with "…" where it's longer than that leaves: from the pointer, the context's ran
+        // over the file's sheet's line and to 9 px from the window's side.
         let cut = self.dock_area().filter(|a| y == a.y);
         let cut = cut.and_then(|area| {
-            let area = self.title_of(area);
-            let context = self.dock.context_tip(area, x);
-            context.or_else(|| self.dock.cut_name(area, x))
+            let title = self.title_of(area);
+            let context = self.dock.context_tip(title, x);
+            let name = context.or_else(|| self.dock.cut_name(title, x))?;
+            let start = f32::from(self.dock.tab_start_at(title, x).unwrap_or(x));
+            // `LINE_AIR` from a line, its own included, as `tip_end` keeps from the side.
+            let near = f32::from(self.size.0) - self.tip_end(0.0);
+            let left = (self.sheet_lines().into_iter())
+                .filter(|line| (line - start).abs() < near)
+                .fold(start.max(0.5), |left, line| left.max(line + near));
+            let end = f32::from(area.right()) - near;
+            let fitted = crate::agent_task::fit(&name, end - left - wide(""), |text| {
+                self.measure.width(text, font)
+            });
+            Some((fitted.into_owned(), left))
         });
         // Where each one goes: its name, left edge and top, in cells and rows.
         let spot = match &self.overlay {
@@ -16968,11 +16982,9 @@ impl App {
                 let left = start.min(self.size.0 as f32 - wide(name) - 0.5);
                 Some((name, left.max(0.5), area.y as f32 + 1.2))
             }
-            Overlay::None if cut.is_some() => cut.as_deref().map(|name| {
-                let left = (x as f32)
-                    .min(self.size.0 as f32 - wide(name) - 0.5)
-                    .max(0.5);
-                (name, left, self.dock_area().map_or(0, |a| a.y) as f32 + 1.2)
+            Overlay::None if cut.is_some() => cut.as_ref().map(|(name, left)| {
+                let top = self.dock_area().map_or(0, |a| a.y) as f32 + 1.2;
+                (name.as_str(), *left, top)
             }),
             // On the row over the bar, since there's none under it.
             Overlay::None if self.quit_button().is_some_and(|cell| cell.contains(x, y)) => Some((
@@ -17093,10 +17105,9 @@ impl App {
         let left = left.min(self.tip_end(wide(name)));
         let along = measures::clear_of_lines(&lines, (left, left + wide(name)), &*self.measure);
         let left = left + f32::from(along);
-        // Under a chip it would cover part of, or the top of a minimap, it stands the other
-        // side of that edge.
-        let under = (left, top + TIP_INSET, wide(name));
-        let top = top + self.tip_clear(grid, under, on_view);
+        // Under its control, 10 px under the line over it, it's a layer over what's under it,
+        // a chip or a minimap's first lines: moved past them, the rail's tip stood 85 px under
+        // its icon and cut a folder's name in half.
         let theme = &self.theme;
         // A hair short of its row, which is what lets it keep its own height on a taller
         // row and stand in the middle of it, clear of a line over or under.
@@ -17175,76 +17186,6 @@ impl App {
             None => 0.5,
         };
         self.size.0 as f32 - wide - margin
-    }
-
-    /// How far down, in rows, a tip at `(left, top)` and `wide` columns wide goes to stand
-    /// clear of what's under it: past the foot of a chip it would cover part of, as the
-    /// branch's under the views (`chips`), or under the top of a minimap, `LINE_AIR` from
-    /// either. Its foot stood on the branch chip's top 8 px and its shadow on the minimap's
-    /// first lines.
-    fn tip_clear(&self, grid: &Grid, (left, top, wide): (f32, f32, f32), chips: bool) -> f32 {
-        let Some((cell, row)) = self.measure.cell_pixels() else {
-            return 0.0;
-        };
-        let (cell, row) = (cell as f32, row as f32);
-        let line = row / self.measure.row_air().max(1.0);
-        let unit = cellix_render::UNIT as f32;
-        let tall = (TOOLTIP_HEIGHT - TIP_INSET * 2.0) * unit;
-        let (start, high) = cellix_render::stood((top * unit) as i32, tall as i32, row, line);
-        let air = measures::LINE_AIR;
-        let (from, to) = (left * cell - air, (left + wide) * cell + air);
-        let across = |b: &Bounds| {
-            let (x, w) = (b.x as f32 * cell / unit, b.w as f32 * cell / unit);
-            x < to && x + w > from
-        };
-        // Each thing in the way, its top and foot in pixels, and whether only its top counts.
-        let mut ways: Vec<(f32, f32, bool)> = Vec::new();
-        for paint in &grid.paint {
-            match paint {
-                Paint::Strips { bounds, .. } if across(bounds) => {
-                    let (y, h) = cellix_render::stood(bounds.y, bounds.h, row, line);
-                    ways.push((y, y + h, true));
-                }
-                Paint::Panel {
-                    bounds,
-                    fill: Some(_),
-                    shadow: false,
-                    ..
-                } if chips
-                    && bounds.h < cellix_render::UNIT
-                    && bounds.w <= 16 * cellix_render::UNIT
-                    && across(bounds) =>
-                {
-                    let (y, h) = cellix_render::stood(bounds.y, bounds.h, row, line);
-                    ways.push((y, y + h, false));
-                }
-                _ => {}
-            }
-        }
-        // A minimap is many rows of strips: only the first one's top is an edge.
-        let first_strip = ways
-            .iter()
-            .filter(|w| w.2)
-            .map(|w| w.0)
-            .fold(f32::INFINITY, f32::min);
-        ways.retain(|w| !w.2 || w.0 == first_strip);
-        let mut at = start;
-        for _ in 0..4 {
-            let hit = ways.iter().find(|(y, foot, top_only)| {
-                if *top_only {
-                    *y > at - air && *y < at + high + air
-                } else {
-                    *y < at + high + air && *foot > at - air
-                }
-            });
-            match hit {
-                Some((y, _, true)) => at = y + air,
-                Some((_, foot, false)) => at = foot + air,
-                None => break,
-            }
-        }
-        // In whole sixty-fourths of a row, rounded up, as paint places it.
-        ((at - start) / row * unit).ceil() / unit
     }
 
     fn tip_drop(&self) -> f32 {

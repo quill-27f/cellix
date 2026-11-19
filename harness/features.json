@@ -6505,8 +6505,8 @@
   {
     "id": "floating-clear-of-lines",
     "milestone": 15,
-    "title": "Menus and tooltips keep 8 px off lines and never cover part of a chip",
-    "test": "a_views_tip_never_covers_part_of_the_branchs_chip",
+    "title": "Menus and tooltips keep 8 px off lines; a tip under a bar stands 10 px under its line, under its control, over what is under it",
+    "test": "every_tip_under_a_bar_stands_10_px_under_its_line_under_its_control",
     "passes": true
   },
   {
@@ -6626,6 +6626,13 @@
     "milestone": 15,
     "title": "The commit checked out keeps the graph's first lane however other branches' commits are listed over it",
     "test": "the_graph_keeps_the_checked_out_branch_in_the_first_lane",
+    "passes": true
+  },
+  {
+    "id": "pane-tab-tip-inside-pane",
+    "milestone": 15,
+    "title": "A pane's tab's tip stands from the tab's start inside the pane, cut with an ellipsis where it's longer",
+    "test": "a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start",
     "passes": true
   }
 ]

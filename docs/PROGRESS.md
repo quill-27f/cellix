@@ -3694,3 +3694,13 @@ The relC track, from the release review's C3.
 - The tour dates its history's commits a minute apart, so it's listed in the order it was made and the ages read 1 to 5 min.
 - Tests: `the_checked_out_line_keeps_the_first_lane_under_another_branch`, `a_merge_of_the_checked_out_commit_draws_its_lane_from_there`, `the_graph_keeps_the_checked_out_branch_in_the_first_lane` (a real repository whose branch's tip is listed first).
 - Not done: ref chips ("main", "agent/queue-bound") on the tip rows.
+
+## A tip stands under its control again, and a tab's inside its pane (2026-11-19)
+
+Release track B, from the release review of 0.11.0's B1 (a regression).
+
+- Yesterday's `App::tip_clear` moved a tip past a chip or a minimap's top, and made it worse: the rail's tip and Hide Sidebar's stood 85 px under their icons and cut "docs" in half (27-hover-rail, 27-sidebar-hide-hover), and Browser's 60 px under the strip's line, still on the minimap (13-strip-hover). It's gone: every tip under a bar stands 10 px under the bar's line, under its control, as Show Sidebar's under the tab row did (27-sidebar-hidden), and covers the top of what's under it, as a layer does.
+- A pane's tab's tip, an agent's context or a cut name, started at the pointer and ran over the file's sheet's line to 9 px from the window's side (64-transcript-tab-hover, x1579 to 2549). It starts from the tab's start, inside the pane 8 px from its line, ends 8 px short of the pane's side, and is cut with "…" where it's longer than that.
+- Tests replaced with it, as the review asked: `a_views_tip_never_covers_part_of_the_branchs_chip` and `a_tip_over_a_minimap_keeps_clear_of_its_top` asked for the move the review found wrong. `every_tip_under_a_bar_stands_10_px_under_its_line_under_its_control` asks for every view's tip, Hide Sidebar's, Browser's over a minimap and Show Sidebar's on the tab row to stand 8.5 to 11 px under the line's foot and across their control; the ledger's `floating-clear-of-lines` names it.
+- Tests: that one, and `a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start`.
+- Looked at in the tour (2x pixels): 27-hover-rail and 27-sidebar-hide-hover, the tips' tops 9 px under the views' line's foot (85 against 74 to 75), as 27-sidebar-hidden's under the tab row; 13-strip-hover, Browser's tip under its icon over the minimap; 64-transcript-tab-hover, the context's tip from x1627, 8 px from the pane's line, to 2541 short of its right line at 2559, ending "…open the tra…".

@@ -263,7 +263,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 
 /// Text cut to fit `room`, as `width` measures it, ending in "…" where it was cut, so
 /// nothing stops mid-letter.
-fn fit(text: &str, room: f32, width: impl Fn(&str) -> f32) -> std::borrow::Cow<'_, str> {
+pub(crate) fn fit(text: &str, room: f32, width: impl Fn(&str) -> f32) -> std::borrow::Cow<'_, str> {
     if width(text) <= room {
         return std::borrow::Cow::Borrowed(text);
     }

@@ -789,67 +789,6 @@ fn tip_pixels(grid: &Grid) -> (f32, f32, f32, f32) {
     (px(tip.x), px(tip.x + tip.w), top, top + high)
 }
 
-/// Whether a tip with these edges stands `LINE_AIR` or more from a thing whose top and foot
-/// are `(top, foot)`, over it or under it.
-fn clear_over_or_under(tip: (f32, f32, f32, f32), (top, foot): (f32, f32)) -> bool {
-    tip.3 + measures::LINE_AIR <= top + 0.5 || tip.2 + 0.5 >= foot + measures::LINE_AIR
-}
-
-/// A tip under the views stands clear of the branch's chip on the heading under them: its
-/// foot stood on the heading's capitals, over the chip's top 8 px. Where there's no room
-/// between them it stands the other side of the chip.
-#[test]
-fn a_views_tip_never_covers_part_of_the_branchs_chip() {
-    let (_dir, mut app) = project((150, 40));
-    app.branch = Some("main".to_string());
-    assert!(app.views_on_top(), "the views across the sidebar's top");
-    let rail = app.activity_area();
-    let mut seen = 0;
-    for x in rail.x..rail.right() {
-        app.handle(mouse(MouseKind::Move, x, rail.y));
-        let grid = screen(&app);
-        let named = grid.paint.iter().any(|p| match p {
-            Paint::Text { text, .. } => text == "Source Control" || text == "Hide Sidebar",
-            _ => false,
-        });
-        if !named {
-            continue;
-        }
-        seen += 1;
-        let tip = tip_pixels(&grid);
-        let chip = grid.paint.iter().find_map(|p| match p {
-            Paint::Panel {
-                bounds,
-                fill: Some(_),
-                shadow: false,
-                ..
-            } if bounds.h < UNIT
-                && bounds.y >= i32::from(rail.bottom()) * UNIT
-                && bounds.y < i32::from(rail.bottom() + 2) * UNIT =>
-            {
-                Some(*bounds)
-            }
-            _ => None,
-        });
-        let chip = chip.expect("the branch's chip");
-        let (top, high) = tall(chip);
-        let beside = px(chip.x + chip.w) < tip.0 || px(chip.x) > tip.1;
-        assert!(
-            beside || clear_over_or_under(tip, (top, top + high)),
-            "the tip {tip:?} on the chip at {top}..{}",
-            top + high
-        );
-        // And 8 px or more under the views' line.
-        let line = row_top(rail.bottom()) + measures::line_pixels(&*app.measure);
-        assert!(
-            tip.2 - line >= 8.0 - 0.5,
-            "{} px under the line",
-            tip.2 - line
-        );
-    }
-    assert!(seen >= 2, "Source Control's tip and the sidebar button's");
-}
-
 /// Quit's tip, over the bar at the foot, ends 8 px or more from the line down the window's
 /// side, as every tip ends at it: it stood 7 px from the pane's.
 #[test]
@@ -873,32 +812,120 @@ fn a_tip_at_the_windows_side_keeps_clear_of_the_sheets_line() {
     }
 }
 
-/// A tip under the strip of the pane's views, over a file with a minimap, keeps clear of the
-/// minimap's top: Browser's stood on it, its shadow over the map's first lines.
+/// Every tip under a bar stands 10 px under the bar's line, under its control: a view's and
+/// the sidebar button's under the views, a pane view's under the pane's strip, and the
+/// sidebar button's under the tab row. It's a layer, and covers the top of what's under it,
+/// the branch's chip or a minimap's first lines: moved past them, the rail's tip and Hide
+/// Sidebar's stood 85 px under their icons and cut a folder's name in half, and Browser's
+/// 60 px under its line, still on the minimap.
 #[test]
-fn a_tip_over_a_minimap_keeps_clear_of_its_top() {
+fn every_tip_under_a_bar_stands_10_px_under_its_line_under_its_control() {
     let (dir, mut app) = project((150, 40));
+    app.branch = Some("main".to_string());
     let long: String = (0..300).map(|i| format!("let line_{i} = {i};\n")).collect();
     let path = dir.path().join("long.rs");
     fs::write(&path, long).unwrap();
     app.open(&path).unwrap();
+    let line = measures::line_pixels(&*app.measure);
+    // Pointed at `(x, y)` on a bar's row, on a control from column `from` to `to`.
+    let check = |app: &mut App, (x, y): (u16, u16), (from, to): (u16, u16), what: &str| {
+        app.handle(mouse(MouseKind::Move, x, y));
+        let grid = screen(app);
+        let tip = tip_pixels(&grid);
+        let under = tip.2 - (row_top(y + 1) + line);
+        assert!(
+            (8.5..=11.0).contains(&under),
+            "{what}: {under} px under its line"
+        );
+        let (from, to) = (f32::from(from) * CELL, f32::from(to) * CELL);
+        assert!(
+            tip.0 < to && tip.1 > from,
+            "{what}: the tip {tip:?} isn't under its control, {from} to {to}"
+        );
+        app.handle(mouse(MouseKind::Move, 60, 20));
+    };
+    let rail = app.activity_area();
+    assert!(app.views_on_top(), "the views across the sidebar's top");
+    for (view, name) in RAIL_NAMES.iter().enumerate() {
+        let x = app.view_x(view, rail);
+        check(&mut app, (x + 1, rail.y), (x, x + VIEW_STEP), name);
+    }
+    let hide = app.sidebar_hide().expect("Hide Sidebar");
+    check(&mut app, (hide.x, hide.y), (hide.x, hide.right()), "Hide");
+    // Over a minimap, under the icons at the top right.
     let actions = app.pane_actions();
     let browser = actions.iter().find(|(.., name)| *name == "Browser");
     let (cell, ..) = browser.expect("the Browser view's icon");
-    app.handle(mouse(MouseKind::Move, cell.x + cell.w / 2, cell.y));
+    let on = (cell.x + cell.w / 2, cell.y);
+    check(&mut app, on, (cell.x, cell.right()), "Browser");
+    // Under the tab row, with the sidebar hidden.
+    app.run(Command::ToggleSidebar);
+    let show = app.main_area().x;
+    assert!(app.sidebar_button() && app.on_tabs_button(show));
+    check(&mut app, (show, 0), (show, show + MENU_BUTTON), "Show");
+}
+
+/// An agent's tab's tip, what it says of the context, stands under the tab from where the
+/// tab starts and inside the pane, `LINE_AIR` from its lines, cut with "…" where it's
+/// longer than that: from the pointer it ran over the file's sheet's line and ended 9 px from
+/// the window's side.
+#[test]
+fn a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start() {
+    let (dir, mut app) = project((150, 40));
+    let fake = dir.path().join("fake-agent");
+    fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    app.agent_program = Some(fake.display().to_string());
+    app.open_agent("claude");
+    let index = app.dock.sessions.len() - 1;
+    let usage = crate::transcript::Usage {
+        context: 124_000,
+        window: 1_000_000,
+        input: 820_000,
+        output: 1_000,
+        model: "claude-opus-5-5".to_string(),
+    };
+    let said = usage.describe();
+    app.dock.sessions[index].usage = Some(usage);
+    let area = app.dock_area().expect("the pane");
+    let title = app.title_of(area);
+    let start = app.dock.tab_start_at(title, title.x + 3);
+    assert_eq!(start, Some(title.x), "the agent's tab is the pane's first");
+    app.handle(mouse(MouseKind::Move, title.x + 3, title.y));
     let grid = screen(&app);
-    let map = grid
-        .paint
-        .iter()
-        .filter_map(|p| match p {
-            Paint::Strips { bounds, .. } => Some(tall(*bounds).0),
-            _ => None,
-        })
-        .fold(f32::INFINITY, f32::min);
-    assert!(map.is_finite(), "a minimap");
     let tip = tip_pixels(&grid);
+    let words = grid.paint.iter().rev().find_map(|p| match p {
+        Paint::Text { text, .. } if text.starts_with("Context") => Some(text.clone()),
+        _ => None,
+    });
+    let words = words.expect("the tip's words");
+    // Too long for the pane at this width, it's cut with "…".
+    assert!(words.ends_with('…'), "{words:?}");
+    let kept = words.trim_end_matches('…');
+    assert!(said.starts_with(kept), "{words:?} of {said:?}");
+    // Inside the pane, clear of its lines, from where the tab starts.
+    let near = measures::LINE_AIR + measures::line_pixels(&*app.measure);
+    let lines = app.sheet_lines();
+    for line in &lines {
+        let line = line * CELL;
+        for edge in [tip.0, tip.1] {
+            assert!(
+                (edge - line).abs() >= near - 0.5,
+                "the tip {tip:?} {} px from the line at {line}",
+                (edge - line).abs()
+            );
+        }
+    }
+    let side = (f32::from(area.x) + SHEET_EDGE) * CELL;
     assert!(
-        tip.3 + measures::LINE_AIR <= map + 0.5 || tip.2 + 0.5 >= map + measures::LINE_AIR,
-        "the tip {tip:?}, the map's top at {map}"
+        tip.0 > side && tip.0 - side <= near + 1.0,
+        "starts {} px into the pane",
+        tip.0 - side
     );
+    let end = f32::from(area.right()) * CELL;
+    assert!(tip.1 < end, "{} px past the pane", tip.1 - end);
 }
