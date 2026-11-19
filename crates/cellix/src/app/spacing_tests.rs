@@ -778,7 +778,10 @@ fn a_card_has_a_dialogs_air_round_it() {
     fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
     let mut app = App::new(dir.path().to_path_buf(), (120, 30));
     airy(&mut app);
-    app.server_install = Some("exit 0".to_string());
+    // Its last line says what Install runs. The air is read off the ink, so the line has a
+    // letter with a tail, as the line before it had: "Runs exit 0" ends at its baseline, and
+    // read 28 px from it.
+    app.server_install = Some("sleep 0".to_string());
     app.open(&dir.path().join("Main.java")).unwrap();
     app.servers.clear();
     app.note_missing("Java");

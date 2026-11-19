@@ -162,6 +162,30 @@ impl Plan {
             Plan::Run { says, .. } | Plan::Needs { says, .. } => says,
         }
     }
+
+    /// A word or two its row shows at rest: the tool that installs it ("npm", "brew", "go"),
+    /// where a build is fetched from ("GitHub"), or what it needs ("needs .NET SDK").
+    pub fn tag(&self) -> String {
+        let says = self.says();
+        if let Some(from) = says.strip_prefix("Fetches ") {
+            let (_, after) = from.split_once(" from ").unwrap_or(("", from));
+            return after
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+        }
+        if let Some(command) = says.strip_prefix("Runs ") {
+            return command
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+        }
+        let needs = says.strip_prefix("Needs ").unwrap_or(says);
+        let first = needs.split(',').next().unwrap_or(needs).trim();
+        format!("needs {}", first.strip_prefix("the ").unwrap_or(first))
+    }
 }
 
 /// What a machine has that installing turns on: its system and processor, the person's home,
@@ -860,11 +884,22 @@ mod tests {
             says(&plan(server("Swift"), &mac)),
             "Runs xcode-select --install"
         );
+        // At rest, a word or two of each: the tool, where from, or what it needs.
+        assert_eq!(jdtls.tag(), "needs Homebrew");
+        assert_eq!(swift.tag(), "needs Swift");
+        let (_dir, tools) = machine("linux", &["npm", "curl", "go"]);
+        let tag = |language: &str, machine: &Machine| plan(server(language), machine).tag();
+        assert_eq!(tag("Python", &tools), "npm");
+        assert_eq!(tag("Markdown", &tools), "GitHub");
+        assert_eq!(tag("Go", &tools), "go");
+        assert_eq!(tag("C#", &tools), "needs .NET SDK");
+        assert_eq!(tag("Java", &mac), "needs Homebrew");
         // Every server says something on every machine, and none runs a sudo.
         for machine in [&amazon, &debian, &bare, &mac] {
             for server in &SERVERS {
                 let plan = plan(server, machine);
                 assert!(!plan.says().is_empty());
+                assert!(!plan.tag().is_empty() && plan.tag().len() < 24);
                 if let Plan::Run { shell, .. } = &plan {
                     assert!(!shell.contains("sudo"), "{shell}");
                 }

@@ -724,7 +724,7 @@ impl SettingsPage {
                     missing,
                     Tone::Quiet,
                     "Install it first, then come back here.",
-                    Some(("Copy Install Command", false, Control::CopyInstall(install))),
+                    Some(("Copy Command", false, Control::CopyInstall(install))),
                 ),
             };
             Block {
@@ -1762,12 +1762,9 @@ impl SettingsPage {
         let row = Rect::new(page.x, y, page.w, 1);
         let hovered = hover.is_some_and(|h| row.contains(h.0, h.1));
         if hovered {
-            let wash = Bounds::cells(
-                page.x as f32 - 0.6,
-                y as f32 + ROW_WASH,
-                page.w as f32 + 1.2,
-                1.0 - ROW_WASH * 2.0,
-            );
+            // The whole row, so a button on it has its 8 px and more over and under: inside
+            // a wash set in from the row, Install stood 5 px under its top.
+            let wash = Bounds::cells(page.x as f32 - 0.6, y as f32, page.w as f32 + 1.2, 1.0);
             grid.panel(wash, 18, Some(theme.page_hover), None);
         }
         let quiet = Style {
@@ -1780,23 +1777,40 @@ impl SettingsPage {
         let end = page
             .right()
             .saturating_sub(control.map_or(INSTALL_WIDTH, |(_, wide)| wide) + 1);
-        // What installing it does here: the command its button runs, or what it needs.
-        let plan = self.found.plan(index).map(Plan::says).filter(|_| !found);
+        // The program always, and what installing it does here in a slot of its own before
+        // the button: at rest a word or two, the tool or where it's from or what it needs;
+        // pointed at, the whole of it; after a failure, why.
+        let program = server.command[0];
+        grid.label(page.x + detail, y, program, quiet, end);
+        let font = Font {
+            size: NOTE_SIZE,
+            ..Font::default()
+        };
+        let named = f32::from(page.x + detail) + measure.width(program, font) + 2.0;
+        let room = f32::from(end) - named;
+        let plan = self.found.plan(index).filter(|_| !found);
         let failed = self.failed.as_ref().filter(|(at, _)| *at == index);
         let error = Style {
             fg: theme.error,
             ..theme.text
         };
-        let (words, style) = match (plan, failed) {
-            // Hovering a missing server says what its button will do.
-            (Some(says), _) if hovered => (says, theme.text),
+        let installing = self.installing.is_some()
+            && self.installing_what == Some(Control::InstallServer(index));
+        let said = match (plan, failed) {
+            _ if installing => None,
+            (Some(plan), _) if hovered => Some((plan.says().to_string(), theme.text)),
             // A failure stays on its row, where it was asked for, until it's tried again.
-            (_, Some((_, why))) => (why.as_str(), error),
-            // With nothing to press, what it needs is all there is to say.
-            (Some(says), _) if control.is_none() => (says, quiet),
-            _ => (server.command[0], quiet),
+            (_, Some((_, why))) => {
+                let why = why.split_once(": ").map_or(why.as_str(), |(_, why)| why);
+                Some((format!("Couldn't: {why}"), error))
+            }
+            (Some(plan), _) => Some((plan.tag(), quiet)),
+            _ => None,
         };
-        grid.label(page.x + detail, y, words, style, end);
+        if let Some((words, style)) = said {
+            let words = cut_middle(&words, room, measure, font);
+            grid.label_right(end, y, &words, style, NOTE_SIZE);
+        }
         if found {
             let state = Style {
                 fg: theme.git_added,
@@ -1806,8 +1820,6 @@ impl SettingsPage {
             return;
         }
         // Being installed, where its button was: a spinner and what it's doing.
-        let installing = self.installing.is_some()
-            && self.installing_what == Some(Control::InstallServer(index));
         if installing {
             let quiet = Style {
                 fg: theme.gutter.fg,
@@ -2186,6 +2198,27 @@ fn draw_block(
 
 /// As many columns of `rect` as a button with these words takes, from its right end: the
 /// place it's clicked stays `rect`, and the chip is no wider than its words need.
+/// Words cut in their middle to fit `room` columns, as a path is, so both ends say what they
+/// say: "Fetches marksman-linux…into ~/.local/bin".
+fn cut_middle(words: &str, room: f32, measure: &dyn Measure, font: Font) -> String {
+    if measure.width(words, font) <= room {
+        return words.to_string();
+    }
+    let letters: Vec<char> = words.chars().collect();
+    for kept in (0..letters.len()).rev() {
+        let (head, tail) = (kept.div_ceil(2), kept / 2);
+        let cut: String = letters[..head]
+            .iter()
+            .chain(['…'].iter())
+            .chain(&letters[letters.len() - tail..])
+            .collect();
+        if measure.width(&cut, font) <= room {
+            return cut;
+        }
+    }
+    String::new()
+}
+
 fn button_place(rect: Rect, label: &str, measure: &dyn Measure) -> (u16, u16) {
     if measure.in_cells() {
         return (rect.x, rect.w);
@@ -2302,7 +2335,7 @@ mod tests {
         };
         let mut grid = Grid::new(AREA.w, AREA.h, theme.text);
         settings.draw(&mut grid, AREA, &values, (None, &measure), &theme);
-        let label = "Copy Install Command";
+        let label = "Copy Command";
         let unit = cellix_render::UNIT as f32;
         let middle = grid.paint.iter().find_map(|p| match p {
             cellix_render::Paint::Text {

@@ -1875,8 +1875,16 @@ taplo, texlab, zls, terraform-ls), that build is fetched for this system and pro
 `~/.local/bin`, with curl or wget. `rustup`, `go install`, `dotnet tool` and `gem install
 --user-install` run as they are. Where only a system package can give it (clangd on Linux, as
 `sudo dnf install clang-tools-extra`) or only Homebrew (jdtls), there's no Install that could
-only fail: the row says what's needed and has Copy Command, as the agents' cards do. Pointed
-at, a row says what its button does here: "Runs npm install -g --prefix ~/.local pyright",
+only fail: the row says what's needed and has Copy Command, as the agents' cards do (one name
+for that button everywhere). A row keeps the server's program in its middle column, and before
+its button says how it installs: at rest a word or two, muted, the tool ("npm", "brew", "go"),
+where a build comes from ("GitHub") or what it needs ("needs .NET SDK"); pointed at, the whole
+of it in the same place, cut in its middle where the row is too narrow, never over the
+program's name; after a failure, why, in the error's colour. The row pointed at is washed whole,
+which leaves its button 8 px and more over and under. The offer card says what its Install runs
+on a line of its own under what the server adds, a build by its program's name, or what it
+needs. What a row says pointed at: "Runs npm install
+-g --prefix ~/.local pyright",
 "Fetches marksman-linux-musl-x64 from GitHub into ~/.local/bin", "Needs Homebrew, or sudo dnf
 install clang-tools-extra".
 

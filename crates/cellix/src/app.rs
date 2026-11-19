@@ -2269,9 +2269,8 @@ impl App {
                         format!("{why}."),
                     )
                 }
-                (None, Plan::Needs { says, .. }) => {
-                    (format!("{language} support"), format!("{detail} {says}."))
-                }
+                // What it needs goes on a line of its own, as what Install runs does.
+                (None, Plan::Needs { .. }) => (format!("{language} support"), detail),
                 (None, Plan::Run { .. }) => (format!("Install {language} support?"), detail),
             };
             (
@@ -2282,6 +2281,38 @@ impl App {
                 self.offer_install.is_some(),
             )
         })
+    }
+
+    /// The card's words under its title, as lines: what the server adds, and what its Install
+    /// runs here, so what a press does is said before it's pressed.
+    fn offer_detail_lines(&self, detail: &str) -> Vec<String> {
+        let mut lines = self.offer_lines(detail);
+        if let Some(runs) = self.offer_runs() {
+            lines.extend(self.offer_lines(&runs));
+        }
+        lines
+    }
+
+    /// What the card's Install runs ("Runs brew install …", "Fetches … into ~/.local/bin"), or
+    /// what it needs where it can't install here.
+    fn offer_runs(&self) -> Option<String> {
+        if self.offering_browser() || self.offer_failure().is_some() {
+            return None;
+        }
+        let (_, server) = self.offer()?;
+        let plan = self.offer_plan(server);
+        match &plan {
+            // A build by its program's name, which the card has room for on one line, where
+            // the file's name ran to two.
+            Plan::Run { says, .. } if says.starts_with("Fetches ") => {
+                let program = SERVERS[server].command[0];
+                let from = plan.tag();
+                Some(format!("Fetches {program} from {from} into ~/.local/bin"))
+            }
+            Plan::Run { says, .. } => Some(says.clone()),
+            // Or, where it can't install here, what it needs, on that line.
+            Plan::Needs { says, .. } => Some(format!("{says}.")),
+        }
     }
 
     /// A line of the corner card's words as the lines it takes inside the card, two cells
@@ -2295,9 +2326,9 @@ impl App {
     /// buttons and an edge, as the logout card is. It's as tall while it installs as it was
     /// when it asked, so it doesn't jump under the pointer.
     fn offer_area(&self) -> Rect {
-        let detail = self
-            .offer_words()
-            .map_or(1, |(_, detail, ..)| self.offer_lines(&detail).len() as u16);
+        let detail = self.offer_words().map_or(1, |(_, detail, ..)| {
+            self.offer_detail_lines(&detail).len() as u16
+        });
         let height = detail.max(1) + 4 + self.card_gap();
         // The window's corner, so opening the side pane doesn't move it over the writing,
         // and inside one sheet, never across the line between two.
@@ -2500,7 +2531,7 @@ impl App {
         }
         let words = grid.painted_so_far();
         grid.label(area.x + 2, area.y + 1, &title, strong, right);
-        for (i, line) in self.offer_lines(&detail).iter().enumerate() {
+        for (i, line) in self.offer_detail_lines(&detail).iter().enumerate() {
             grid.label(area.x + 2, area.y + 2 + i as u16, line, dim, right);
         }
         let lift = self.card_lift(measures::DialogLast::Words, self.card_lead(area));
@@ -24407,19 +24438,29 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
         let mut app = App::new(dir.path().to_path_buf(), (120, 30));
-        // A machine of its own, whose install puts a jdtls where installs do: Installed is
-        // said once it's found there, whatever this machine has.
+        // A machine of its own, whose install, a stand-in on its PATH, puts a jdtls where
+        // installs do: Installed is said once it's found there, whatever this machine has.
+        let bin = dir.path().join("bin");
+        fs::create_dir_all(&bin).unwrap();
+        let program = "\"$HOME/.local/bin/jdtls\"";
+        let installs = format!(
+            "#!/bin/sh\nmkdir -p \"$HOME/.local/bin\" && printf '#!/bin/sh\\n' > {program} && chmod +x {program}\n"
+        );
+        fs::write(bin.join("install-jdtls"), installs).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::Permissions::from_mode(0o755);
+            fs::set_permissions(bin.join("install-jdtls"), mode).unwrap();
+        }
         app.machine = Machine {
             os: std::env::consts::OS,
             arch: std::env::consts::ARCH,
             home: Some(dir.path().join("home")),
-            path: "/usr/bin:/bin".into(),
+            path: format!("{}:/usr/bin:/bin", bin.display()).into(),
             ..Machine::default()
         };
-        let program = "\"$HOME/.local/bin/jdtls\"";
-        app.server_install = Some(format!(
-            "mkdir -p \"$HOME/.local/bin\" && printf '#!/bin/sh\\n' > {program} && chmod +x {program}"
-        ));
+        app.server_install = Some("install-jdtls".to_string());
         app.open(&dir.path().join("Main.java")).unwrap();
         // Whether jdtls is really here doesn't change what happens without it.
         app.servers.clear();
@@ -24708,22 +24749,106 @@ mod tests {
         app.handle(mouse(MouseKind::Move, x, y));
         app.handle(mouse(MouseKind::Left, x, y));
         let grid = screen(&app);
+        let short = "Couldn't: the download isn't there";
         let y = (0..grid.height())
-            .find(|y| grid.row_text(*y).contains("Couldn't install marksman"))
+            .find(|y| grid.row_text(*y).contains(short))
             .unwrap_or_else(|| panic!("not on its row:\n{}", grid.text()));
         let row = grid.row_text(y);
-        assert!(row.contains("Markdown") && row.contains(why), "{row}");
+        // Beside the server's name, which stays.
+        assert!(
+            row.contains("Markdown") && row.contains("marksman"),
+            "{row}"
+        );
         let at = row.find("Couldn't").unwrap();
         let x = row[..at].chars().count() as u16;
         assert_eq!(grid.cell(x, y).style.fg, app.theme.error);
-        assert_eq!(
-            grid.text().matches(why).count(),
-            1,
-            "on its row alone, the bar's gone"
-        );
+        assert!(!grid.text().contains(why), "the bar's message has gone");
         // Nothing ran a package manager, so nothing asked for sudo.
         let asked = fs::read_to_string(dir.path().join("asked.log")).unwrap();
         assert!(!asked.contains("dnf"), "{asked}");
+    }
+
+    /// A server's row says how it installs before Install is pressed: at rest a word or two
+    /// before the button, the tool, where it's fetched from or what it needs; pointed at, the
+    /// whole of it there, cut in its middle where it doesn't fit, and never over the server's
+    /// name, which the sentence stood over (the coordinator's review of 340b738). The row
+    /// pointed at is washed whole, so its button has 8 px and more over and under it, where it
+    /// had 5 and 3.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_row_keeps_its_name_and_says_how_it_installs() {
+        use cellix_render::{Paint, UNIT, inset};
+        let (dir, machine) = stand_in_linux(&[("npm", "exit 1"), ("curl", "exit 1")]);
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let mut app = App::new(project, (170, 70));
+        app.machine = machine;
+        app.run(Command::OpenSettings);
+        app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Editor;
+        for (language, program, tag) in [
+            ("Python", "pyright-langserver", "npm"),
+            ("Markdown", "marksman", "GitHub"),
+            ("C#", "csharp-ls", "needs .NET SDK"),
+        ] {
+            let row = settings_row(&app, language);
+            assert!(row.contains(program) && row.contains(tag), "{row}");
+        }
+        // Pointed at, the whole of it, with the name kept.
+        let python = server_index("Python");
+        let install = settings_spot(&app, Control::InstallServer(python)).expect("Install");
+        app.handle(mouse(MouseKind::Move, install.x + 1, install.y));
+        let row = settings_row(&app, "Python");
+        assert!(row.contains("pyright-langserver"), "{row}");
+        assert!(row.contains("Runs npm install -g"), "{row}");
+        // In a narrow window the sentence is cut in its middle, and the name still kept.
+        app.handle(Event::Resize(110, 70));
+        let markdown = server_index("Markdown");
+        let install = settings_spot(&app, Control::InstallServer(markdown)).expect("Install");
+        app.handle(mouse(MouseKind::Move, install.x + 1, install.y));
+        let row = settings_row(&app, "Markdown");
+        assert!(row.contains("marksman"), "{row}");
+        assert!(
+            row.contains("Fetches") && row.contains('…') && row.contains("bin"),
+            "{row}"
+        );
+
+        // Painted, on rows 50 px tall: the wash is the whole row, the button 8 px and more in.
+        app.handle(Event::Resize(170, 70));
+        app.set_measure(Rc::new(
+            cellix_render::FontMeasure::new(17, 50).with_type_row(36),
+        ));
+        let install = settings_spot(&app, Control::InstallServer(python)).expect("Install");
+        app.handle(mouse(MouseKind::Move, install.x + 1, install.y));
+        let grid = screen(&app);
+        let (top, bottom) = (i32::from(install.y) * UNIT, i32::from(install.y + 1) * UNIT);
+        let panels: Vec<_> = (grid.paint.iter())
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if bounds.y >= top && bounds.y < bottom => Some((*bounds, *fill)),
+                _ => None,
+            })
+            .collect();
+        let wash = (panels.iter())
+            .find(|(_, fill)| *fill == app.theme.page_hover)
+            .unwrap_or_else(|| panic!("the row's wash: {panels:?}"))
+            .0;
+        assert_eq!((wash.y, wash.h), (top, UNIT), "the whole row");
+        let button = (panels.iter())
+            .find(|(_, fill)| *fill == app.theme.button)
+            .unwrap_or_else(|| panic!("the button: {panels:?}"))
+            .0;
+        // A row's button is drawn on the row's type line, inset as a row's chips are.
+        let (at, high) = inset(button.y, button.h, 50.0, 36.0);
+        let row_top = f32::from(install.y) * 50.0;
+        assert!(at - row_top >= 8.0, "{} px over the button", at - row_top);
+        assert!(
+            row_top + 50.0 - (at + high) >= 8.0,
+            "{} px under it",
+            row_top + 50.0 - (at + high)
+        );
     }
 
     /// The card that offers a language's server, where this machine can't install it: what it
@@ -24755,7 +24880,12 @@ mod tests {
         app.open(&dir.path().join("main.py")).unwrap();
         app.servers.clear();
         app.note_missing("Python");
-        assert!(screen(&app).text().contains("Install Python support?"));
+        let text = screen(&app).text();
+        assert!(text.contains("Install Python support?"), "{text}");
+        // What Install runs, said before it's pressed, on a line of its own.
+        let runs = (text.lines()).find(|line| line.contains("Runs npm install -g pyright"));
+        let runs = runs.unwrap_or_else(|| panic!("what Install runs: {text}"));
+        assert!(!runs.contains("adds completion"), "{runs}");
         let at = app.offer_buttons()[0].2;
         app.handle(mouse(MouseKind::Left, at + 1, app.offer_button_row()));
         let deadline = std::time::Instant::now() + BACKGROUND;
@@ -24914,13 +25044,16 @@ mod tests {
             second.contains("completion, errors and rename."),
             "{second}"
         );
+        // Then what Install runs, on a line of its own.
+        let third = grid.row_text(y + 3);
+        assert!(third.contains("Runs exit 0"), "{third}");
         assert_eq!(
-            area.h, 7,
-            "an edge, the title, two lines, a gap, the buttons, an edge"
+            area.h, 8,
+            "an edge, the title, two lines, what it runs, a gap, the buttons, an edge"
         );
         let (_, buttons) = find(&grid, "[Install]");
         assert_eq!(buttons, app.offer_button_row());
-        assert_eq!(buttons, y + 4, "a row left empty over the buttons");
+        assert_eq!(buttons, y + 5, "a row left empty over the buttons");
         // Nothing of it on the rows beside the card's edges, which are the card's own colour.
         for row in [area.y, area.bottom() - 1] {
             let cells = &grid.row(row)[usize::from(area.x)..usize::from(area.right())];
@@ -24932,7 +25065,7 @@ mod tests {
         }
         // A short name's card is a row shorter.
         let (_dir, java) = java_project();
-        assert_eq!(java.offer_area().h, 6);
+        assert_eq!(java.offer_area().h, 7);
     }
 
     /// The fill painted under the button labelled `label`.
