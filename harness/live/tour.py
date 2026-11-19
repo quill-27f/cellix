@@ -466,9 +466,10 @@ Text after the code.
 """
 
 
-def git(root, *args):
+def git(root, *args, env=None):
     identity = ["-c", "user.name=tour", "-c", "user.email=tour@example.com"]
-    subprocess.run(["git", *identity, *args], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", *identity, *args], cwd=root, check=True, capture_output=True,
+                   env={**os.environ, **(env or {})})
 
 
 def project(root):
@@ -851,9 +852,14 @@ def git_scenes(scratch):
     def write(name, text):
         with open(f"{root}/{name}", "w") as f:
             f.write(text)
+    # A minute apart, the last a minute ago, so git lists them in the order they were made:
+    # made in one second, they came in the order of their branches' names, the agent's first.
+    made = [int(time.time()) - 6 * 60]
     def commit(message):
+        made[0] += 60
+        when = f"{made[0]} +0000"
         git(root, "add", "-A")
-        git(root, "commit", "-qm", message)
+        git(root, "commit", "-qm", message, env={"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when})
     write("src/queue.rs", CODE)
     write("README.md", "# Queue\n")
     git(root, "init", "-q", "-b", "main")

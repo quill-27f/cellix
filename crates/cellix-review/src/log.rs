@@ -16,6 +16,8 @@ pub struct Commit {
     pub summary: String,
     /// Branches and tags pointing at it, `HEAD -> ` taken off.
     pub refs: Vec<String>,
+    /// Whether it's the commit checked out: HEAD points at it.
+    pub head: bool,
     /// For a file's history, what the file was called in this commit.
     pub path: Option<PathBuf>,
 }
@@ -46,8 +48,11 @@ fn parse(output: &str) -> Vec<Commit> {
                 .collect();
             let author = fields.next()?.to_string();
             let time = fields.next()?.trim().parse().unwrap_or(0);
-            let refs = fields
-                .next()?
+            let decorations = fields.next()?;
+            let head = decorations
+                .split(", ")
+                .any(|r| r == "HEAD" || r.starts_with("HEAD -> "));
+            let refs = decorations
                 .split(", ")
                 .map(|r| r.trim_start_matches("HEAD -> ").trim_start_matches("tag: "))
                 .filter(|r| !r.is_empty() && *r != "HEAD")
@@ -67,6 +72,7 @@ fn parse(output: &str) -> Vec<Commit> {
                 time,
                 summary: summary.to_string(),
                 refs,
+                head,
                 path,
             })
         })
@@ -192,9 +198,22 @@ impl GraphRow {
 }
 
 /// Lays commits out in lanes. Each lane waits for one commit; a commit takes the lane waiting
-/// for it, or the first free one, and hands it on to its first parent.
+/// for it, or the first free one, and hands it on to its first parent. The commit checked out
+/// keeps the first lane, so its line runs straight down the left however many commits of other
+/// branches are listed over it: until it comes, the lane is kept for it, with nothing drawn.
 pub fn graph(commits: &[Commit]) -> Vec<GraphRow> {
     let mut lanes: Vec<Option<&str>> = Vec::new();
+    let mut kept = (commits.iter().skip(1))
+        .find(|c| c.head)
+        .map(|c| c.hash.as_str());
+    if kept.is_some() {
+        lanes.push(kept);
+    }
+    let drawn = |lanes: &[Option<&str>], kept: Option<&str>| -> Vec<bool> {
+        (lanes.iter().enumerate())
+            .map(|(i, lane)| lane.is_some() && !(i == 0 && kept.is_some()))
+            .collect()
+    };
     let free = |lanes: &mut Vec<Option<&str>>, not: Option<usize>| {
         let open = (0..lanes.len()).find(|&i| lanes[i].is_none() && Some(i) != not);
         open.unwrap_or_else(|| {
@@ -204,7 +223,10 @@ pub fn graph(commits: &[Commit]) -> Vec<GraphRow> {
     };
     let mut rows = Vec::with_capacity(commits.len());
     for commit in commits {
-        let above: Vec<bool> = lanes.iter().map(Option::is_some).collect();
+        let above = drawn(&lanes, kept);
+        if kept == Some(commit.hash.as_str()) {
+            kept = None;
+        }
         let waiting: Vec<usize> = (0..lanes.len())
             .filter(|&i| lanes[i] == Some(commit.hash.as_str()))
             .collect();
@@ -229,10 +251,14 @@ pub fn graph(commits: &[Commit]) -> Vec<GraphRow> {
                 forks.push(to);
             }
         }
+        // A merge of the commit checked out has its line drawn from the merge on.
+        if forks.contains(&0) {
+            kept = None;
+        }
         while lanes.last() == Some(&None) {
             lanes.pop();
         }
-        let below = lanes.iter().map(Option::is_some).collect();
+        let below = drawn(&lanes, kept);
         rows.push(GraphRow {
             lane,
             above,
@@ -283,6 +309,54 @@ mod tests {
         assert_eq!(rows[3].width(), 2);
     }
 
+    /// 0.11.0's tour: a branch's tip, listed over main's commits as git lists commits made in
+    /// one second, took the first lane, and main's line ran down the second.
+    #[test]
+    fn the_checked_out_line_keeps_the_first_lane_under_another_branch() {
+        let mut commits = [
+            commit("side", &["base"]),
+            commit("m2", &["m1"]),
+            commit("m1", &["base"]),
+            commit("base", &[]),
+        ];
+        commits[1].head = true;
+        let rows = graph(&commits);
+        assert_eq!(rows[0].lane, 1, "the branch's tip stands aside");
+        assert_eq!(rows[0].above, vec![false], "nothing over it");
+        assert_eq!(rows[0].below, vec![false, true], "the kept lane is empty");
+        assert_eq!(rows[1].lane, 0);
+        assert_eq!(rows[1].above, vec![false, true], "nothing comes down to it");
+        assert_eq!(rows[1].below, vec![true, true]);
+        assert_eq!(rows[2].lane, 0);
+        assert_eq!(rows[3].lane, 0);
+        assert_eq!(rows[3].joins, vec![1], "the branch ends where it began");
+        assert!(rows.iter().all(|r| r.width() == 2));
+        // Checked out at the top, nothing is kept: the first commit takes the first lane.
+        commits[1].head = false;
+        commits[0].head = true;
+        let rows = graph(&commits);
+        assert_eq!((rows[0].lane, rows[1].lane), (0, 1));
+    }
+
+    /// A merge listed over the commit checked out, of it: its line is drawn from the merge.
+    #[test]
+    fn a_merge_of_the_checked_out_commit_draws_its_lane_from_there() {
+        let mut commits = [
+            commit("merge", &["side", "m1"]),
+            commit("side", &["base"]),
+            commit("m1", &["base"]),
+            commit("base", &[]),
+        ];
+        commits[2].head = true;
+        let rows = graph(&commits);
+        assert_eq!(rows[0].lane, 1);
+        assert_eq!(rows[0].forks, vec![0]);
+        assert_eq!(rows[0].below, vec![true, true]);
+        assert_eq!(rows[1].above, vec![true, true]);
+        assert_eq!(rows[2].lane, 0);
+        assert_eq!(rows[3].joins, vec![1]);
+    }
+
     #[test]
     fn a_straight_history_is_one_lane() {
         let commits = [commit("c", &["b"]), commit("b", &["a"]), commit("a", &[])];
@@ -314,6 +388,8 @@ mod tests {
             commits[0].refs
         );
         assert_eq!(commits[0].author, "Tester");
+        assert!(commits[0].head, "the merge is checked out");
+        assert!(commits.iter().skip(1).all(|c| !c.head));
         let rows = graph(&commits);
         assert_eq!(rows.iter().map(GraphRow::width).max(), Some(2));
         // The side commit's files, against its parent.

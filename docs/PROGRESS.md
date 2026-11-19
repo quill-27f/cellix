@@ -3684,3 +3684,13 @@ The relC track, from the release review's C1, C2 and C4.
 - m1-agent-tabs-light runs the dark scene's steps, so Gemini CLI is done behind the others there too.
 - Tests: `a_double_click_selects_a_word_of_the_samples_title`, `a_drag_held_on_the_status_bar_scrolls_the_sample_page`: the tour's sample page in the tour's window, Airy rows, driven as the scenes are.
 - Unverified: a person double-clicking during a frame of over 400 ms (a debug build on a loaded machine) would lose the double click as the tour did, the count being taken when the press is handled. A release build's frames are far under that.
+
+## The branch checked out keeps the graph's first lane (2026-11-19)
+
+The relC track, from the release review's C3.
+
+- 81-git-graph put main's commits (Bound, Write, Say) in the second lane and the agent branch's one commit in the first, where the picture before had main straight down the first. Nothing in the graph had changed: the tour made all five commits in one second, and `git log --topo-order` lists commits of one second in the order of their branches' names, so `agent/queue-bound`'s tip came first and took the first free lane.
+- The graph keeps the first lane for the commit checked out now (`Commit::head`, from HEAD in git's decorations): commits of other branches listed over it stand in the lanes after it, and the kept lane has no line in it until the commit comes, or a merge of it is drawn into it. Checked out at the top, as usual, nothing changes.
+- The tour dates its history's commits a minute apart, so it's listed in the order it was made and the ages read 1 to 5 min.
+- Tests: `the_checked_out_line_keeps_the_first_lane_under_another_branch`, `a_merge_of_the_checked_out_commit_draws_its_lane_from_there`, `the_graph_keeps_the_checked_out_branch_in_the_first_lane` (a real repository whose branch's tip is listed first).
+- Not done: ref chips ("main", "agent/queue-bound") on the tip rows.

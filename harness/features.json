@@ -6620,5 +6620,12 @@
     "title": "A drag held on the status bar under the sample page scrolls it, the selection going with it, until let go",
     "test": "a_drag_held_on_the_status_bar_scrolls_the_sample_page",
     "passes": true
+  },
+  {
+    "id": "graph-head-first-lane",
+    "milestone": 15,
+    "title": "The commit checked out keeps the graph's first lane however other branches' commits are listed over it",
+    "test": "the_graph_keeps_the_checked_out_branch_in_the_first_lane",
+    "passes": true
   }
 ]

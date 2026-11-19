@@ -1052,6 +1052,57 @@ mod tests {
         ));
     }
 
+    /// 0.11.0's tour (81): git listed an agent branch's tip over main's commits, which took
+    /// main's line to the second lane. Main, checked out, keeps the first, straight down.
+    #[test]
+    fn the_graph_keeps_the_checked_out_branch_in_the_first_lane() {
+        let dir = repo();
+        let path = dir.path();
+        git(path, &["checkout", "-q", "-b", "agent/bound"]);
+        fs::write(path.join("queue.rs"), "fn push() {\n    bounded();\n}\n").unwrap();
+        // Dated after main's, so git lists it first.
+        let output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(path)
+            .args(["commit", "-qam", "Bound it on the side"])
+            .env("GIT_COMMITTER_DATE", "2030-01-01T00:00:00")
+            .env("GIT_AUTHOR_DATE", "2030-01-01T00:00:00")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        git(path, &["checkout", "-q", "main"]);
+        fs::write(path.join("notes.md"), "notes\n").unwrap();
+        git(path, &["add", "."]);
+        git(path, &["commit", "-qm", "Say what it is"]);
+        let mut app = App::new(path.to_path_buf(), (150, 40));
+        app.run(Command::ShowHistory);
+        settle_reads(&mut app);
+        app.source.show_graph();
+        assert_eq!(
+            app.source.graph.commits[0].summary, "Bound it on the side",
+            "the branch's tip is listed first"
+        );
+        let grid = screen(&app);
+        let dot = |words: &str| {
+            let (_, y) = find(&grid, words);
+            let row = grid.row_text(y);
+            row.chars()
+                .position(|c| c == '●')
+                .unwrap_or_else(|| panic!("{row}"))
+        };
+        assert!(
+            dot("Bound it on") > dot("Say what it"),
+            "the branch stands aside:\n{}",
+            grid.text()
+        );
+        assert_eq!(
+            dot("Start the"),
+            dot("Say what it"),
+            "main's line is straight:\n{}",
+            grid.text()
+        );
+    }
+
     #[test]
     fn the_timeline_lists_the_open_files_commits_and_opens_one() {
         let dir = merged();
