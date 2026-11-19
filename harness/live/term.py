@@ -454,7 +454,14 @@ def main():
                 pump(0.09)
             pump(0.25)
         elif kind == "resize":
+            # Until Cellix has drawn a frame at the new size, then a while longer. Under load
+            # it took more than the 0.4 s pumped, and an "until" for words already on the
+            # screen passed on the old frame: a shot then had the old size, and "bytes" none.
+            frames = screen.frames
             set_size(step[1], step[2])
+            sent = time.time()
+            while screen.frames == frames and time.time() - sent < 10 and alive[0]:
+                pump(0.02)
             pump(0.4)
         elif kind == "shot":
             # A frame is prepared whole and then written, so a slow build looks quiet

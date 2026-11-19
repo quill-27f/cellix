@@ -192,7 +192,7 @@ EXPECT = {
     "81-context-open": "AGENT CONTEXT",
     "81-git-graph": "SOURCE CONTROL",
     "82-git-commit-open": "SOURCE CONTROL",
-    "83-git-timeline": "Bound the queue",
+    "83-git-timeline": "TIMELINE",
     "84-git-compare": "Compare the file",
     "85-git-compared": "COMPARED",
     "86-git-merge-panel": "Merging",
