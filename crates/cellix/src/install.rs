@@ -96,16 +96,19 @@ impl Release {
             return None;
         }
         let arm = arch == "aarch64";
+        // On Linux the static musl builds where a project makes them: they run on an old glibc,
+        // as Amazon Linux 2's 2.26.
         Some(match self {
             // One build for both of a Mac's processors.
             Release::Marksman if mac => "marksman-macos".to_string(),
-            Release::Marksman if arm => "marksman-linux-arm64".to_string(),
-            Release::Marksman => "marksman-linux-x64".to_string(),
+            Release::Marksman if arm => "marksman-linux-musl-arm64".to_string(),
+            Release::Marksman => "marksman-linux-musl-x64".to_string(),
             Release::RustAnalyzer if mac => format!("rust-analyzer-{arch}-apple-darwin.gz"),
-            Release::RustAnalyzer => format!("rust-analyzer-{arch}-unknown-linux-gnu.gz"),
-            // Its "full" builds are the ones with the language server in them.
-            Release::Taplo if mac => format!("taplo-full-darwin-{arch}.gz"),
-            Release::Taplo => format!("taplo-full-linux-{arch}.gz"),
+            // No musl build for ARM.
+            Release::RustAnalyzer if arm => format!("rust-analyzer-{arch}-unknown-linux-gnu.gz"),
+            Release::RustAnalyzer => format!("rust-analyzer-{arch}-unknown-linux-musl.gz"),
+            Release::Taplo if mac => format!("taplo-darwin-{arch}.gz"),
+            Release::Taplo => format!("taplo-linux-{arch}.gz"),
             Release::Texlab if mac => format!("texlab-{arch}-macos.tar.gz"),
             Release::Texlab => format!("texlab-{arch}-linux.tar.gz"),
             Release::Zls if mac => format!("zls-{arch}-macos.tar.xz"),
@@ -687,14 +690,14 @@ mod tests {
         let marksman = plan(server("Markdown"), &linux);
         assert_eq!(
             says(&marksman),
-            "Fetches marksman-linux-x64 from GitHub into ~/.local/bin"
+            "Fetches marksman-linux-musl-x64 from GitHub into ~/.local/bin"
         );
         let Plan::Run { shell, .. } = &marksman else {
             panic!("{marksman:?}")
         };
         assert!(
             shell.contains(
-                "curl -fsSL -o \"$t/get\" https://github.com/artempyanykh/marksman/releases/latest/download/marksman-linux-x64"
+                "curl -fsSL -o \"$t/get\" https://github.com/artempyanykh/marksman/releases/latest/download/marksman-linux-musl-x64"
             ),
             "{shell}"
         );
@@ -703,16 +706,25 @@ mod tests {
             arch: "aarch64",
             ..linux.clone()
         };
-        assert!(says(&plan(server("Markdown"), &arm)).contains("marksman-linux-arm64"));
+        assert!(says(&plan(server("Markdown"), &arm)).contains("marksman-linux-musl-arm64"));
         let texlab = plan(server("LaTeX"), &arm);
         assert!(
             says(&texlab).contains("texlab-aarch64-linux.tar.gz"),
             "{texlab:?}"
         );
         let taplo = plan(server("TOML"), &linux);
+        assert!(says(&taplo).contains("taplo-linux-x86_64.gz"), "{taplo:?}");
+        // The static build where there's one, for an old glibc, and the gnu one on ARM.
+        let rust = |machine: &Machine| says(&plan(server("Rust"), machine)).to_string();
+        let built = rust(&linux);
         assert!(
-            says(&taplo).contains("taplo-full-linux-x86_64.gz"),
-            "{taplo:?}"
+            built.contains("rust-analyzer-x86_64-unknown-linux-musl.gz"),
+            "{built}"
+        );
+        let built = rust(&arm);
+        assert!(
+            built.contains("rust-analyzer-aarch64-unknown-linux-gnu.gz"),
+            "{built}"
         );
         // wget where there's no curl.
         let (_d, wget) = machine("linux", &["wget"]);

@@ -1400,7 +1400,19 @@ with tempfile.TemporaryDirectory() as made:
     shoot("13-source-control", [["click", *REVIEW], ["wait", 0.8]], CODE_FILE)
     shoot("13-source-message", [["click", *REVIEW], ["wait", 0.8], ["click", *ON("Message")],
                                 ["keys", "Say what changed and why"], ["move", *ON("Commit")], ["wait", 0.3]], CODE_FILE)
-    shoot("14-agents", [*LIST_AGENTS, ["wait", 0.5]], CODE_FILE)
+    # The Agents list with an agent in it: one in a tab of its own, as the list has only those.
+    # A stand-in for Claude Code that names itself and gives its hook its session from inside
+    # its tab as it starts, as the plugin does, and waits.
+    agents_bin = f"{scratch}/agents-bin"
+    os.makedirs(agents_bin, exist_ok=True)
+    said = json.dumps({"session_id": "s-one", "cwd": ROOT})
+    with open(f"{agents_bin}/claude", "w") as f:
+        f.write("#!/bin/sh\nprintf '\\033]0;pricing page\\007'\n"
+                f"printf '%s' '{said}' | '{binary}' hook session-start\nexec sleep 300\n")
+    os.chmod(f"{agents_bin}/claude", 0o755)
+    shoot("14-agents", [*command("Open Claude Code", F1), ["until", "pricing"], ["wait", 0.4],
+                        *LIST_AGENTS, ["until", "IDLE"], ["wait", 0.5]], CODE_FILE,
+          env={"PATH": f"{agents_bin}:{os.environ['PATH']}"})
     # The + after the pane's tabs drops a menu of what it starts: Terminal, the agents (one
     # not installed dimmed), the roles, a new worktree. Pointed at, never pressed: a row
     # starts a real agent.

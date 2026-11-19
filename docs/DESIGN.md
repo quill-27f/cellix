@@ -1877,7 +1877,7 @@ taplo, texlab, zls, terraform-ls), that build is fetched for this system and pro
 `sudo dnf install clang-tools-extra`) or only Homebrew (jdtls), there's no Install that could
 only fail: the row says what's needed and has Copy Command, as the agents' cards do. Pointed
 at, a row says what its button does here: "Runs npm install -g --prefix ~/.local pyright",
-"Fetches marksman-linux-x64 from GitHub into ~/.local/bin", "Needs Homebrew, or sudo dnf
+"Fetches marksman-linux-musl-x64 from GitHub into ~/.local/bin", "Needs Homebrew, or sudo dnf
 install clang-tools-extra".
 
 Cellix looks for a server, and starts it, in `~/.local/bin`, `~/.cargo/bin`, Go's bin

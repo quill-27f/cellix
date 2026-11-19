@@ -24596,7 +24596,7 @@ mod tests {
         let project = dir.path().join("project");
         fs::create_dir_all(&project).unwrap();
         fs::write(project.join("notes.md"), "# Notes\n").unwrap();
-        let mut app = App::new(project.clone(), (140, 70));
+        let mut app = App::new(project.clone(), (170, 70));
         app.machine = machine;
         app.open(&project.join("notes.md")).unwrap();
         assert!(!app.servers.contains_key("Markdown"), "no marksman yet");
@@ -24610,7 +24610,7 @@ mod tests {
         app.handle(mouse(MouseKind::Move, install.x + 1, install.y));
         let row = settings_row(&app, "Markdown");
         assert!(
-            row.contains("Fetches marksman-linux-x64 from GitHub into ~/.local/bin"),
+            row.contains("Fetches marksman-linux-musl-x64 from GitHub into ~/.local/bin"),
             "{row}"
         );
         app.handle(mouse(MouseKind::Left, install.x + 1, install.y));
@@ -24621,7 +24621,7 @@ mod tests {
             asked.contains(
                 "curl -fsSL -o /"
             ) && asked.contains(
-                "https://github.com/artempyanykh/marksman/releases/latest/download/marksman-linux-x64"
+                "https://github.com/artempyanykh/marksman/releases/latest/download/marksman-linux-musl-x64"
             ),
             "{asked}"
         );
