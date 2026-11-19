@@ -2588,6 +2588,21 @@ impl App {
         ready
     }
 
+    /// What's still to come in for what's on screen, by name, for whoever reads the screen's
+    /// text to wait for (`CELLIX_SCREEN_TEXT`, beside which the loop writes it): "spelling"
+    /// while the page in front is checked, whose marks come a moment after the page.
+    pub fn settling(&self) -> Vec<&'static str> {
+        let Some(editor) = self.editors.get(self.active()) else {
+            return Vec::new();
+        };
+        let checks = self.spell_on && editor.rendered && editor.dialect().is_writing();
+        if checks && editor.spelled != Some(editor.buffer.revision()) {
+            vec!["spelling"]
+        } else {
+            Vec::new()
+        }
+    }
+
     /// Sends the page in view to be checked once typing pauses, and takes in what comes back.
     fn poll_spell(&mut self) -> bool {
         const PAUSE: std::time::Duration = std::time::Duration::from_millis(500);
@@ -2598,6 +2613,7 @@ impl App {
         while let Some(found) = self.spell.as_ref().and_then(crate::spell::Spell::poll) {
             let same = |e: &&mut Editor| e.buffer.path() == Some(found.file.as_path());
             if let Some(editor) = self.editors.iter_mut().find(same) {
+                editor.spelled = Some(found.revision);
                 editor.issues = (found.revision, found.issues);
                 changed = true;
             }
@@ -30197,6 +30213,33 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         (dir, app)
+    }
+
+    /// A page's spelling is still to come until its marks are in, which whoever reads the
+    /// screen's text can wait for: the tour's 160 and 162 were taken without their dotted
+    /// marks when the checker hadn't finished.
+    #[test]
+    fn a_pages_spelling_is_settling_until_its_marks_come() {
+        let (_dir, mut app) = page_app("This sentence has a mispelled word in it.\n");
+        assert!(
+            app.settling().is_empty(),
+            "nothing's checked with spelling off"
+        );
+        app.spell_on = true;
+        assert_eq!(app.settling(), ["spelling"]);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !app.settling().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the marks never came");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            !app.editors[0].issues.1.is_empty(),
+            "settled with its marks in"
+        );
+        // An edit is checked again, and is settling until it has been.
+        app.handle(Event::Key(KeyEvent::plain(Key::Char('x'))));
+        assert_eq!(app.settling(), ["spelling"]);
     }
 
     #[test]

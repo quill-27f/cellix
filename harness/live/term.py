@@ -23,6 +23,9 @@ The script is a list of steps:
     ["until", "text"]            Waits until the screen says it, and fails the script if it never does.
     ["gone", "text"]             Waits until the screen no longer says it.
     ["until", "text", seconds]   Either, giving up after that long rather than 20 seconds.
+    ["settled", "what", seconds] Waits until Cellix no longer says it's still to come in for the
+                                 screen, as "spelling" for a page's marks, which come a moment
+                                 after the page.
     ["timed", "label", <step>]   Runs a step, and logs how long until the screen answered.
     ["bytes", "label"]           Logs the bytes written to the terminal since the last of these,
                                  and how many of the pictures came as files, and their bytes.
@@ -74,6 +77,16 @@ def said():
             return f.read()
     except (OSError, TypeError):
         return ""
+
+
+def settling():
+    """What Cellix says is still to come in for the screen, a word a line, or None before it
+    has said."""
+    try:
+        with open(os.path.splitext(TEXT)[0] + ".settling", encoding="utf8") as f:
+            return f.read().split("\n")
+    except (OSError, TypeError):
+        return None
 CHANNEL = lambda byte: f"{byte:02x}{byte:02x}"
 BACKGROUND = "/".join(CHANNEL(b) for b in BG)
 
@@ -394,6 +407,18 @@ def main():
                 pump(0.05)
             # The frame that says it is on its way to the terminal as well.
             pump(0.1)
+        elif kind == "settled":
+            deadline = time.time() + (step[2] if len(step) > 2 else 20)
+            while alive[0]:
+                still = settling()
+                if still is not None and step[1] not in still:
+                    break
+                if time.time() > deadline or not TEXT:
+                    missed.append("never settled " + repr(step[1]))
+                    return
+                pump(0.05)
+            # The frame with what came in is on its way to the terminal as well.
+            pump(0.3)
         elif kind == "keys":
             os.write(master, step[1].replace("\\e", "\x1b").encode())
             pump(0.25)

@@ -7012,5 +7012,12 @@
     "title": "A problem's line number takes its worst problem's colour, warnings too, and its word is underlined in it",
     "test": "a_problems_line_number_and_its_word_take_its_colour",
     "passes": true
+  },
+  {
+    "id": "L4-sticky-keeps-match-header",
+    "milestone": 15,
+    "title": "Sticky scroll keeps a scope's header while a line of it is first under the headers",
+    "test": "a_scopes_header_stays_while_a_line_of_it_is_first_under_the_headers",
+    "passes": true
   }
 ]

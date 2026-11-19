@@ -1165,6 +1165,8 @@ pub fn run(options: Options) -> io::Result<()> {
     // Where the screen is also written as text, for the harness: its terminal gets pictures,
     // and the tour has to know a scene reached its surface before taking one of it.
     let screen_text = std::env::var_os("CELLIX_SCREEN_TEXT").map(PathBuf::from);
+    // What's still to come in for the screen, as last written beside its text.
+    let mut settling_said: Option<String> = None;
     // What the terminal is decides which notification sequence it reads.
     let notice =
         cellix_term::Notice::for_terminal(&cellix_term::terminal_names(|n| std::env::var(n).ok()));
@@ -1279,6 +1281,15 @@ pub fn run(options: Options) -> io::Result<()> {
                 shown = None;
                 redraw = true;
                 causes.add(Cause::Resize);
+            }
+            // Beside the screen's text, what's still to come in for it, as the page's spelling,
+            // for whoever reads the text to wait for: the marks come a moment after the page.
+            if let Some(path) = &screen_text {
+                let settling = spaces.app().settling().join("\n");
+                if settling_said.as_deref() != Some(settling.as_str()) {
+                    let _ = std::fs::write(path.with_extension("settling"), &settling);
+                    settling_said = Some(settling);
+                }
             }
             let frame = frame_now(redraw, turning, shown.is_some(), Instant::now());
             if let (Frame::Step, Some(grid)) = (frame, shown.as_mut()) {

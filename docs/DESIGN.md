@@ -1822,7 +1822,12 @@ fold follows its header line through edits, found again by its text, and opens w
 inside, whether from a search, a jump or a click. The headers of the scopes scrolled into stay
 pinned over the top rows, at most five, with a soft shadow under them on pixels and a line on
 cells; in the dark theme a hairline as well, where the shadow starts, since on graphite's sheet
-a shadow is 1.05 to 1 and the pinned lines ran into the code. Brackets take one of three colours by depth, gold, orchid and sky as in VS Code, toned for
+a shadow is 1.05 to 1 and the pinned lines ran into the code. A scope's header is pinned while
+its body has a line below the header's own row; one whose last line would be under its own
+header is pinned all the same when, left out, that line would be the first under the others, so
+no line shows without the header of the scope it's in (a `match`'s last arm stood under the
+`while` with no `match`). A line of only closing brackets says nothing of a scope, so a scope
+with only its `}` left in view isn't pinned. Brackets take one of three colours by depth, gold, orchid and sky as in VS Code, toned for
 each theme, with a stray in the error colour and the caret's pair tinted. Pages are none of this:
 they lay themselves out.
 

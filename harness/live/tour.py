@@ -1961,10 +1961,12 @@ with tempfile.TemporaryDirectory() as made:
     with open(f"{ROOT}/{WIDE_FILE}", "w") as f:
         f.write(WIDE)
     wide = {"size": "200x50"}
-    shoot("160-reading-width", [["wait", 1.0]], WIDE_FILE, **wide)
+    # Once its spelling has come back, which draws its dotted marks a moment after the page.
+    spelled = [["wait", 1.0], ["settled", "spelling", 60]]
+    shoot("160-reading-width", spelled, WIDE_FILE, **wide)
     shoot("161-reading-width-across", [["wait", 1.0], ["tip", 100, 21, 6], ["tip", 100, 30, 4],
                                        ["wait", 0.5]], WIDE_FILE, **wide)
-    shoot("162-reading-width-note", [["wait", 1.0]], NOTE_FILE, background="eff1f5", **wide)
+    shoot("162-reading-width-note", spelled, NOTE_FILE, background="eff1f5", **wide)
     shoot("163-reading-width-paper", [["wait", 1.0]], PAPER, **wide)
     shoot("164-reading-width-sample", to_line(line_of(WRITING, "## Tables")), WRITING, **wide)
     # A narrow side pane with more tabs than it has room for: the one in front whole, the
@@ -1993,12 +1995,15 @@ with tempfile.TemporaryDirectory() as made:
     shoot("111-view-folded", folding, VIEW_FILE)
     shoot("111-view-folded-hover", [*folding, ["move", 32, at_line(11)], ["wait", 0.4]], VIEW_FILE)
     short = {"size": "120x24"}
-    shoot("112-view-sticky", [["wheel", 70, 12, 16], ["wait", 0.8]], VIEW_FILE, **short)
+    # Line 27 at the top, by Go to Line: sixteen notches of the wheel landed on another line
+    # each run. There `match`'s last arm is first under `impl`, `run_due` and `while`, and
+    # `match` (23) is pinned with them.
+    shoot("112-view-sticky", [*to_line(27), ["wait", 0.8]], VIEW_FILE, **short)
     # Each scene opens the file where the last one left it, so these go to the top first.
     home = ["keys", "\x1b[1;5H"]
     shoot("113-view-wrap", [home, ["click", 60, at_line(5)], ["keys", "\x1bz"], ["wait", 0.4]], VIEW_FILE)
     shoot("114-view-brackets", [home, ["click", 54, at_line(16)], ["wait", 0.3]], VIEW_FILE)
-    shoot("115-view-light", [["wheel", 70, 12, 16], ["wait", 0.8], ["move", 32, 14], ["wait", 0.4]],
+    shoot("115-view-light", [*to_line(27), ["wait", 0.8], ["move", 32, 14], ["wait", 0.4]],
           VIEW_FILE, background="eff1f5", **short)
     # The cell tier isn't shot here: term.py keeps only Kitty graphics, so it would draw
     # nothing. The view tests in app/view_tests.rs check the cells.

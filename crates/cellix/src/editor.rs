@@ -264,6 +264,8 @@ pub struct Editor {
     pub issues: (u64, Vec<Issue>),
     /// The revision last sent to be checked.
     pub checked: u64,
+    /// The revision whose spelling and grammar have come back, once any have.
+    pub spelled: Option<u64>,
     /// Where built pieces of LaTeX are kept.
     pub built: Option<PathBuf>,
     /// Pieces of LaTeX this page is waiting for, for the app to have built.
@@ -398,6 +400,7 @@ impl Editor {
             notebook: None,
             issues: (0, Vec::new()),
             checked: 0,
+            spelled: None,
             built: None,
             wanted: RefCell::default(),
             quoted: RefCell::default(),
@@ -1948,7 +1951,7 @@ impl Editor {
         // Outermost first, each pinned at the next slot while its header has scrolled up past
         // that slot and its body still shows below it.
         let mut found: Vec<fold::Range> = Vec::new();
-        for range in ranges {
+        for range in &ranges {
             if found.len() == most {
                 break;
             }
@@ -1957,7 +1960,37 @@ impl Editor {
             }
             let slot = self.top + found.len();
             if rows.row_of(range.start, 0) < slot && rows.row_of(range.end, usize::MAX) > slot {
-                found.push(range);
+                found.push(*range);
+            }
+        }
+        // A scope left out because its last line would be under its own header is in view
+        // without it once it's left out: that line is the first under the headers. A scope's
+        // header stays while any line of it is first under them, so it's pinned after all,
+        // and what's first is looked at again. Without this, `match`'s last arm showed under
+        // the `while` over it with the `match` itself nowhere (0.11.0's release check, 112).
+        // A line of only closing brackets closes the scope inside, and says nothing of this
+        // one, as above.
+        while found.len() < most {
+            let first = self.top + found.len();
+            let line = rows.get(first).map(|row| row.line);
+            let rope = self.buffer.rope();
+            let closing = line
+                .filter(|line| *line < rope.len_lines())
+                .is_some_and(|line| fold::is_closer(&rope.line(line).to_string()));
+            if closing {
+                break;
+            }
+            let inner = |range: &&fold::Range| {
+                found
+                    .last()
+                    .is_none_or(|outer| range.start > outer.start && range.end <= outer.end)
+            };
+            let holds = ranges.iter().filter(inner).find(|range| {
+                rows.row_of(range.start, 0) < first && rows.row_of(range.end, usize::MAX) >= first
+            });
+            match holds {
+                Some(range) => found.push(*range),
+                None => break,
             }
         }
         found.into_iter().map(|r| r.start).collect()

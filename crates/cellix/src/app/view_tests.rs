@@ -418,17 +418,20 @@ fn sticky_scroll_pins_the_scopes_headers_and_a_click_jumps_there() {
         "its scope shows from the start"
     );
 
-    // Down at the end, a scope with only its `}` left in view isn't pinned; the one outside
-    // it, still with a line to show, is.
+    // Down at the end, a scope whose last line would be first under the headers keeps its
+    // header over that line, with its `}` after it: step(39) stood under `impl` with no `fn
+    // run` over it (changed for 112, 19 November). One row on, with only its `}` left in
+    // view, it isn't pinned; the one outside it, still with a line to show, is.
     app.editors[0].top = 42;
     let grid = screen(&app);
     assert!(grid.row_text(top).contains("impl A {"), "{}", grid.text());
+    assert!(grid.row_text(top + 1).contains("fn run"), "{}", grid.text());
+    let under = grid.row_text(top + 2);
+    assert!(under.contains('}') && !under.contains("step("), "{under}");
+    app.editors[0].top = 43;
+    let grid = screen(&app);
+    assert!(grid.row_text(top).contains("impl A {"), "{}", grid.text());
     assert!(!grid.text().contains("fn run"), "{}", grid.text());
-    assert!(
-        grid.row_text(top + 1).contains("step(39)"),
-        "{}",
-        grid.text()
-    );
     app.editors[0].top = 44;
     let grid = screen(&app);
     assert!(!grid.text().contains("impl A {"), "{}", grid.text());
@@ -439,6 +442,93 @@ fn sticky_scroll_pins_the_scopes_headers_and_a_click_jumps_there() {
     app.editors[0].scroll_by(20);
     let grid = screen(&app);
     assert!(!grid.text().contains("impl A {"), "{}", grid.text());
+}
+
+/// The tour's `src/scheduler.rs`, whose `match` (lines 23 to 31) is inside a `while` (18),
+/// inside `run_due` (16), inside `impl` (11).
+const SCHEDULER: &str = r#"//! Runs jobs in order, each when its time comes.
+use std::collections::BinaryHeap;
+use std::time::{Duration, Instant};
+
+/// Holds jobs until they're due; a job that fails is tried again after a pause that doubles each time, up to a limit, and is then reported with the error it last gave.
+pub struct Scheduler {
+    queue: BinaryHeap<Job>,
+    retries: u32,
+}
+
+impl Scheduler {
+    pub fn new(retries: u32) -> Self {
+        Self { queue: BinaryHeap::new(), retries }
+    }
+
+    pub fn run_due(&mut self, now: Instant) -> Vec<Result<(), String>> {
+        let mut done = Vec::new();
+        while let Some(job) = self.queue.peek() {
+            if job.due > now {
+                break;
+            }
+            let mut job = self.queue.pop().expect("peeked");
+            match (job.work)() {
+                Ok(()) => done.push(Ok(())),
+                Err(error) if job.tries < self.retries => {
+                    job.tries += 1;
+                    job.due = now + Duration::from_millis(100 * 2u64.pow(job.tries));
+                    self.queue.push(job);
+                }
+                Err(error) => done.push(Err(format!("{} failed after {} tries: {error}", job.name, job.tries))),
+            }
+        }
+        done
+    }
+
+    pub fn len(&self) -> usize {
+        self.queue.len()
+    }
+}
+
+struct Job {
+    name: String,
+    due: Instant,
+    tries: u32,
+    work: Box<dyn FnMut() -> Result<(), String>>,
+}
+"#;
+
+/// At the offset 112-view-sticky landed on, line 27 at the top, the headers were `impl`,
+/// `run_due` and `while`, and the first line under them was line 30, the `match`'s last arm,
+/// with the `match` nowhere: left out because its last line would be under its own header,
+/// which left that line first under the others. A scope's header stays while any line of it
+/// is first under the headers, and then what's first is looked at again: the `}` closing the
+/// `match`, which says nothing of a scope, so nothing more is pinned.
+#[test]
+fn a_scopes_header_stays_while_a_line_of_it_is_first_under_the_headers() {
+    let (_dir, mut app) = code(SCHEDULER);
+    let top = app.focused_area().y;
+    app.editors[0].top = 26;
+    let grid = screen(&app);
+    let headers = [
+        "impl Scheduler {",
+        "pub fn run_due",
+        "while let Some(job)",
+        "match (job.work)() {",
+    ];
+    for (row, header) in headers.iter().enumerate() {
+        let text = grid.row_text(top + row as u16);
+        assert!(
+            text.contains(header),
+            "{header} on row {row}:\n{}",
+            grid.text()
+        );
+    }
+    // The `match`'s `}` under them, with the arm its header stands over out of view.
+    let under = grid.row_text(top + 4);
+    assert!(under.contains('}') && !under.contains("Err("), "{under}");
+    assert!(!grid.text().contains("failed after"), "{}", grid.text());
+    // A row on, the `match` has only its `}` left, and its header goes with it.
+    app.editors[0].top = 27;
+    let grid = screen(&app);
+    assert!(!grid.text().contains("match (job.work)"), "{}", grid.text());
+    assert!(grid.row_text(top + 2).contains("while let Some(job)"));
 }
 
 #[test]
