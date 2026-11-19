@@ -4,6 +4,7 @@ mod agent_task;
 mod agents;
 mod app;
 mod brackets;
+mod clock;
 mod conflicts;
 mod context;
 mod dock;

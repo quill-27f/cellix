@@ -346,7 +346,7 @@ impl App {
 
     fn save_after_pause(&mut self) {
         let delay = Duration::from_millis(self.settings.auto_save_delay.unwrap_or(AUTO_SAVE_DELAY));
-        let now = Instant::now();
+        let now = self.clock.now();
         let mut due = Vec::new();
         let mut seen = HashMap::new();
         for editor in &self.editors {
@@ -520,6 +520,9 @@ mod tests {
     #[test]
     fn auto_save_after_a_pause_saves_without_a_keypress() {
         let (dir, mut app) = project(r#"{"auto_save": "after_delay", "auto_save_delay": 50}"#);
+        // The pause is the test's to pass: by the wall's clock, a loaded machine had let the
+        // 50 ms go by before the first tick.
+        app.clock = crate::clock::Clock::stopped();
         let a = dir.path().join("a.txt");
         app.open(&a).unwrap();
         typed(&mut app, "new ");
@@ -529,7 +532,7 @@ mod tests {
             "one\n",
             "not before the pause"
         );
-        std::thread::sleep(Duration::from_millis(120));
+        app.clock.advance(Duration::from_millis(120));
         app.handle(Event::Tick);
         assert_eq!(fs::read_to_string(&a).unwrap(), "new one\n");
         assert!(!app.editors[app.active()].buffer.is_dirty());

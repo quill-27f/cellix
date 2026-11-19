@@ -1737,6 +1737,9 @@ pub struct App {
     snippets: Option<crate::snippets::Worker>,
     /// How long LaTeX may take over one of them before it's stopped.
     snippet_limit: std::time::Duration,
+    /// The time an auto-save's pause and a LaTeX piece's limit are measured by: the wall's,
+    /// or in a test one it stops and moves on itself.
+    clock: crate::clock::Clock,
     /// A page on its way to the browser, and whether it got there.
     browser_result: Option<(String, std::sync::mpsc::Receiver<bool>)>,
     /// No browser would open and terminal-browser isn't here, so the corner card offers it.
@@ -1870,6 +1873,7 @@ impl App {
             built_folder: crate::snippets::default_folder(),
             snippets: None,
             snippet_limit: crate::snippets::LIMIT,
+            clock: crate::clock::Clock::default(),
             system_browser: crate::agents::opener(),
             browser_result: None,
             browser_offer: false,
@@ -3115,9 +3119,10 @@ impl App {
         let wanted: Vec<_> = self.editors.iter().flat_map(Editor::take_wanted).collect();
         if !wanted.is_empty() && self.snippets.is_none() {
             let (folder, limit) = (self.built_folder.clone(), self.snippet_limit);
+            let clock = self.clock.clone();
             self.snippets = self
                 .latex_engine()
-                .map(|engine| crate::snippets::Worker::start(engine, folder, limit));
+                .map(|engine| crate::snippets::Worker::start(engine, folder, limit, clock));
         }
         let Some(worker) = &mut self.snippets else {
             // With nothing to build them, the page says so, where "Drawing with LaTeX…"
@@ -29930,7 +29935,18 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     fn latex_that_never_answers_is_stopped_and_the_page_says_so() {
         let (dir, mut app) = tikz_paper("echo $$ > \"$(dirname SAMPLE)/ran\"; exec sleep 30");
         app.snippet_limit = std::time::Duration::from_secs(1);
+        app.clock = crate::clock::Clock::stopped();
         assert!(painted_text(&app).contains("Drawing with LaTeX"));
+        // Its second is up once the stand-in has started and the test moves the clock on: by
+        // the wall's, a loaded machine used it up before the stand-in had written a word.
+        let started = dir.path().join("ran");
+        waits_for(&mut app, |_| {
+            fs::read_to_string(&started).is_ok_and(|pid| pid.ends_with('\n'))
+        });
+        // What it waits by is this clock: it's looking at it.
+        let reads = app.clock.reads();
+        waits_for(&mut app, |app| app.clock.reads() > reads);
+        app.clock.advance(app.snippet_limit);
         waits_for(&mut app, |app| painted_text(app).contains("gave no answer"));
         let text = painted_text(&app);
         assert!(

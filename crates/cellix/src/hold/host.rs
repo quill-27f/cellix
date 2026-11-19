@@ -13,6 +13,7 @@ use std::time::Duration;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 use super::{Job, Stopped};
+use crate::clock::Clock;
 use crate::outbox::Outbox;
 
 /// How much output is kept for the next Cellix to show.
@@ -332,6 +333,8 @@ struct Shared {
     log: Option<Log>,
     /// The size the program has, as `RESIZE` sends it.
     size: Vec<u8>,
+    /// The time a viewer's reading nothing is measured by: the wall's, or a test's.
+    clock: Clock,
 }
 
 struct Client {
@@ -471,15 +474,15 @@ impl Log {
 /// program here, outside the lock, until it catches up; one that has stopped reading is let
 /// go after `STALLED`, and the program carries on.
 fn take_output(shared: &Arc<Mutex<Shared>>, bytes: &[u8]) {
-    let behind = match shared.lock() {
+    let (behind, clock) = match shared.lock() {
         Ok(mut shared) => {
             shared.output(bytes);
-            shared.behind()
+            (shared.behind(), shared.clock.clone())
         }
         Err(_) => return,
     };
     for (visit, out) in behind {
-        if !catches_up(&out)
+        if !catches_up(&out, &clock)
             && let Ok(mut shared) = shared.lock()
         {
             shared.let_go(visit);
@@ -488,16 +491,16 @@ fn take_output(shared: &Arc<Mutex<Shared>>, bytes: &[u8]) {
 }
 
 /// Waits while a viewer's queue is far behind. Says whether it caught up, or false once it
-/// has read nothing for `STALLED`.
-fn catches_up(out: &Outbox) -> bool {
+/// has read nothing for `STALLED` by `clock`.
+fn catches_up(out: &Outbox, clock: &Clock) -> bool {
     let mut left = out.waiting();
-    let mut moved = std::time::Instant::now();
+    let mut moved = clock.now();
     while left > BEHIND {
         std::thread::sleep(Duration::from_millis(2));
         let now = out.waiting();
         if now < left {
-            moved = std::time::Instant::now();
-        } else if moved.elapsed() >= STALLED {
+            moved = clock.now();
+        } else if clock.now().duration_since(moved) >= STALLED {
             return false;
         }
         left = now;
@@ -730,13 +733,19 @@ mod tests {
 
     /// One viewer stops reading, as a laptop asleep with Cellix open: the program's output
     /// still goes to the other at once, the program isn't held up, and the one not reading
-    /// is let go once it has left too much unread.
+    /// is let go once it has left too much unread. How long it has read nothing is measured
+    /// by a clock the test moves on: by the wall's, sending 32 MB on a loaded machine took
+    /// longer than the program may wait, and the one awake could be let go for reading late.
     #[test]
     fn a_viewer_that_stops_reading_holds_up_neither_the_program_nor_the_others() {
         let (asleep, _never_read) = UnixStream::pair().unwrap();
         let (awake, mut reader) = UnixStream::pair().unwrap();
         let mut shared = Shared::default();
-        shared.clients.push(client(1, asleep));
+        let clock = Clock::stopped();
+        shared.clock = clock.clone();
+        let sleeper = client(1, asleep);
+        let unread = sleeper.out.clone();
+        shared.clients.push(sleeper);
         shared.clients.push(client(2, awake));
         let shared = Arc::new(Mutex::new(shared));
         let total = 32 * 1024 * 1024;
@@ -752,14 +761,38 @@ mod tests {
             }
             got
         });
-        let chunk = vec![b'x'; 8192];
-        let started = Instant::now();
-        for _ in 0..total / chunk.len() {
-            take_output(&shared, &chunk);
-        }
-        // Held while the one asleep might still read, and not for ever.
-        let took = started.elapsed();
-        assert!(took < STALLED * 4, "the program waited: {took:?}");
+        let program = {
+            let shared = shared.clone();
+            std::thread::spawn(move || {
+                let chunk = vec![b'x'; 8192];
+                for _ in 0..total / chunk.len() {
+                    take_output(&shared, &chunk);
+                }
+            })
+        };
+        // The one asleep falls far behind, and the program looks at the clock while it waits:
+        // it's the first behind, and nothing else is. The deadline only keeps a broken host
+        // from hanging the test; the clock isn't the wall's.
+        let deadline = Instant::now() + Duration::from_secs(60);
+        let until = |done: &dyn Fn() -> bool, what: &str| {
+            while !done() {
+                assert!(Instant::now() < deadline, "{what}");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+        until(
+            &|| unread.waiting() > BEHIND,
+            "the one asleep never fell behind",
+        );
+        let reads = clock.reads();
+        until(&|| clock.reads() > reads, "the program never waited");
+        // Held while the one asleep might still read, however long that takes...
+        std::thread::sleep(Duration::from_millis(50));
+        assert!(!program.is_finished(), "the program went on before STALLED");
+        assert_eq!(shared.lock().unwrap().clients.len(), 2, "let go too soon");
+        // ...and not for ever: once it has read nothing for STALLED, it's let go.
+        clock.advance(STALLED);
+        program.join().unwrap();
         assert_eq!(
             heard.join().unwrap(),
             total,

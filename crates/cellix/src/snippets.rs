@@ -6,7 +6,9 @@ use std::collections::{HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::clock::Clock;
 
 /// How long LaTeX may take over a piece before it's stopped and the page says so, where
 /// "Drawing with LaTeX…" stood for ever (0.11.0's release check, P4). A first build with
@@ -126,8 +128,8 @@ fn said(limit: Duration) -> String {
 }
 
 /// Runs the engine on the piece in its room, its output kept in a file there so a full pipe
-/// can't hold it up, and stops it, and whatever it started, once `limit` has passed.
-fn run(engine: &[String], room: &Path, limit: Duration) -> Outcome {
+/// can't hold it up, and stops it, and whatever it started, once `limit` has passed by `clock`.
+fn run(engine: &[String], room: &Path, limit: Duration, clock: &Clock) -> Outcome {
     let said_by = room.join("snippet.log");
     let Ok(log) = std::fs::File::create(&said_by) else {
         return Outcome::Refused("Couldn't write the picture's file".to_string());
@@ -149,11 +151,11 @@ fn run(engine: &[String], room: &Path, limit: Duration) -> Outcome {
         Ok(child) => child,
         Err(e) => return Outcome::Refused(format!("Couldn't start LaTeX: {e}")),
     };
-    let deadline = Instant::now() + limit;
+    let deadline = clock.now() + limit;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) if clock.now() < deadline => std::thread::sleep(Duration::from_millis(50)),
             _ => break None,
         }
     };
@@ -179,7 +181,7 @@ fn run(engine: &[String], room: &Path, limit: Duration) -> Outcome {
     }
 }
 
-fn build(engine: &[String], folder: &Path, snippet: &Snippet, limit: Duration) {
+fn build(engine: &[String], folder: &Path, snippet: &Snippet, limit: Duration, clock: &Clock) {
     let room = folder.join(format!("{:016x}", snippet.key));
     let finish = |outcome: Outcome| {
         // What an earlier try said goes, whatever this one says.
@@ -210,7 +212,7 @@ fn build(engine: &[String], folder: &Path, snippet: &Snippet, limit: Duration) {
         ));
         return;
     }
-    finish(run(engine, &room, limit));
+    finish(run(engine, &room, limit, clock));
 }
 
 /// Builds pieces one at a time on its own thread: they share LaTeX's caches.
@@ -222,14 +224,14 @@ pub struct Worker {
 
 impl Worker {
     /// Starts the thread that builds pieces with `engine` into `folder`, stopping any that
-    /// takes longer than `limit`.
-    pub fn start(engine: Vec<String>, folder: PathBuf, limit: Duration) -> Self {
+    /// takes longer than `limit` by `clock`.
+    pub fn start(engine: Vec<String>, folder: PathBuf, limit: Duration, clock: Clock) -> Self {
         let (jobs, inbox) = mpsc::channel::<Snippet>();
         let (finished, done) = crate::wake::channel();
         std::thread::spawn(move || {
             while let Ok(snippet) = inbox.recv() {
                 let _ = std::fs::create_dir_all(&folder);
-                build(&engine, &folder, &snippet, limit);
+                build(&engine, &folder, &snippet, limit, &clock);
                 if finished.send(snippet.key).is_err() {
                     break;
                 }
