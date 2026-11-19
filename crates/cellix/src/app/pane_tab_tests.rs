@@ -1079,3 +1079,64 @@ fn the_line_between_two_tabs_cut_short_has_the_same_air_either_side() {
     }
     assert!(seen > 0, "some width cuts both short and names them");
 }
+
+/// A tab behind whose whole name shows has its dot as close after the name as a whole tab's,
+/// about 11 px to the ink, and the room its last column has to spare after the dot: put at
+/// the tab's end, "pricing page"'s dot stood 33 px after the name and 17 px before the next
+/// tab, and read as that one's (0.11.0's release check, R1, m1-agent-tab-done).
+#[test]
+#[cfg(unix)]
+fn a_dot_on_a_tab_behind_follows_its_name() {
+    let (dir, mut app) = project((150, 44));
+    start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.serve(asking());
+    app.open_agent(crate::agents::SHELL.1);
+    let last = app.dock.sessions.len() - 1;
+    app.dock.sessions[last].renamed = Some("Terminal".to_string());
+    app.dock.active = Some(last);
+    app.dock.front = Front::Session;
+    let unit = UNIT as f32;
+    let mut seen = 0;
+    for width in (16..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let grid = screen(&app);
+        let row = title(&app);
+        let names = words(&grid, row.y);
+        let Some(name) = names.iter().find(|w| w.0 == "pricing page") else {
+            continue;
+        };
+        let end = name.1 + measure().width(&name.0, Font::default());
+        let (top, bottom) = (i32::from(row.y) * UNIT, i32::from(row.y + 1) * UNIT);
+        let dot = grid.paint.iter().find_map(|paint| match paint {
+            Paint::Spinner {
+                bounds, step: None, ..
+            } if bounds.y >= top && bounds.y < bottom => {
+                let left = bounds.x as f32 / unit;
+                let square = bounds.h as f32 / unit * 36.0 / 17.0;
+                // A dot's ink is 12 of its square's 24 parts, from the 6th.
+                Some((left + square * 6.0 / 24.0, left + square * 18.0 / 24.0))
+            }
+            _ => None,
+        });
+        let (ink, ink_end) = dot.expect("the dot after the name");
+        let after = (ink - end) * 17.0;
+        assert!(
+            (8.0..=14.0).contains(&after),
+            "{width}: the dot {after} px after the name: {}",
+            grid.row_text(row.y)
+        );
+        // Nearer its own name than the next tab's mark.
+        let next = squares(&grid, row.y, Some(Icon::Terminal))
+            .into_iter()
+            .find(|mark| mark.0 > ink_end)
+            .expect("the terminal's mark after it");
+        let before_next = (next.0 + (next.1 - next.0) * MARK_INK - ink_end) * 17.0;
+        assert!(
+            before_next > after + 8.0,
+            "{width}: {after} px after the name, {before_next} before the next tab"
+        );
+        seen += 1;
+    }
+    assert!(seen > 0, "some width shows the whole name with its dot");
+}

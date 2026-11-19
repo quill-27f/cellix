@@ -3242,6 +3242,8 @@ impl Dock {
         // The tab before, where it ended and whether it was the one in front, for the line
         // between two behind it side by side.
         let mut before: Option<(u16, bool)> = None;
+        // Where the dot at the end of a tab cut short stopped, if it follows its name.
+        let mut inked: Option<f32> = None;
         for (index, (face, tab)) in faces.iter().zip(self.tab_rects(area)).enumerate() {
             // Out of room, only the tab in front has columns; the rest are in its list.
             if tab.w == 0 {
@@ -3289,13 +3291,18 @@ impl Dock {
                 && !measure.in_cells()
                 && before.is_some_and(|(end, was_on)| !was_on && end == tab.x)
             {
-                let line = Bounds::cells(f32::from(tab.x), f32::from(area.y) + 0.28, 0.0, 0.44);
+                // After a dot that follows its name, in the middle of the air from its ink to
+                // where the next tab's mark starts, as between two files' tabs.
+                let edge = f32::from(tab.x);
+                let x = inked.map_or(edge, |ink| (ink + edge + CUT_ICON - MARK_WIDE / 2.0) / 2.0);
+                let line = Bounds::cells(x, f32::from(area.y) + 0.28, 0.0, 0.44);
                 grid.hairline(line, theme.border);
             }
             before = Some((tab.right(), on));
+            inked = None;
             if cut {
                 let marks = (mark, marked(face.mark));
-                cut_tab(grid, tab, face, (style, hovered, marks), (measure, theme));
+                inked = cut_tab(grid, tab, face, (style, hovered, marks), (measure, theme));
                 continue;
             }
             // Where the views are icons, the one showing has a column and no tab to draw.
@@ -3583,7 +3590,7 @@ fn cut_tab(
     face: &Face,
     (style, hovered, (mark, cut_mark)): (Style, bool, (Option<ProgramMark>, ProgramMark)),
     (measure, theme): (&dyn cellix_render::Measure, &Theme),
-) {
+) -> Option<f32> {
     let (x, right) = (f32::from(tab.x), f32::from(tab.right()));
     let icon = mark.is_some();
     let marked = face.state.is_some();
@@ -3609,15 +3616,16 @@ fn cut_tab(
             }
             let (from, cell) = (x + CUT_AIR, tab.x + 1);
             grid.label_at(from, cell, tab.y, &text, style, tab.right(), 100);
-            return;
+            return None;
         }
-        return marks_alone(
+        marks_alone(
             grid,
             tab,
             face,
             (style, hovered, cut_mark),
             (measure, theme),
         );
+        return None;
     }
     // The name, between the mark and the state, where three letters and a "…" have room.
     let from = if icon {
@@ -3639,13 +3647,14 @@ fn cut_tab(
     };
     let text = crate::context::elide(&face.text, room, measure);
     if !named(&text) {
-        return marks_alone(
+        marks_alone(
             grid,
             tab,
             face,
             (style, hovered, cut_mark),
             (measure, theme),
         );
+        return None;
     }
     if hovered {
         chip(grid, x, f32::from(tab.w));
@@ -3662,19 +3671,23 @@ fn cut_tab(
     if let Some(mark) = mark {
         tab_icon(grid, mark, (x + CUT_ICON, tab.x + 1), tab.y, style);
     }
-    if let Some(state) = face.state {
-        // A dot's ink ends where a spinner's would, as far from the tab's end.
-        let dot = state != TabMark::Working && !measure.in_cells();
-        let nearer = if dot {
-            MARK_WIDE * (1.0 - DOT_SHARE)
-        } else {
-            0.0
-        };
-        let at = right - CUT_MARK - dot_lead(state, measure) + nearer;
-        // On cells, its letter in the column before the last.
-        let cell = tab.right().saturating_sub(2);
-        draw_mark_in(grid, ((at, cell), tab.y), state, style, theme);
+    let state = face.state?;
+    // On cells, its letter in the column before the last.
+    let cell = tab.right().saturating_sub(2);
+    if state == TabMark::Working || measure.in_cells() {
+        // A spinner is the tab's last ink, as far from its end as its mark is from its start.
+        draw_mark_in(grid, ((right - CUT_MARK, cell), tab.y), state, style, theme);
+        return None;
     }
+    // A dot follows the name as a whole tab's does, and the column's room the name didn't
+    // need is after it: put at the tab's end, the dot stood 33 px after "pricing page" and
+    // 17 px before the next tab, and read as that one's (0.11.0's release check, R1).
+    let font = cellix_render::Font::default();
+    let after = from + measure.width(&text, font).min(to - from) + STATE_AIR;
+    let at = after - dot_lead(state, measure);
+    draw_mark_in(grid, ((at, cell), tab.y), state, style, theme);
+    // Where its ink ends, for the line before the next tab.
+    Some(at + dot_lead(state, measure) + MARK_WIDE * DOT_SHARE)
 }
 
 /// A tab behind cut to its mark, its name having no room for three letters: the mark, and

@@ -3783,3 +3783,12 @@ Release track B, after B7.
 
 - "Copy Install Command", named so for B7, ran past its chip at both ends in Integrations (17-settings-integrations): the cards' buttons were twelve columns, and the chip no wider. A card's button is as wide as a button or as its words and a column either side, whichever is wider, from the card's right; the chip is no wider than its words need, as before.
 - Test: `a_cards_button_holds_its_words` (painted, the chip under Copy Install Command reaches past both ends of its words).
+
+## A dot on a tab behind follows its name (2026-11-19)
+
+From the release check of 0.11.0 (R1, `m1-agent-tab-done`).
+
+- A tab behind the one in front, cut short but showing its whole name, had its done or needs-you dot at its end. The tab is whole columns wide, and the room its last column had to spare stood between the name and the dot: 33 px after "pricing page" and 17 px before the next tab, so the dot read as that one's. It was plainer since this morning's A7, which moved what ends a tab cut short 6 px further from its edge. The dot now follows the name as on a whole tab, half a column of air to where a spinner's square would start (about 11 px to its ink), and the spare room is after it. A line between that tab and the next stands in the middle of the air from the dot's ink to the next tab's mark, where it stood at the tab's edge.
+- A spinner keeps its place at the tab's end, as the tab's last ink 16 px from it, and the line after it is where it was: `the_line_between_two_tabs_cut_short_has_the_same_air_either_side` is unchanged and passes.
+- Test: `a_dot_on_a_tab_behind_follows_its_name` (at every width that shows the whole name, 8 to 14 px from its end to the dot's ink, and the next tab's mark further off than that). On the code before it fails at 31 px.
+- Not done from that check: on the tab in front the needs-you dot stands at the start of the spinner's slot, 24 to 28 px before the × against a spinner's 19.

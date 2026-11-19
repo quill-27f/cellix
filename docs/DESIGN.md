@@ -1597,10 +1597,13 @@ of the slack a tab has when there's room, since that slack is what would cut its
 Those behind it stand as names alone, half a column of air either side, whole while they
 fit and then cut short with a "…", the longest giving way first (the last of two alike); two of
 them side by side have a hairline between them, centred in the cell that parts them, so what
-one is doing at its end is never read as the next one's. Its mark and what it's doing stand
-about 16 px from its ends, as a whole tab's do, a dot's ink ending where a spinner's would:
-at 10 and 11 px either side of that line, two read as one (0.11.0's release review,
-m1-agent-tabs). Short of three letters and the "…", a
+one is doing at its end is never read as the next one's. Its mark and a spinner stand about
+16 px from its ends, as a whole tab's do: at 10 and 11 px either side of that line, two read
+as one (0.11.0's release review, m1-agent-tabs). A dot follows the name as on a whole tab,
+about 11 px to its ink, and what the tab's last column has to spare is after it, with the line
+in the middle of the air from the dot to the next mark: at the tab's end, the spare room stood
+between the name and the dot, 33 px, and the dot read as the next tab's (0.11.0's release
+check, m1-agent-tab-done). Short of three letters and the "…", a
 tab behind is cut to its mark, and what its program is doing beside it: the mark in the tab's
 middle with the same air either side, about 16 px to its ink, in three columns, or five with
 its state, and under the pointer a chip that's exactly the mark and that air (it kept a chip
