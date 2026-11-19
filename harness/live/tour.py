@@ -1442,7 +1442,9 @@ with tempfile.TemporaryDirectory() as made:
     shoot("27-sidebar-narrow-hover", [["until", "QUEUE"], ["move", 22, 0], ["wait", 0.4]], CODE_FILE,
           size="84x40", expect="QUEUE")
     shoot("28-hover-tree", [["move", 12, 3]], CODE_FILE)
-    shoot("29-hover-tab", [["move", 38, 0]], CODE_FILE)
+    # On the tab's name, by its words: the fixed cell (38, 0) came to be its × once a tab was
+    # as wide as what it paints, and the picture was 41's.
+    shoot("29-hover-tab", [["move", *ON("queue.rs", 3)]], CODE_FILE)
     shoot("30-hover-menu", [["right", 60, 12], ["move", 64, 13]], CODE_FILE)
     shoot("31-hover-palette", [["keys", CTRL("p")], ["move", 60, 7]], CODE_FILE)
     shoot("32-hover-toolbar", [["move", *ON("▦", 0)]], PAGE_FILE)
@@ -1734,7 +1736,10 @@ with tempfile.TemporaryDirectory() as made:
     TAB = (36, 0)
     shoot("96-tab-drag-split", [["wait", 1.0], ["press", *TAB], ["hold", 70, 12], ["hold", 112, 20]],
           CODE_FILE, RESULTS, size="150x44")
-    shoot("97-tab-drag-reorder", [["wait", 1.0], ["press", 50, 0], ["hold", 40, 0], ["hold", 34, 0]],
+    # results.md's tab by its name, held over queue.rs's: the fixed cell (50, 0) came to be
+    # results.md's ×, and the press closed it.
+    shoot("97-tab-drag-reorder", [["wait", 1.0], ["until", "results"], ["press", *ON("results", 2)],
+                                  ["hold", *ON("queue.rs", 6)], ["hold", *ON("queue.rs", 1)]],
           CODE_FILE, RESULTS, size="150x44")
     # A tab is as wide as what it paints, so its cells hold the start of its name.
     PREVIEW_TAB = ON("Previ")

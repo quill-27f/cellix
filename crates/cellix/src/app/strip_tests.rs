@@ -178,3 +178,152 @@ fn the_count_at_the_strips_start_keeps_clear_of_the_edge() {
         "{before} px before its words, {after} after"
     );
 }
+
+/// The line between two file tabs behind the one in front stands in the middle of the air
+/// between what the first paints, its name while its × shows only under the pointer, and the
+/// second one's mark: at their edge it stood 55 px after README.md and 16 before PLAN.md
+/// (0.11.0's release review, A7, m4-tabs-wheel).
+#[test]
+fn the_line_between_two_file_tabs_stands_in_the_middle_of_their_air() {
+    use cellix_render::{Font, Measure, Paint, UNIT};
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 30));
+    let measure = cellix_render::FontMeasure::new(17, 36);
+    app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 36)));
+    for name in ["queue.rs", "README.md", "PLAN.md"] {
+        let path = dir.path().join(name);
+        fs::write(&path, "text\n").unwrap();
+        app.open(&path).unwrap();
+    }
+    app.show_tab(0);
+    let grid = screen(&app);
+    let unit = UNIT as f32;
+    let lines: Vec<f32> = (grid.paint.iter())
+        .filter_map(|p| match p {
+            Paint::Hairline { bounds, color }
+                if *color == app.theme().border
+                    && bounds.w == 0
+                    && bounds.y < UNIT
+                    && bounds.h < UNIT =>
+            {
+                Some(bounds.x as f32 / unit)
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "one line, between the two behind: {lines:?}"
+    );
+    let line = lines[0];
+    let name = (grid.paint.iter())
+        .find_map(|p| match p {
+            Paint::Text { x, y: 0, text, .. } if text == "README.md" => Some(*x as f32 / unit),
+            _ => None,
+        })
+        .expect("README.md");
+    let name_end = name + measure.width("README.md", Font::default());
+    let mark = (grid.paint.iter())
+        .filter_map(|p| match p {
+            Paint::Icon { bounds, .. } if bounds.y < UNIT => Some(bounds.x as f32 / unit),
+            _ => None,
+        })
+        .find(|x| *x > line)
+        .expect("PLAN.md's mark");
+    // Its ink about 2 px into its box.
+    let (before, after) = ((line - name_end) * 17.0, (mark - line) * 17.0 + 2.0);
+    assert!(
+        (before - after).abs() <= 4.0,
+        "{before} px after README.md, {after} before PLAN.md's mark"
+    );
+    // Beside a tab under the pointer, whose × and its chip stand there, there's none.
+    let (_, x, _) = app.visible_tabs()[1];
+    wheel(&mut app, MouseKind::Move, x + 2, 0);
+    let grid = screen(&app);
+    let lines = (grid.paint.iter()).filter(|p| {
+        matches!(p, Paint::Hairline { bounds, color }
+            if *color == app.theme().border && bounds.w == 0 && bounds.y < UNIT
+                && bounds.h < UNIT)
+    });
+    assert_eq!(lines.count(), 0);
+}
+
+/// The chip under the pointer on a file tab's × is a chip, not the row: about 28 px tall on
+/// the tour's rows of 50 with words set for 36, centred on the ×, and 8 px clear of the
+/// accent's line under the tab in front. It was 37 px, its foot 3 px over that line (29, 41).
+#[test]
+fn a_tabs_close_chip_stands_clear_of_its_line() {
+    use cellix_render::{Icon, Paint, UNIT, inset, stood};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("alpha.txt");
+    fs::write(&path, "first line\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (120, 30));
+    let (row, line) = (50.0, 36.0);
+    let airy = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+    app.set_measure(std::rc::Rc::new(airy));
+    app.open(&path).unwrap();
+    let theme = *app.theme();
+    let (_, x, width) = app.visible_tabs()[0];
+    // Across the tab until the pointer is on its ×, where the chip shows.
+    let mut found = None;
+    for at in x..x + width {
+        wheel(&mut app, MouseKind::Move, at, 0);
+        let grid = screen(&app);
+        let chip = grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                inset: on_wash,
+                ..
+            } if *fill == theme.row_hover && bounds.y < UNIT => Some((*bounds, *on_wash)),
+            _ => None,
+        });
+        if let Some(chip) = chip {
+            found = Some((chip, grid));
+            break;
+        }
+    }
+    let ((chip, on_wash), grid) = found.expect("a chip on the ×");
+    let (top, tall) = if on_wash {
+        inset(chip.y, chip.h, row, line)
+    } else {
+        stood(chip.y, chip.h, row, line)
+    };
+    assert!((26.0..=30.0).contains(&tall), "{tall} px tall");
+    assert!(
+        (top + tall / 2.0 - row / 2.0).abs() <= 1.0,
+        "in the row's middle: {top} and {tall}"
+    );
+    // Across, centred on the ×: its box is a square as tall as its bounds, in the type's
+    // rows, from their left edge.
+    let close = grid.paint.iter().find_map(|p| match p {
+        Paint::Icon {
+            bounds,
+            icon: Icon::Close,
+            ..
+        } if bounds.y < UNIT => Some(*bounds),
+        _ => None,
+    });
+    let close = close.expect("its ×");
+    let px = |units: i32| units as f32 / UNIT as f32 * 17.0;
+    let middle = px(close.x) + close.h as f32 / UNIT as f32 * line / 2.0;
+    let chip_middle = px(chip.x) + px(chip.w) / 2.0;
+    assert!(
+        (middle - chip_middle).abs() <= 1.5,
+        "the × at {middle}, the chip's middle at {chip_middle}"
+    );
+    // The accent's line under the tab in front, 8 px or more under the chip's foot.
+    let under = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            fill: Some(fill),
+            ..
+        } if *fill == theme.accent && bounds.y < UNIT => Some(*bounds),
+        _ => None,
+    });
+    let under = under.expect("the line under the tab in front");
+    let (line_top, _) = stood(under.y, under.h, row, line);
+    let clear = line_top - (top + tall);
+    assert!(clear >= 8.0, "{clear} px over the line");
+}

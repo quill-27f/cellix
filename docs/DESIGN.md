@@ -1557,7 +1557,14 @@ the pane's do, where a column stood between them and an unselected tab's name st
 from the next one's icon. The Settings page's tab has the mark Settings has on the rail. A tab
 behind keeps its ×'s room, as VS Code's do, so a tab doesn't move as it's pointed at, and two
 tabs behind the one in front, a file's or the pane's, whole or cut short, have a hairline
-between them, so that room reads as the tab's own (the tab in front is its own shape). Counted in letters, as cells count them, a tab
+between them, so that room reads as the tab's own (the tab in front is its own shape). Between
+two files' tabs the line stands in the middle of the air between what the first paints, its
+name while its × shows only under the pointer, and the next one's mark, and not beside a tab
+under the pointer, whose × and its chip stand there: at their edge it stood 55 px after a name
+and 16 px before the next mark (0.11.0's release review, m4). The chip under the pointer on a
+file tab's × is about 30 by 28 px round the ×'s ink, kept at that height on a taller row, 8 px
+and more over the line under the tab in front; grown to the row's chip it was 37 px, its foot 3
+px over that line. Counted in letters, as cells count them, a tab
 was nearly twice what it painted, and two tabs, an agent's and a terminal's, were enough to
 cut the row short with 200 px to spare, which took the + away (found in 0.11.0's tour). So
 the + stands a cell after the last tab whenever the tabs and it fit, and its menu is in reach;
@@ -1574,7 +1581,10 @@ of the slack a tab has when there's room, since that slack is what would cut its
 Those behind it stand as names alone, half a column of air either side, whole while they
 fit and then cut short with a "…", the longest giving way first (the last of two alike); two of
 them side by side have a hairline between them, centred in the cell that parts them, so what
-one is doing at its end is never read as the next one's. Short of three letters and the "…", a
+one is doing at its end is never read as the next one's. Its mark and what it's doing stand
+about 16 px from its ends, as a whole tab's do, a dot's ink ending where a spinner's would:
+at 10 and 11 px either side of that line, two read as one (0.11.0's release review,
+m1-agent-tabs). Short of three letters and the "…", a
 tab behind is cut to its mark, and what its program is doing beside it: the mark in the tab's
 middle with the same air either side, about 16 px to its ink, in three columns, or five with
 its state, and under the pointer a chip that's exactly the mark and that air (it kept a chip
@@ -1583,7 +1593,11 @@ mark, and marks tell tabs apart, as herdr's narrow tabs do; letters come back, t
 those cut first, as room allows. On cells a view's tab, a name elsewhere, is cut to the
 letter its icon has at the top right. The + keeps its place after the tabs while any tab is
 cut rather than listed, and the button that maximizes the pane its three columns at the end
-of the pane's part of the row: the names are cut to their marks before either gives way. The
+of the pane's part of the row: the names are cut to their marks before either gives way. With
+the button gone, the +'s own last column of air may be the column kept clear before the icons
+at the top right, which is air too: three agents in a pane of 44 columns were a column short,
+and showed the tab in front alone with 154 px empty (0.11.0's release review,
+m1-agent-tabs-narrow). The
 + gave way whenever the names had less than three letters each, which left a row of agents
 with nothing to start another from beside it (0.11.0's final review: 167, 131,
 m1-agent-tabs-narrow, 173-peek-narrow), and the button with it, though inside Claude Code,

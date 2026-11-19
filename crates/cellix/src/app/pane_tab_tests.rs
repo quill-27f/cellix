@@ -1006,3 +1006,76 @@ fn every_tab_has_one_anatomy() {
 fn states_on(grid: &Grid, y: u16, (from, to): (f32, f32)) -> bool {
     states(grid, y).iter().any(|x| *x >= from && *x < to)
 }
+
+/// Two tabs cut short side by side have the same air either side of the line between them,
+/// about 16 px to the ink, as a whole tab has at its ends: the spinner at the end of one
+/// stood 10 px from the line and the next one's mark 11 (0.11.0's release review, A7,
+/// m1-agent-tabs).
+#[test]
+#[cfg(unix)]
+fn the_line_between_two_tabs_cut_short_has_the_same_air_either_side() {
+    let (dir, mut app) = project((150, 44));
+    start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.serve(working());
+    for name in ["documentation", "Terminal"] {
+        app.open_agent(crate::agents::SHELL.1);
+        let last = app.dock.sessions.len() - 1;
+        app.dock.sessions[last].renamed = Some(name.to_string());
+    }
+    app.dock.active = Some(2);
+    app.dock.front = Front::Session;
+    let unit = UNIT as f32;
+    let mut seen = 0;
+    for width in (16..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let grid = screen(&app);
+        let row = title(&app);
+        if app.dock.fit(row) != Fit::Cut {
+            continue;
+        }
+        // Both behind still named, the first with its spinner at its end.
+        let names = words(&grid, row.y);
+        let named = |start: &str| names.iter().any(|w| w.0.starts_with(start));
+        if !named("pri") || !named("doc") {
+            continue;
+        }
+        let (_, end) = tab_span(&app, row, 0);
+        let (top, bottom) = (i32::from(row.y) * UNIT, i32::from(row.y + 1) * UNIT);
+        let spin = grid.paint.iter().find_map(|paint| match paint {
+            Paint::Spinner { bounds, .. } if bounds.y >= top && bounds.y < bottom => {
+                let left = bounds.x as f32 / unit;
+                Some((left, left + bounds.h as f32 / unit * 36.0 / 17.0))
+            }
+            _ => None,
+        });
+        let spin = spin.expect("the spinner at the first one's end");
+        let line = grid.paint.iter().find_map(|paint| match paint {
+            Paint::Hairline { bounds, color }
+                if *color == app.theme().border
+                    && bounds.w == 0
+                    && bounds.y >= top
+                    && bounds.y < bottom =>
+            {
+                Some(bounds.x as f32 / unit)
+            }
+            _ => None,
+        });
+        let line = line.expect("a line between the two");
+        let mark = squares(&grid, row.y, Some(Icon::Terminal))
+            .into_iter()
+            .find(|m| m.0 >= f32::from(end) - 0.01)
+            .expect("the second one's mark");
+        // The ring's ink ends 1.4 of its 24 before its square does.
+        let before = (line - (spin.1 - (spin.1 - spin.0) * 1.4 / 24.0)) * 17.0;
+        let after = (mark.0 + (mark.1 - mark.0) * MARK_INK - line) * 17.0;
+        assert!(
+            (13.0..=20.0).contains(&before) && (13.0..=20.0).contains(&after),
+            "{width}: {before} px before the line, {after} after: {}",
+            grid.row_text(row.y)
+        );
+        assert!((before - after).abs() <= 3.0, "{before} and {after}");
+        seen += 1;
+    }
+    assert!(seen > 0, "some width cuts both short and names them");
+}

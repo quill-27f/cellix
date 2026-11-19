@@ -94,6 +94,18 @@ const VIEW_PILL: (f32, f32) = (2.5, 0.89);
 const VIEW_LINE: (f32, f32) = (0.3, 0.06);
 /// How thick the accent's line under the tab in front is, in rows.
 const TAB_LINE: f32 = 0.06;
+/// The chip under the pointer on a file tab's ×, across in columns and down in the rows words
+/// are set for: about 30 by 28 px, round the ×'s 16 px of ink, which leaves a row of 50 px 8
+/// px and more between its foot and the line under the tab in front.
+const CLOSE_CHIP: (f32, f32) = (1.75, 0.78);
+/// How far before the place it's drawn at a glyph's box starts, in columns, as
+/// `Grid::glyph_in` draws it.
+const GLYPH_LEAD: f32 = 0.15;
+/// The dot an unsaved file's tab has where its × is: how far after the ×'s place it starts,
+/// and how wide it is, in columns.
+const DIRTY_DOT: (f32, f32) = (0.45, 0.56);
+/// How far into a tab's mark's box its ink starts, in columns: about 2 px.
+const MARK_INK: f32 = 0.12;
 /// How far down the row the count of changed files starts, at its icon's top right corner.
 const VIEW_BADGE: f32 = 0.02;
 const ACTIVITY_WIDTH_CELLS: u16 = 4;
@@ -18067,9 +18079,10 @@ impl App {
         }
         let area = self.tabs_area();
         let pictures = !self.measure.in_cells();
-        // The tab before, where it ended and whether it was in front, for the line between two
-        // behind it side by side, as the side pane's have.
-        let mut before: Option<(u16, bool)> = None;
+        // The tab before, where it ended, whether it was in front or under the pointer, and
+        // where what it paints ends, for the line between two behind it side by side, as the
+        // side pane's have.
+        let mut before: Option<(u16, bool, Option<f32>)> = None;
         for (i, x, width) in self.visible_tabs() {
             let active = self.tab_in_front(i);
             let task = self.task_tab() == Some(i);
@@ -18084,11 +18097,7 @@ impl App {
                 let edge = Bounds::cells(x as f32, top, tab.w as f32, TAB_LINE);
                 grid.panel(edge, 0, Some(theme.accent), None);
             }
-            if !active && pictures && before.is_some_and(|(end, was)| !was && end == x) {
-                let line = Bounds::cells(f32::from(x), f32::from(area.y) + 0.28, 0.0, 0.44);
-                grid.hairline(line, theme.border);
-            }
-            before = Some((x + width, active));
+            let shut = before.filter(|(end, was, _)| !was && *end == x && !active && pictures);
             let name = self.tab_title(i);
             // Where its parts stand: on cells by columns; where there are pictures, the
             // anatomy every tab has, its whole columns' slack shared by its two ends.
@@ -18124,6 +18133,26 @@ impl App {
             } else {
                 close.floor() as u16
             };
+            let dirty = self.editors.get(i).is_some_and(|e| e.buffer.is_dirty());
+            // Between two tabs behind the one in front, a line in the middle of the air between
+            // what the one before paints and this one's mark: at their edge, it stood 55 px
+            // after a name whose × shows only under the pointer and 16 px before the next
+            // mark (0.11.0's release review, m4). Not beside one under the pointer, whose ×
+            // and its chip stand there.
+            if let Some((_, _, Some(end))) = shut {
+                let middle = (end + mark_at + MARK_INK) / 2.0;
+                let line = Bounds::cells(middle, f32::from(area.y) + 0.28, 0.0, 0.44);
+                grid.hairline(line, theme.border);
+            }
+            let painted_end = (!hovered).then(|| {
+                if dirty && close_x < area.right() {
+                    close + DIRTY_DOT.0 + DIRTY_DOT.1
+                } else {
+                    let wide = self.measure.width(&name, Font::default());
+                    (name_at + wide).min(close)
+                }
+            });
+            before = Some((x + width, active, painted_end));
             // The Task page's tab has its mark before its name, in the accent colour, and
             // a file's has its kind's icon in that kind's; on cells only the Task page's.
             let mark = if task {
@@ -18156,7 +18185,6 @@ impl App {
             let at = if pictures { x + 3 } else { x + lead + 2 };
             grid.label_at(name_at, at, area.y, &name, style, close_x, 100);
             if close_x < area.right() {
-                let dirty = self.editors.get(i).is_some_and(|e| e.buffer.is_dirty());
                 let shown = if dirty { "●" } else { "×" };
                 let mark = Style {
                     painted: true,
@@ -18164,7 +18192,8 @@ impl App {
                 };
                 if dirty && !hovered {
                     grid.put_str(close_x, area.y, shown, mark, area.right());
-                    let dot = Bounds::cells(close + 0.45, area.y as f32 + 0.36, 0.56, 0.28);
+                    let (lead, wide) = DIRTY_DOT;
+                    let dot = Bounds::cells(close + lead, area.y as f32 + 0.36, wide, 0.28);
                     grid.panel(dot, 14, Some(theme.sidebar.fg), None);
                 } else if active || hovered {
                     let from = close.floor() as u16;
@@ -18172,9 +18201,25 @@ impl App {
                         .hover
                         .is_some_and(|h| h.1 == area.y && h.0 >= from && h.0 < x + width);
                     if on_close {
-                        let top = area.y as f32 + 0.12;
-                        let chip = Bounds::cells(close - 0.05, top, 1.75, 0.76);
-                        grid.panel(chip, 16, Some(theme.row_hover), None);
+                        // A chip about the ×, 28 px of a row of 50 and kept at that height
+                        // on a taller row, its middle the ×'s: grown to the row's chip it
+                        // was 37 px with its foot 3 px over the line under the tab in
+                        // front (0.11.0's release review, 29 and 41).
+                        let side = cellix_render::GLYPH
+                            * crate::measures::rows_to_columns(self.measure.as_ref())
+                            / self.measure.row_air();
+                        let middle = close - GLYPH_LEAD + side / 2.0;
+                        let (wide, high) = CLOSE_CHIP;
+                        let top = area.y as f32 + (1.0 - high) / 2.0;
+                        grid.paint.push(cellix_render::Paint::Panel {
+                            bounds: Bounds::cells(middle - wide / 2.0, top, wide, high),
+                            radius: 16,
+                            fill: Some(theme.row_hover),
+                            border: None,
+                            shadow: false,
+                            dashed: false,
+                            inset: true,
+                        });
                     }
                     let color = if hovered { theme.text.fg } else { theme.tab.fg };
                     let at = (close, close_x);

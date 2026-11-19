@@ -130,9 +130,11 @@ pub(crate) fn columns(wide: f32) -> u16 {
 /// from its edge to the mark's middle and half its width, and the air before the name.
 const CUT_SIDE: f32 = CUT_ICON + ICON_SIZE;
 /// A tab cut short behind the one in front: from its edge to its mark's middle, and from its
-/// state's start to its other edge, in cells.
-const CUT_ICON: f32 = 1.2;
-const CUT_MARK: f32 = 1.9;
+/// state's start to its other edge, in cells, so the ink at either end is about 16 px from
+/// it, as a whole tab's and one cut to its mark are. At 10 and 11 px either side of the line
+/// between two, they read as one tab (0.11.0's release review, m1-agent-tabs).
+const CUT_ICON: f32 = 1.55;
+const CUT_MARK: f32 = 2.25;
 /// How wide that mark is, in cells, where a cell is 17 px and a line 37.
 const MARK_WIDE: f32 = 1.4;
 /// The button that closes the pane.
@@ -3653,8 +3655,17 @@ fn cut_tab(
         tab_icon(grid, mark, (x + CUT_ICON, tab.x + 1), tab.y, style);
     }
     if let Some(state) = face.state {
-        let at = right - CUT_MARK - dot_lead(state, measure);
-        draw_mark_in(grid, ((at, at.floor() as u16), tab.y), state, style, theme);
+        // A dot's ink ends where a spinner's would, as far from the tab's end.
+        let dot = state != TabMark::Working && !measure.in_cells();
+        let nearer = if dot {
+            MARK_WIDE * (1.0 - DOT_SHARE)
+        } else {
+            0.0
+        };
+        let at = right - CUT_MARK - dot_lead(state, measure) + nearer;
+        // On cells, its letter in the column before the last.
+        let cell = tab.right().saturating_sub(2);
+        draw_mark_in(grid, ((at, cell), tab.y), state, style, theme);
     }
 }
 
