@@ -168,7 +168,7 @@ EXPECT = {
     "50-review-saved": "Saved the review",
     "50-comment-glance": "Open in Comments",
     "50-comment-glance-light": "Open in Comments",
-    "50-comment-glance-open": "Check my",
+    "50-comment-glance-open": "Check My",
     "50-comments-all-resolved": "No open comments",
     # A button's cells are fewer than its words, so less of it is waited for.
     "50-comments-resolved-shown": "Hide 2",
@@ -1595,7 +1595,7 @@ with tempfile.TemporaryDirectory() as made:
     shoot("50-comment-glance-light", glance, NOTE_FILE, size="150x44", background="eff1f5")
     # A press on the card opens the Comments on that comment.
     shoot("50-comment-glance-open", [*glance, ["click", *ON("Open in Comments", 2)],
-                                     ["until", "Check my"], ["wait", 1.0]], NOTE_FILE,
+                                     ["until", "Check My"], ["wait", 1.0]], NOTE_FILE,
           size="150x44")
     shoot("50-plan-versions", comments, "docs/PLAN.md", size="150x44")
     # Narrow beside the editor: a pill that can't share its header's row goes under it.
@@ -1608,7 +1608,7 @@ with tempfile.TemporaryDirectory() as made:
              ["click", *ON("Evidence")], ["wait", 0.6]]
     shoot("50-flow-chips", chips, NOTE_FILE, size="150x44")
     # How a comment goes, on one page: one waiting to reach an agent, saying how; one an agent
-    # says it addressed, with Resolve and Not done; one on words reworded since, which keeps
+    # says it addressed, with Resolve and Not Done; one on words reworded since, which keeps
     # what it was made on; and a suggestion to keep, ask about or dismiss. Each says how long
     # ago it was written, where that's known.
     now = int(time.time())

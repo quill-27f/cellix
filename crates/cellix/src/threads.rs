@@ -24,26 +24,31 @@ const CARD_AIR: (f32, f32) = (0.17, 0.6);
 const CARD_REACH: f32 = 1.0;
 /// How far an agent's answer sits in from the card's text.
 const INSET: f32 = 0.6;
-const BUTTONS: [&str; 3] = ["Reply", "Ask agent", "Resolve"];
+/// A card's buttons say what the palette calls the same thing, in its Title Case: "Ask agent"
+/// stood on a card beside "Ask Agent" in its own hint, Problems and the selection's buttons.
+const ASK: &str = "Ask Agent";
+const BUTTONS: [&str; 3] = ["Reply", ASK, "Resolve"];
 /// On the reviewer's own comment, after those, or on a row of their own when they don't fit.
 const EDITS: [&str; 2] = ["Edit", "Delete"];
 /// On a comment an agent says it addressed: settle it, or say it isn't done.
-const ADDRESSED_BUTTONS: [&str; 2] = ["Resolve", "Not done"];
+const ADDRESSED_BUTTONS: [&str; 2] = ["Resolve", NOT_DONE];
+const NOT_DONE: &str = "Not Done";
 /// Under a suggestion: take it, ask about it without taking it, or drop it.
 const CHOICES: [&str; 3] = ["Keep", "Reply", "Dismiss"];
 /// Under an agent's rewrite: take it in place of the words, put it in as a suggestion to
 /// settle on the page, or turn it down.
 const ACCEPT_REWRITE: &str = "Accept Rewrite";
 const APPLY_REWRITE: &str = "Apply as Suggestion";
-const REWRITE: [&str; 3] = [ACCEPT_REWRITE, APPLY_REWRITE, "Not this"];
+const REWRITE: [&str; 3] = [ACCEPT_REWRITE, APPLY_REWRITE, "Not This"];
 const REOPEN: [&str; 1] = ["Reopen"];
-const CHECK: &str = "Check my review";
+/// The palette's "Comments: Check My Review".
+const CHECK: &str = "Check My Review";
 /// What the row over the comments offers for the document's suggestions.
 const SETTLE: [&str; 3] = ["Accept All", "Reject All", "Next"];
 /// Under the words that say no comment is open: how one is made.
 /// It named only Alt+C, not the button a selection shows, which names the keys as they're set.
 const EMPTY_HINT: &str = "Select text, then press Comment.";
-/// Columns the agent's icon takes on Check my review.
+/// Columns the agent's icon takes on Check My Review.
 const CHECK_ICON: u16 = 2;
 /// The kinds of comment a careful review covers, in the order the strip shows them.
 pub const KINDS: [&str; 5] = [
@@ -53,7 +58,7 @@ pub const KINDS: [&str; 5] = [
     "Structure",
     "Reproducibility",
 ];
-/// How far the summary and Check my review are lifted in their row, so the pills under
+/// How far the summary and Check My Review are lifted in their row, so the pills under
 /// them have half a row of clear air.
 const CHECK_LIFT: f32 = 0.25;
 /// How far a file's heading is lifted in its row, clear of the card under it.
@@ -167,7 +172,7 @@ enum Line {
     /// reviewer's and how many the agent's, and how many files they're on when the list
     /// covers every file.
     Check(usize, usize, usize),
-    /// Under Check my review: the button that sends the comments no agent has had, how many.
+    /// Under Check My Review: the button that sends the comments no agent has had, how many.
     Deliver(usize),
     /// The heading over a file's comments, when the list covers every file: a comment on it
     /// for a click to open it by, none for a terminal's output, then its name and how many.
@@ -185,9 +190,9 @@ enum Line {
     Choices(u32),
     /// Edit and Delete, under the other buttons when they don't all fit on one row.
     Edits(u32),
-    /// Resolve and Not done, on a comment an agent says it addressed.
+    /// Resolve and Not Done, on a comment an agent says it addressed.
     Addressed(u32),
-    /// Accept Rewrite, Apply as Suggestion and Not this, under a rewrite still to be decided:
+    /// Accept Rewrite, Apply as Suggestion and Not This, under a rewrite still to be decided:
     /// which row of them, as many as a narrow card breaks them into.
     Rewrite(u32, usize),
     /// What a comment is about, and what became of those words in a plan's next version.
@@ -574,7 +579,7 @@ fn send_label(draft: &Draft) -> &'static str {
     match (draft.thread, draft.editing, draft.ask) {
         (Some(_), true, _) => "Save",
         (Some(_), false, _) => "Reply",
-        (None, _, true) => "Ask agent",
+        (None, _, true) => ASK,
         (None, _, false) => "Comment",
     }
 }
@@ -829,6 +834,17 @@ fn picture_place(area: Rect, figure: &crate::rendered::Figure, inset: bool) -> (
 /// The word on an answer's chip that says it addressed the comment.
 const ADDRESSED_WORD: &str = "Addressed";
 
+/// The colour of a verdict's word, as an answer's chip says it here and on the card the
+/// pointer brings up over the page: agreeing, or having done it, is the good news; pushing
+/// back is what to look at.
+pub(crate) fn verdict_tone(word: &str, theme: &Theme) -> cellix_render::Rgb {
+    if word == "Agrees" || word == ADDRESSED_WORD {
+        theme.git_added
+    } else {
+        theme.attention
+    }
+}
+
 /// What the button that resolves every addressed comment says.
 fn resolve_all_label(count: usize) -> String {
     format!("Resolve {count} addressed")
@@ -877,12 +893,12 @@ pub enum Goes {
     /// No agent is here to hear it: it waits for one's next prompt.
     #[default]
     Nobody,
-    /// The agent's hooks hand it over with its next prompt, and Ask agent sends it now.
+    /// The agent's hooks hand it over with its next prompt, and Ask Agent sends it now.
     Prompt,
     /// An agent outside the pane takes it with its next prompt, and nothing here can send it
     /// sooner.
     Later,
-    /// The agent here has no hook that hands it comments, so only Ask agent sends it.
+    /// The agent here has no hook that hands it comments, so only Ask Agent sends it.
     Ask,
 }
 
@@ -1357,7 +1373,7 @@ fn control(area: Rect, labels: &[&str], chevron: Chevron, measure: &dyn Measure)
 /// The column the list's head starts in, its summary, its kinds and its controls: where the
 /// cards start, a column in from the pane, where there are pictures, their panels half a
 /// column further beside the file (`View::lead`), which the head is painted as far right of.
-/// It stood at the pane's text edge, 8 px inside the cards on the left, and Check my review
+/// It stood at the pane's text edge, 8 px inside the cards on the left, and Check My Review
 /// 17 px inside them on the right. On cells, where a card is its rows, at the text edge.
 fn head(area: Rect, measure: &dyn Measure) -> u16 {
     if measure.in_cells() {
@@ -1691,9 +1707,14 @@ fn lay_out(
                 picture_lines((id, false), &pictures, &mut which, (view, width), &mut out);
             }
         }
-        for reply in thread.replies.iter().filter(|_| !short) {
+        let answers = thread.replies.len();
+        for (n, reply) in thread.replies.iter().enumerate().filter(|_| !short) {
             // A verdict reads as one: its word on a chip, who said it, then why.
             let (word, author, body) = reply_parts(reply);
+            // The pill at the card's top says "Addressed by" while that's the last word, so
+            // the answer's chip doesn't say it again: one card said "Addressed" twice.
+            let pill_says = n + 1 == answers && thread.addressed_by().is_some();
+            let word = word.filter(|word| !(pill_says && word == ADDRESSED_WORD));
             let author = match age(reply.at, view.now) {
                 Some(ago) => format!("{author} · {ago}"),
                 None => author,
@@ -1920,7 +1941,7 @@ fn suggestions_said(count: usize, at: Option<usize>) -> String {
 }
 
 /// Accept All, Reject All and Next as (label, cells, start column): at the right of the
-/// row, ending where Check my review under them does.
+/// row, ending where Check My Review under them does.
 fn settle_buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
     let (cells, x) = check_button(area, measure);
     let mut end = x + cells.chars().count() as u16;
@@ -1957,7 +1978,7 @@ fn deliver_label(count: usize, agent: &str) -> String {
     format!("Send {count} to {agent}")
 }
 
-/// That button, under Check my review and ending where it does, as (padded cells, start
+/// That button, under Check My Review and ending where it does, as (padded cells, start
 /// column): the two the pane's actions, one over the other.
 fn deliver_button(area: Rect, count: usize, agent: &str, measure: &dyn Measure) -> (String, u16) {
     let cells = button_cells(&deliver_label(count, agent), measure);
@@ -1967,7 +1988,7 @@ fn deliver_button(area: Rect, count: usize, agent: &str, measure: &dyn Measure) 
     (cells, end.saturating_sub(width).max(head(area, measure)))
 }
 
-/// Check my review, at the right of its row, as (padded cells, start column). In pixels it
+/// Check My Review, at the right of its row, as (padded cells, start column). In pixels it
 /// has room for the agent's icon before its words.
 fn check_button(area: Rect, measure: &dyn Measure) -> (String, u16) {
     let mut cells = button_cells(CHECK, measure);
@@ -2055,7 +2076,7 @@ pub fn hit(
                 .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
             match pressed?.0 {
                 "Reply" => Some(Hit::Reply(*id)),
-                "Ask agent" => Some(Hit::Ask(*id)),
+                ASK => Some(Hit::Ask(*id)),
                 "Edit" => Some(Hit::Edit(*id)),
                 "Delete" => Some(Hit::Delete(*id)),
                 _ => Some(Hit::Resolve(*id)),
@@ -2717,12 +2738,7 @@ pub fn draw(
                 };
                 let mut x = reply_x;
                 if let Some(word) = word {
-                    // Agreeing is the good news; pushing back is what to look at.
-                    let tone = if word == "Agrees" || word == ADDRESSED_WORD {
-                        theme.git_added
-                    } else {
-                        theme.attention
-                    };
+                    let tone = verdict_tone(word, theme);
                     let chip = measure.width(word, small()) + 0.8;
                     // Low in the row, so it keeps air under the block's top edge, and tall
                     // enough for the tail of "Agrees", which stood under it.
@@ -2878,8 +2894,8 @@ pub fn draw(
                 };
                 let from = grid.painted_so_far();
                 let alone = matches!(line, Line::Settle);
-                // Quiet, as every button on the pane is but Check my review, and a control's
-                // height in its row, as Check my review is.
+                // Quiet, as every button on the pane is but Check My Review, and a control's
+                // height in its row, as Check My Review is.
                 for (label, cells, x) in placed {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
@@ -2901,7 +2917,7 @@ pub fn draw(
                 }
             }
             Line::Deliver(count) => {
-                // Quiet: Check my review is the pane's filled button. As high in its row as
+                // Quiet: Check My Review is the pane's filled button. As high in its row as
                 // that one is in its own, so the pills under it keep the same air.
                 let from = grid.painted_so_far();
                 let (cells, x) = deliver_button(area, *count, shown_agent, measure);
@@ -3026,7 +3042,7 @@ pub fn draw(
                 }
             }
             Line::Buttons(id) => {
-                // Check my review is the panel's one filled button; these are all quiet, on
+                // Check My Review is the panel's one filled button; these are all quiet, on
                 // the card's own colour, which a lit card's tint is: Edit and Delete stood on
                 // the unlit card's there, two dark slabs.
                 let card = card_fill(*id);
@@ -3155,7 +3171,7 @@ mod tests {
     use cellix_render::CellMeasure;
 
     /// A rewrite's three buttons share a row where they fit; on a narrower card Accept Rewrite
-    /// stands alone and the two that don't take it stay together under it, where Not this was
+    /// stands alone and the two that don't take it stay together under it, where Not This was
     /// left on a row of its own.
     #[test]
     fn a_rewrites_buttons_wrap_with_the_quiet_ones_together() {
@@ -3169,7 +3185,7 @@ mod tests {
                 .expect("a width that breaks them");
             assert_eq!(
                 narrow,
-                vec![vec![ACCEPT_REWRITE], vec![APPLY_REWRITE, "Not this"]]
+                vec![vec![ACCEPT_REWRITE], vec![APPLY_REWRITE, "Not This"]]
             );
         }
     }

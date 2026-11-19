@@ -293,3 +293,91 @@ fn words_that_went_are_in_the_removed_colour() {
         assert!(outlined, "its pill outlined in it");
     }
 }
+
+/// An agent answers a comment with `text`, as `cellix reply` sends it.
+fn answer(app: &mut App, id: u32, text: &str) {
+    let (found, _) = std::sync::mpsc::channel();
+    app.serve(Request::Reply {
+        id,
+        author: "Claude".into(),
+        text: text.into(),
+        found,
+    });
+}
+
+/// A button says what the palette calls the same thing, in its Title Case: a card's Ask Agent,
+/// under a hint that names Ask Agent, and the pane's Check My Review, the palette's "Comments:
+/// Check My Review". The card said "Ask agent" and the pane "Check my review".
+#[test]
+fn a_cards_buttons_say_what_the_palette_calls_them() {
+    let (_dir, mut app) = page("The cache goes first.\n");
+    comment(&mut app, "cache", "Why first?");
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("prompt. Ask Agent"), "the hint: {text}");
+    let buttons = (0..grid.height())
+        .map(|y| grid.row_text(y))
+        .find(|row| row.contains("Resolve"))
+        .expect("the card's buttons");
+    assert!(buttons.contains(" Ask Agent "), "{buttons}");
+    assert!(text.contains("Check My Review"), "{text}");
+    assert!(!text.contains("Ask agent") && !text.contains("Check my review"));
+    // The palette's command is the button's words.
+    app.run(Command::CommandPalette);
+    typed(&mut app, "check my");
+    let text = screen(&app).text();
+    assert!(text.contains("Comments: Check My Review"), "{text}");
+}
+
+/// While the pill at a card's top says "Addressed by Claude", the answer under it says who
+/// and what with no chip of its own: the card said "Addressed" twice. Its button is Not Done,
+/// in the Title Case its neighbours have.
+#[test]
+fn an_addressed_card_says_so_once() {
+    let (_dir, mut app) = page("The cache goes first.\n");
+    comment(&mut app, "cache", "Move it later.");
+    let id = app.threads[0].id;
+    let done = cellix_review::threads::addressed("moved it after the tests");
+    answer(&mut app, id, &done);
+    show_comments(&mut app);
+    let text = screen(&app).text();
+    assert_eq!(text.matches("Addressed").count(), 1, "{text}");
+    assert!(text.contains("Addressed by Claude"), "{text}");
+    assert!(text.contains("Moved it after the tests"), "{text}");
+    assert!(text.contains("Not Done"), "{text}");
+    // Settled, the pill goes, and the answer's chip is what says it.
+    app.thread_hit(crate::threads::Hit::Resolve(id));
+    press(&mut app, "Show 1 resolved");
+    let text = screen(&app).text();
+    assert_eq!(text.matches("Addressed").count(), 1, "{text}");
+    assert!(!text.contains("Addressed by"), "{text}");
+}
+
+/// The card the pointer brings up over commented words says an agent's verdict as the pane
+/// does, its word and then who, and counts only the answers it doesn't show: "1 reply" stood
+/// under the one reply it showed.
+#[test]
+fn the_card_over_the_page_says_a_verdict_as_the_pane_does() {
+    let (_dir, mut app) = page("The cache goes first, then the queue.\n");
+    comment(&mut app, "cache", "Why first?");
+    let id = app.threads[0].id;
+    answer(&mut app, id, "Agree (Clarity): the order needs a reason.");
+    app.run(Command::CloseDock);
+    assert!(!app.dock.open);
+    let (x, y) = on_page(&app, &screen(&app), "cache");
+    app.handle(mouse(MouseKind::Move, x + 1, y));
+    let text = screen(&app).text();
+    assert!(text.contains("Agrees Claude: The order"), "{text}");
+    assert!(!text.contains("Claude agrees"), "{text}");
+    assert!(
+        !text.contains("1 reply"),
+        "the one reply is in view: {text}"
+    );
+    assert!(text.contains(super::glance::OPEN), "{text}");
+    // In the pane, the same word on its chip, then who.
+    show_comments(&mut app);
+    let text = screen(&app).text();
+    let said = text.lines().find(|row| row.contains("Agrees"));
+    let said = said.unwrap_or_else(|| panic!("no verdict:\n{text}"));
+    assert!(said.find("Claude") > said.find("Agrees"), "{said}");
+}

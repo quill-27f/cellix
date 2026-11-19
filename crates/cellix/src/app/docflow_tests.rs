@@ -145,7 +145,7 @@ fn a_comment_waits_on_the_agent_it_was_sent_to() {
     stand_in(&mut app, "Claude Code", "claude.txt");
     comment(&mut app, "cache", "Why first?");
     app.dock.show_comments();
-    press_button(&mut app, "Ask agent");
+    press_button(&mut app, "Ask Agent");
     let said = heard(&mut app, &dir.path().join("claude.txt"), "Why first?");
     assert!(said.contains("cellix reply"), "{said}");
     let codex = fs::read_to_string(dir.path().join("codex.txt")).unwrap_or_default();
@@ -202,12 +202,12 @@ fn inside_claude_code_a_documents_comments_start_a_turn() {
         Some(super::SEND_PROMPT)
     );
     assert!(take_threads(&mut app).contains("Why first?"));
-    // Ask agent on a card starts one too.
+    // Ask Agent on a card starts one too.
     comment(&mut app, "goes", "And this?");
     app.dock.show_comments();
     let text = screen(&app).text();
     assert!(text.contains("Goes to Claude Code"), "{text}");
-    press_button(&mut app, "Ask agent");
+    press_button(&mut app, "Ask Agent");
     assert_eq!(
         app.take_outgoing_prompt().as_deref(),
         Some(super::SEND_PROMPT)
@@ -243,7 +243,7 @@ fn a_kept_suggestion_on_a_document_goes_to_the_agent() {
     assert!(taken.contains("Name the benchmarks."), "{taken}");
 }
 
-/// Check my review asks for a verdict on each comment, so each is told: the prompt hook
+/// Check My Review asks for a verdict on each comment, so each is told: the prompt hook
 /// added the same comments to that prompt again, asking for a plain answer.
 #[test]
 fn check_my_review_hands_each_comment_over_once() {
@@ -251,7 +251,7 @@ fn check_my_review_hands_each_comment_over_once() {
     comment(&mut app, "cache", "Why first?");
     stand_in(&mut app, "Claude Code", "heard.txt");
     app.dock.show_comments();
-    press(&mut app, "Check my review");
+    press(&mut app, "Check My Review");
     let said = heard(&mut app, &dir.path().join("heard.txt"), "Why first?");
     assert!(said.contains("Agree (<kind>)"), "{said}");
     assert_eq!(said.matches("Why first?").count(), 1, "{said}");
@@ -362,7 +362,7 @@ fn a_comment_on_words_over_a_line_break_is_about_all_of_them() {
     assert!(text.contains("every read after"), "{text}");
     // Asked to check the review, the agent hears all of them.
     app.in_pane = true;
-    press(&mut app, "Check my review");
+    press(&mut app, "Check My Review");
     let prompt = app.take_outgoing_prompt().expect("the check's prompt");
     assert!(
         prompt.contains("\"every read after the start is warm\""),
@@ -377,7 +377,7 @@ fn a_comment_on_words_over_a_line_break_is_about_all_of_them() {
         text: "Rewrite: every later read is warm".into(),
         found,
     });
-    press_beside(&mut app, "Apply", "Not this");
+    press_beside(&mut app, "Apply", "Not This");
     assert_eq!(
         app.active_text().unwrap(),
         "# Plan\n\nThe cache goes first so that {~~every read\nafter the start is warm~>every later read is warm~~} and fast.\n"
@@ -613,7 +613,7 @@ fn a_kinds_pill_lists_that_kind_and_counts_only_your_own() {
 }
 
 /// An agent that did what a comment asks says so, and its card says "Addressed by" it, with
-/// Resolve and Not done: the reviewer settles it, never the agent. Not done begins a reply
+/// Resolve and Not Done: the reviewer settles it, never the agent. Not Done begins a reply
 /// saying so, which goes back to the agent; Resolve 1 addressed settles what's left.
 #[test]
 fn an_agent_says_it_addressed_a_comment_and_the_reviewer_settles_it() {
@@ -643,9 +643,9 @@ fn an_agent_says_it_addressed_a_comment_and_the_reviewer_settles_it() {
     let text = screen(&app).text();
     assert_eq!(text.matches("Addressed by Claude").count(), 2, "{text}");
     assert!(text.contains("Resolve 2 addressed"), "{text}");
-    assert!(text.contains("Not done"), "{text}");
-    // Not done, on the first: a reply saying so, which the agent hears.
-    press_beside(&mut app, "Not done", "Resolve");
+    assert!(text.contains("Not Done"), "{text}");
+    // Not Done, on the first: a reply saying so, which the agent hears.
+    press_beside(&mut app, "Not Done", "Resolve");
     typed(&mut app, "it still runs first");
     enter(&mut app);
     let first = &app.threads[0];
@@ -772,7 +772,7 @@ fn a_narrow_panes_cards_are_short_until_one_is_lit() {
     assert!(!text.contains("2 replies"), "{text}");
 }
 
-/// Under Check my review, "Send 2 to Claude Code" sends what waits, every comment no agent
+/// Under Check My Review, "Send 2 to Claude Code" sends what waits, every comment no agent
 /// has had, in one message, as GitHub's Finish review does, and goes once it's sent. With no
 /// agent here to send to, it isn't offered.
 #[test]
@@ -782,7 +782,7 @@ fn the_pane_sends_whats_waiting_in_one_message() {
     comment(&mut app, "tests", "Which ones?");
     let text = screen(&app).text();
     assert!(
-        text.contains("Check my review") && !text.contains("Send 2"),
+        text.contains("Check My Review") && !text.contains("Send 2"),
         "nobody to send to: {text}"
     );
     stand_in(&mut app, "Claude Code", "heard.txt");

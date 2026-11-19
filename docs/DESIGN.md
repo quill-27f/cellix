@@ -551,12 +551,22 @@ comment open, the pane says to select text and press Comment, the button a selec
 which names the keys as they're set; it named only Alt+C.
 
 An agent that has done what a comment asks says so with `cellix reply <id> --done "what it
-did"`, a reply that starts "Addressed:". Its card says "Addressed by Claude" in a green pill, the
-answer's chip says "Addressed", and its buttons are Resolve and Not done: the reviewer settles it,
-never the agent. Not done begins a reply "Not done: " for the reviewer to finish, which goes back
-to the agent as any reply does. "Resolve N addressed", a quiet button at the end of the order's
-row, settles every one of those listed. The agents' skills, and how every comment is put to an
-agent, say so.
+did"`, a reply that starts "Addressed:". Its card says "Addressed by Claude" in a green pill, and
+its buttons are Resolve and Not Done: the reviewer settles it, never the agent. The answer under it
+has no chip of its own while the pill says so (the card said "Addressed" twice); an earlier one, or
+one on a resolved card, has the chip. Not Done begins a reply "Not done: " for the reviewer to
+finish, which goes back to the agent as any reply does. "Resolve N addressed", a quiet button at
+the end of the order's row, settles every one of those listed. The agents' skills, and how every
+comment is put to an agent, say so.
+
+The same thing has the same words wherever it's shown. A button says what the palette calls the
+same thing, in VS Code's Title Case: Ask Agent and Check My Review on the cards and the pane's head,
+as in the palette, Problems and a selection's buttons, where a card had said "Ask agent" beside its
+own hint's "Ask Agent"; Not Done and Not This too. A button with a count in it says it as words
+("Show 2 resolved"). An agent's verdict reads as the pane's card has it on the card the pointer
+brings up over the page too: its word in its colour, then who ("Agrees Claude: …"), where that card
+said "Claude agrees:"; and as it shows the last answer, its foot counts the others ("1 more reply ·
+Open in Comments"), where it said "1 reply" over the one reply it showed.
 
 The pill on a comment whose words were reworded since, "Changed since your comment ›", opens
 what changed in the quote's place, on its bar: the words commented on and the words there now as
@@ -644,10 +654,10 @@ the tools, with the words a little down into it and the tools a little up, so bo
 of the box's lines, and the list of every emoji hangs from its bottom line. Under the box is the hint, or the emoji
 offered for a name (the first on the selection's chip, with Tab named at the row's end), and under
 that two buttons: the one that sends it, filled and named for what sending does (Comment, Reply,
-Save, Ask agent), and Cancel. They do what Enter and Esc do. While a comment is answered or
+Save, Ask Agent), and Cancel. They do what Enter and Esc do. While a comment is answered or
 changed they stand in place of its own buttons, since one thing is being done to it. The filled
-button is the pane's second with Check my review; what's being written is what's under way.
-The list's head, what's yours and what's suggested, Check my review, the kinds and the order,
+button is the pane's second with Check My Review; what's being written is what's under way.
+The list's head, what's yours and what's suggested, Check My Review, the kinds and the order,
 stands on the cards' edges: from where a card starts to where it ends, where there are pictures
 (it stood 8 px inside them on the left and 17 on the right).
 
@@ -759,14 +769,14 @@ menu and the palette, where they still are, with no key: the user asked for them
 
 A document with suggestions opens the Comments pane's list with them, as Google Docs and Overleaf
 keep suggestions with comments: "3 suggestions", or "Suggestion 2 of 3" while the caret is in the
-second, then Accept All, Reject All and Next, quiet as every button there but Check my review, on a
+second, then Accept All, Reject All and Next, quiet as every button there but Check My Review, on a
 row of their own under the count where the pane is too narrow for one. Next goes to the next one
 round the document and leaves the keyboard in the file, where the chips then stand by it. The row
 is the document's in view, so the list of every file's comments has none. The suggestions are found
 once for each revision of the text, since every frame asks for them.
 
 An agent's rewrite of commented words (a reply starting `Rewrite:`) offers Accept Rewrite, Apply as
-Suggestion and Not this. Accept Rewrite puts it in place of the words as one edit to undo and
+Suggestion and Not This. Accept Rewrite puts it in place of the words as one edit to undo and
 resolves the comment, as committing a suggestion on GitHub resolves its conversation; Apply as
 Suggestion puts it in as a suggestion to settle on the page, which was the only way until 18
 November 2026. Both replace all of the commented words as they read now, found as a comment's
@@ -817,7 +827,7 @@ and kept with the approved copy in `.cellix/plans`, and the hook puts that plan'
 A comment reaches an agent one of three ways, and its card says which until it has. One on code
 goes with the review's comments; one on a document is a thread no agent has had until it's told.
 The prompt hook of Claude Code, Codex or Gemini CLI hands over everything waiting with the agent's
-next prompt; Ask agent sends one now; and Send Comments to Agent sends all of it, the review's
+next prompt; Ask Agent sends one now; and Send Comments to Agent sends all of it, the review's
 comments and the threads, in one message to the agent the side pane sends to (inside Claude Code it
 starts a turn, which the hook fills). Until 18 November 2026 it sent only the review's, so on a
 page it said there was nothing to send. A waiting card says "Goes to Claude Code with your next
@@ -825,9 +835,9 @@ prompt, or now with Ask Agent"; for an agent whose hooks can't hand comments ove
 Copilot CLI, Cursor's agent) that only Ask Agent sends it; with no agent here, that it goes with
 the next one's prompt. Once it has gone, "Waiting for Claude Code…" names the agent it went to:
 the one in front of the pane, which is the one sent to, where it named the first agent there.
-Check my review asks for a verdict on each comment, so each counts as told and the hook doesn't
+Check My Review asks for a verdict on each comment, so each counts as told and the hook doesn't
 add them to that prompt again. A suggestion kept is the person's comment, and goes as theirs do.
-Under Check my review, ending where it does, a quiet "Send 3 to Claude Code" sends what Send
+Under Check My Review, ending where it does, a quiet "Send 3 to Claude Code" sends what Send
 Comments to Agent sends, as GitHub's Finish review does, where there's an agent to send it to now:
 in the side pane, or the Claude Code Cellix is a pane of. It counts the review's comments and the
 threads no agent has had, and goes once they've gone.

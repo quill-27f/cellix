@@ -6578,5 +6578,12 @@
     "title": "A suggestion's card stands on the cards' ground and gone words are in the removed colour",
     "test": "only_the_lit_card_has_the_accent_and_a_suggestion_has_the_cards_ground",
     "passes": true
+  },
+  {
+    "id": "same-words-same-thing",
+    "milestone": 15,
+    "title": "A button says what the palette calls it, and a verdict and an answer's count read the same on every card",
+    "test": "a_cards_buttons_say_what_the_palette_calls_them",
+    "passes": true
   }
 ]

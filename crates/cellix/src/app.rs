@@ -769,7 +769,7 @@ fn comments_counted(count: usize) -> String {
     }
 }
 
-/// What an agent is asked when the reviewer presses Check my review.
+/// What an agent is asked when the reviewer presses Check My Review.
 fn review_prompt(file: &str, mine: &[&Thread]) -> String {
     let mut text = format!("I'm reviewing {file} in Cellix. Read it, then help with my review.\n");
     if mine.is_empty() {
@@ -11947,7 +11947,7 @@ impl App {
     }
 
     /// The agent a comment goes to, as its card names it, and how what waits gets there: the
-    /// one Ask agent sends to, in the pane or inside Claude Code, else one at work outside.
+    /// one Ask Agent sends to, in the pane or inside Claude Code, else one at work outside.
     /// Only Claude Code's, Codex's and Gemini CLI's hooks hand comments over with a prompt.
     fn comment_agent(&self) -> (String, threads::Goes) {
         let takes = |name: &str| matches!(name, "Claude Code" | "Codex" | "Gemini CLI" | "Gemini");
@@ -26378,6 +26378,22 @@ mod tests {
         enter(app);
     }
 
+    /// Where a card's Ask Agent button is: on the row of its buttons, which has Resolve, and
+    /// not in the hint over them, which names it too.
+    fn ask_button(grid: &Grid) -> (u16, u16) {
+        let y = (0..grid.height())
+            .find(|y| {
+                let row = grid.row_text(*y);
+                row.contains("Ask Agent") && row.contains("Resolve")
+            })
+            .unwrap_or_else(|| panic!("no Ask Agent button:\n{}", grid.text()));
+        let row = grid.row_text(y);
+        (
+            row[..row.find("Ask Agent").unwrap()].chars().count() as u16,
+            y,
+        )
+    }
+
     #[test]
     fn comments_are_threads_beside_the_page() {
         let (dir, mut app) = page_app("# Plan\n\nThe cache goes first.\n");
@@ -28516,7 +28532,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let grid = screen(&app);
         let (_, y) = find(&grid, " Cancel");
         assert!(
-            grid.row_text(y).contains(" Ask agent "),
+            grid.row_text(y).contains(" Ask Agent "),
             "{}",
             grid.row_text(y)
         );
@@ -32381,7 +32397,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     fn asking_with_no_agent_goes_to_the_one_you_start() {
         let (dir, mut app) = page_app("line\n");
         comment_on(&mut app, "Note for later");
-        let (x, y) = find(&screen(&app), "Ask agent");
+        let (x, y) = ask_button(&screen(&app));
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(screen(&app).text().contains("Pick an agent"));
         let script = "printf ready; cat > heard.txt";
@@ -32408,7 +32424,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             "Working",
         )));
         comment_on(&mut app, "Note");
-        let (x, y) = find(&screen(&app), "Ask agent");
+        let (x, y) = ask_button(&screen(&app));
         app.handle(mouse(MouseKind::Left, x, y));
         assert_eq!(app.dock.front, Front::Comments, "it stays with the comment");
         assert!(app.threads[0].asked);
@@ -37692,7 +37708,7 @@ while True:
         let fields = r#""id":1,"file":"alpha.txt","line":1,"text":"Why first","quote":"""#;
         app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
         app.run(Command::ShowComments);
-        check(&app, &["Reply", "Ask agent", "Resolve"]);
+        check(&app, &["Reply", "Ask Agent", "Resolve"]);
 
         // A change in Review.
         let (dir, mut app) = reviewed();

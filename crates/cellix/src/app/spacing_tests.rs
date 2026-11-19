@@ -278,7 +278,7 @@ fn a_comments_card_is_as_far_from_both_sides_of_the_sheet() {
     );
     assert!(left >= 7.0, "{left}");
     // The list's head stands on the cards' edges: the order's chip starts where a card
-    // starts, and Check my review ends where one ends. They stood 8 px inside on the left
+    // starts, and Check My Review ends where one ends. They stood 8 px inside on the left
     // and 17 on the right.
     app.add_comment("alpha.txt".to_string(), 0, "and this".to_string());
     let grid = screen(&app);
@@ -302,7 +302,7 @@ fn a_comments_card_is_as_far_from_both_sides_of_the_sheet() {
     let check = panels(&grid)
         .into_iter()
         .find(|(b, fill, ..)| *fill == Some(app.theme.button) && b.y < found.y && b.x >= found.x)
-        .expect("Check my review")
+        .expect("Check My Review")
         .0;
     let (end, card_end) = (px(check.x + check.w), px(found.x + found.w));
     assert!(

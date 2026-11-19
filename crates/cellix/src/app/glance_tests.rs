@@ -82,13 +82,13 @@ fn resting_on_commented_words_shows_their_comment_until_the_pointer_leaves() {
         "{text}"
     );
     assert!(
-        text.contains("Claude agrees:"),
-        "the last answer, with its verdict:\n{text}"
+        text.contains("Agrees Claude:"),
+        "the last answer, with its verdict as the pane says it:\n{text}"
     );
     assert!(text.contains("The order needs a reason."), "{text}");
     assert!(
-        text.contains(&format!("2 replies · {OPEN}")),
-        "how many answers:\n{text}"
+        text.contains(&format!("1 more reply · {OPEN}")),
+        "how many answers aren't shown:\n{text}"
     );
     assert!(!text.contains("Or say why"), "only the last answer");
     // Under the words, leaving them in view.

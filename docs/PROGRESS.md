@@ -3595,3 +3595,14 @@ The fixcards track, from the final review of 0.11.0 (C2 and C7).
 - Words gone ("Words gone", "Removed in version 2") and the removed words of "Changed since your comment" were in the colour of what needs you (#f0705f). They're in the removed colour now (#dc8c95, and the light theme's own), as a diff's removed lines are.
 - Test changed with it: `a_cards_pill_shows_what_changed_since_the_comment` asked for the attention colour on what went; it asks for the removed colour.
 - Tests: `only_the_lit_card_has_the_accent_and_a_suggestion_has_the_cards_ground`, `words_that_went_are_in_the_removed_colour` (both themes, the paint read in the tour's pixels).
+
+## The same words for the same thing (2026-11-18)
+
+The fixcards track, from the final review's C13.
+
+- A button says what the palette calls the same thing, in VS Code's Title Case: a card's "Ask agent" stood under its own hint's "Ask Agent", beside Problems' and a selection's; the pane had "Check my review" where the palette and Keyboard settings say "Check My Review". Not Done and Not This went the same way. Buttons with a count in them stay as words ("Show 2 resolved").
+- The card the pointer brings up over commented words said "Claude agrees:" where the pane's card has the verdict on a chip and then who. It says it the pane's way now, the verdict's word in its colour and then who ("Agrees Claude: …"), and its foot counts the answers it doesn't show ("1 more reply"), where it said "1 reply" over the one reply it showed.
+- An addressed card said "Addressed" twice, in its pill and on its answer's chip. While the pill says so, the answer has no chip; settled, the pill goes and the chip says it.
+- The tour's two anchors on "Check my" now say "Check My" (`50-comment-glance-open`).
+- Tests changed with it: the tests that press a card's Ask Agent find it on the row of the card's buttons, since the hint over them names it too; `resting_on_commented_words_shows_their_comment_until_the_pointer_leaves` asks for "Agrees Claude:" and "1 more reply"; the rest look for the new words.
+- Tests: `a_cards_buttons_say_what_the_palette_calls_them`, `an_addressed_card_says_so_once`, `the_card_over_the_page_says_a_verdict_as_the_pane_does`.

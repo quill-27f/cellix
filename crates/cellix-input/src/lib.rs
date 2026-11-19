@@ -212,7 +212,7 @@ pub enum Command {
     /// card lit: no key of its own, as VS Code's Next Comment Thread has none.
     NextComment,
     PreviousComment,
-    /// The Comments pane's Check my review, from the palette.
+    /// The Comments pane's Check My Review, from the palette.
     CheckReview,
     /// The next problem in the file, or the one before: F8, Shift+F8.
     NextProblem,

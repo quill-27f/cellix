@@ -177,7 +177,7 @@ async function line($: Engine, text: string) {
     const text = JSON.parse(rest.join(' ')) as string
     await $.prompt.fill({ text, mode: 'insert' }).catch(() => undefined)
   } else if (kind === 'prompt') {
-    // Cellix asking the agent something, as Check my review does: a turn of its own.
+    // Cellix asking the agent something, as Check My Review does: a turn of its own.
     const prompt = JSON.parse(rest.join(' ')) as string
     $.clock.after(0, () => {
       void $.prompt.submit({ text: prompt }).catch(() => undefined)

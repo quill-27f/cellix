@@ -71,7 +71,7 @@ pub struct Thread {
     /// How many replies it had when an agent was last told of it.
     #[serde(default)]
     pub told: Option<usize>,
-    /// Someone pressed Ask agent, and no agent has it yet.
+    /// Someone pressed Ask Agent, and no agent has it yet.
     #[serde(default)]
     pub asked: bool,
     /// What kind of comment it is, as a reviewer sorts them: Clarity, Correctness, Evidence,

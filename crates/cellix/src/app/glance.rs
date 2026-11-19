@@ -38,8 +38,10 @@ enum Row {
     /// Who made it, and its kind: quiet.
     Head(String),
     Words(String),
-    /// A row of the last answer: on its first, who gave it, in bold.
-    Answer(Option<String>, String),
+    /// A row of the last answer: on its first, its verdict's word where it gives one, in the
+    /// verdict's colour, then who gave it in bold, as the Comments pane's card says it ("Agrees"
+    /// on a chip, then "Claude"). This card said "Claude agrees:" where the pane said that.
+    Answer(Option<(Option<String>, String)>, String),
     /// How many answers, and what a press does.
     Foot(String),
 }
@@ -190,9 +192,13 @@ impl App {
             .map(|row| match row {
                 Row::Head(text) | Row::Words(text) | Row::Foot(text) => measure.width(text, font),
                 Row::Answer(who, text) => {
-                    let who = who.as_deref().map_or(0.0, |who| {
+                    let who = who.as_ref().map_or(0.0, |(verdict, who)| {
                         let bold = Font { bold: true, ..font };
-                        measure.width(&format!("{who}: "), bold)
+                        let lead = match verdict {
+                            Some(word) => format!("{word} {who}: "),
+                            None => format!("{who}: "),
+                        };
+                        measure.width(&lead, bold)
                     });
                     who + measure.width(text, font)
                 }
@@ -284,29 +290,35 @@ impl App {
         );
         if let Some(reply) = thread.replies.last() {
             let (verdict, who, words) = threads::reply_parts(reply);
-            let who = match verdict {
-                Some(verdict) => format!("{who} {}", verdict.to_lowercase()),
-                None => who,
+            let lead = match &verdict {
+                Some(word) => format!("{word} {who}:"),
+                None => format!("{who}:"),
             };
-            let said = format!("{who}: {}", words.replace('\n', " "));
+            let said = format!("{lead} {}", words.replace('\n', " "));
             for (n, row) in cut(&said, width, ANSWER_ROWS, measure)
                 .into_iter()
                 .enumerate()
             {
-                if n == 0 && row.starts_with(&format!("{who}:")) {
-                    let rest = row[who.len() + 1..].trim_start().to_string();
-                    rows.push(Row::Answer(Some(who.clone()), rest));
+                if n == 0 && row.starts_with(&lead) {
+                    let rest = row[lead.len()..].trim_start().to_string();
+                    rows.push(Row::Answer(Some((verdict.clone(), who.clone())), rest));
                 } else {
                     rows.push(Row::Answer(None, row));
                 }
             }
         }
-        let answers = match thread.replies.len() {
-            0 => "No replies".to_string(),
-            1 => "1 reply".to_string(),
-            n => format!("{n} replies"),
+        // The last answer is in view, so the foot counts the others: it said "1 reply" over
+        // the one reply it showed.
+        let others = match thread.replies.len() {
+            0 => Some("No replies".to_string()),
+            1 => None,
+            2 => Some("1 more reply".to_string()),
+            n => Some(format!("{} more replies", n - 1)),
         };
-        rows.push(Row::Foot(format!("{answers} · {OPEN}")));
+        rows.push(Row::Foot(match others {
+            Some(others) => format!("{others} · {OPEN}"),
+            None => OPEN.to_string(),
+        }));
         rows
     }
 
@@ -355,15 +367,22 @@ impl App {
                 }
                 Row::Answer(who, text) => {
                     let (mut at, mut from) = (x, 0);
-                    if let Some(who) = who {
-                        let said = format!("{who}:");
-                        from = words(grid, (x, 0), &said, strong, place(top)) + 1;
-                        let bold = Font { bold: true, ..font };
+                    let bold = Font { bold: true, ..font };
+                    // Each part in bold, and a space's room after it.
+                    let mut part = |grid: &mut Grid, said: &str, style: Style| {
+                        from = words(grid, (at, from), said, style, place(top)) + 1;
                         at = if card.fine {
-                            x + self.measure.width(&format!("{said} "), bold)
+                            at + self.measure.width(&format!("{said} "), bold)
                         } else {
                             f32::from(from)
                         };
+                    };
+                    if let Some((verdict, who)) = who {
+                        if let Some(word) = verdict {
+                            let tone = threads::verdict_tone(word, theme);
+                            part(grid, word, Style { fg: tone, ..strong });
+                        }
+                        part(grid, &format!("{who}:"), strong);
                     }
                     words(grid, (at, from), text, base, place(top));
                 }
