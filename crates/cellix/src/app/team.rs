@@ -1527,7 +1527,7 @@ impl App {
             .is_some_and(|pane| pane.contains(area.x, area.y));
         let lead = if in_pane { self.pane_card_lead() } else { 0.0 };
         let last = measures::DialogLast::Words;
-        self.draw_card_led(grid, area, (lead, last));
+        self.draw_card_led(grid, area, (lead, last, 0.0));
         // Its words raised over its buttons as a dialog's are (`card_lift`).
         let words = grid.painted_so_far();
         let base = Style {

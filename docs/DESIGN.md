@@ -1446,10 +1446,16 @@ it stands inside one sheet, never across the line between the file and the pane
 (`App::corner_frame`). Over the side pane every card is the asking card's: a column in from
 each of the pane's sides however wide it is, its panel half a column into that column
 (`App::card_lead`), so it stands about 16 px from the pane's lines with its words 24 px in, its
-buttons ending inside its words' column, and a command's box 16 px outside that column with
-the command on it. Two columns in and capped at its width, the install, logout and stopped
+buttons ending inside its words' column, and a command's box 12 px outside that column with
+the command on it, as far in from the card's edge as its command is from its own
+(`COMMAND_BOX_OUT`; at 16 it stood 8 px inside the card's edge and read as a strip across it).
+Two columns in and capped at its width, the install, logout and stopped
 cards stood 24 px from the pane's left and 33 from its right with their words 33 px in
-(0.11.0's release review). The rows its round ends are on
+(0.11.0's release review). A card in a sheet's corner ends on the sheet's last row and is
+painted part of a row lower, so its panel's foot stands as far over the line at the sheet's
+foot as its side stands from the sheet's side: 16 px over the side pane, about 32 over the
+file (`App::card_drop`), where a row has room; a press lands where its buttons are painted. They ended a row higher
+and floated 79 px over the pane's foot (0.11.0's release check, P6). The rows its round ends are on
 keep the colour of whatever each cell lies on, since the corner can be over the file, the side
 pane and the line between them, and that colour is painted over them, so a page's words under
 the card don't show their tops over it. Its panel's top and bottom are moved to the nearest whole

@@ -804,10 +804,12 @@ fn a_card_has_a_dialogs_air_round_it() {
 }
 
 /// A card over the side pane stands 16 px from the pane's lines on both sides with its words
-/// 24 px in, its buttons ending inside its words' column, and a command's box 16 px outside
-/// that column with the command on it. The install, logout and stopped-session cards stood
-/// 24 px from the pane's left line and 33 from its right with their words 33 px in, and the
-/// logout card's box had its edge on its words' column, 12 px from its own words.
+/// 24 px in, its buttons ending inside its words' column, and a command's box 12 px outside
+/// that column with the command on it, as far in from the card's edge as the command is from
+/// its own. The install, logout and stopped-session cards stood 24 px from the pane's left line
+/// and 33 from its right with their words 33 px in; the logout card's box had its edge on its
+/// words' column, 12 px from its own words, and then 16 px outside it, 8 px inside the card's
+/// edge (0.11.0's release check, P5).
 #[test]
 fn a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in() {
     let dir = tempfile::tempdir().unwrap();
@@ -875,13 +877,104 @@ fn a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in() {
         .0;
     let out = words - px(well.x);
     assert!(
-        (14.5..=17.5).contains(&out),
+        (10.5..=13.5).contains(&out),
         "the box {out} px outside the words"
+    );
+    let (card, _) = card(&app, &grid, "Agents here stop");
+    let (inside, inside_right) = (
+        px(well.x) - px(card.x),
+        px(card.x + card.w) - px(well.x + well.w),
+    );
+    assert!(
+        (inside - out).abs() <= 2.0 && (inside_right - out).abs() <= 2.0,
+        "the box {inside} and {inside_right} px inside the card, {out} outside the words"
     );
     let command = words_at(&grid, "loginctl");
     assert!(
         (command - words).abs() <= 1.5,
         "the command on the words' column"
+    );
+}
+
+/// A card in a sheet's corner stands as far over the line at its sheet's foot as its side
+/// stands from the sheet's side: 16 px over the side pane, where the install and logout cards
+/// floated 79 px over the pane's foot (0.11.0's release check, P6), and over the file as far as
+/// from the file's side. Its buttons go down with it, and a press on the foot of one, painted
+/// under its row, takes it.
+#[test]
+fn a_corner_card_stands_as_far_over_its_sheets_foot_as_from_its_side() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.server_install = Some("exit 0".to_string());
+    app.open(&dir.path().join("Main.java")).unwrap();
+    app.servers.clear();
+    app.note_missing("Java");
+    let line = measures::line_pixels(&*app.measure);
+    // The raised panel holding `title`: how far its foot is over the line at the foot of
+    // `sheet`, and its side from the line at the sheet's side.
+    let air = |app: &App, title: &str, sheet: Rect| {
+        let grid = screen(app);
+        let words = words_at(&grid, title);
+        let found = grid.paint.iter().rev().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                ..
+            } if px(bounds.x) <= words && words < px(bounds.x + bounds.w) && bounds.h > UNIT => {
+                Some(*bounds)
+            }
+            _ => None,
+        });
+        let card = found.unwrap_or_else(|| panic!("{title}'s card"));
+        let foot = (card.y + card.h) as f32 * ROW / UNIT as f32;
+        let under = f32::from(sheet.bottom()) * ROW - line - foot;
+        let side = f32::from(sheet.right()) * CELL - line - px(card.x + card.w);
+        (under, side)
+    };
+    let (under, side) = air(&app, "Install Java", app.main_area());
+    assert!(
+        side > 8.0 && (under - side).abs() <= 1.5,
+        "over the file: {under} px over its foot, {side} from its side"
+    );
+    app.run(Command::ListAgents);
+    let pane = app.dock_area().expect("the side pane");
+    let (under, side) = air(&app, "Install Java", pane);
+    assert!(
+        (14.5..=17.5).contains(&under) && (under - side).abs() <= 1.5,
+        "over the pane: {under} px over its foot, {side} from its side"
+    );
+    // Not Now's foot is painted a tenth of a row into the row under its cells.
+    let row = app.offer_button_row();
+    let (_, cells, x) = app
+        .offer_buttons()
+        .into_iter()
+        .find(|(label, ..)| *label == "Not Now")
+        .expect("Not Now");
+    let x = x + cells.chars().count() as u16 / 2;
+    let press = |kind| {
+        Event::Mouse(MouseEvent {
+            kind,
+            x,
+            y: row + 1,
+            fine_x: f32::from(x) + 0.5,
+            fine_y: f32::from(row) + 1.1,
+            mods: Mods::default(),
+        })
+    };
+    app.handle(press(MouseKind::Left));
+    app.handle(press(MouseKind::Up));
+    assert!(
+        app.not_now.iter().any(|l| l == "Java"),
+        "the press took Not Now"
+    );
+    // The logout card, over the pane too.
+    app.linger = Linger::Offered;
+    let (under, side) = air(&app, "Agents here stop", pane);
+    assert!(
+        (14.5..=17.5).contains(&under) && (under - side).abs() <= 1.5,
+        "the logout card: {under} px over the pane's foot, {side} from its side"
     );
 }
 

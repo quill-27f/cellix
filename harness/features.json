@@ -6984,5 +6984,19 @@
     "title": "Check My Review is quiet with its agent's icon, so one button in view is filled beside a rewrite's Accept Rewrite",
     "test": "one_button_in_view_is_filled_with_a_rewrite_to_decide",
     "passes": true
+  },
+  {
+    "id": "corner-card-foot-air",
+    "milestone": 15,
+    "title": "A card in a sheet's corner stands as far over the sheet's foot as from its side, and a press on its buttons lands where they're painted",
+    "test": "a_corner_card_stands_as_far_over_its_sheets_foot_as_from_its_side",
+    "passes": true
+  },
+  {
+    "id": "command-box-12-out",
+    "milestone": 15,
+    "title": "A card's command box stands 12 px outside its words, as far in from the card's edge as its command is from its own",
+    "test": "a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in",
+    "passes": true
   }
 ]

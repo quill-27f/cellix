@@ -312,6 +312,11 @@ const OFFER_BUTTONS: [&str; 3] = ["Install", "Not Now", "Never"];
 /// The card saying a server ends programs at logout: its buttons.
 const LINGER_BUTTONS: [&str; 3] = ["Turn On", "Copy Command", "Not Now"];
 const LINGER_WIDTH: u16 = 52;
+/// Pixels a card's box for a command stands outside its words' column, with the command on
+/// that column: over the side pane, where the words are 24 px in, the box is as far in from the
+/// card's edge as its command is from its own. At `BOX_PADDING`, 16, it stood 8 px inside the
+/// card's edges and read as a strip across it (0.11.0's release check, P5).
+const COMMAND_BOX_OUT: f32 = 12.0;
 /// How far into its first row a card's panel starts, and how far short of the end of its
 /// last row it stops, so there's the same air over the title as under the buttons.
 /// Rows left empty between the views and what the one in front shows, where the views are
@@ -2333,7 +2338,8 @@ impl App {
         // The window's corner, so opening the side pane doesn't move it over the writing,
         // and inside one sheet, never across the line between two.
         let (x, width) = self.corner_frame(OFFER_WIDTH);
-        Rect::new(x, self.size.1.saturating_sub(height + 2), width, height)
+        let end = self.corner_card_end(x, self.size.1.saturating_sub(2));
+        Rect::new(x, end.saturating_sub(height), width, height)
     }
 
     fn offer_button_row(&self) -> u16 {
@@ -2358,26 +2364,35 @@ impl App {
         self.browser_offer && !busy
     }
 
+    /// The offer's button a press at `at` (columns and rows, with their fractions) lands on,
+    /// where it's painted.
+    fn offer_hit(&self, at: (f32, f32)) -> Option<&'static str> {
+        let row = self.offer_button_row();
+        let drop = self.card_drop(self.offer_area(), measures::DialogLast::Words);
+        let at = Self::card_at(at, drop);
+        self.offer_buttons()
+            .into_iter()
+            .find_map(|(label, cells, x)| {
+                on_large_button((x, row), cells.chars().count() as u16, at).then_some(label)
+            })
+    }
+
     /// Handles a press on the offer. Returns true if the card took it.
-    fn click_offer(&mut self, x: u16, y: u16) -> bool {
+    fn click_offer(&mut self, mouse: MouseEvent) -> bool {
         if self.offering_browser() {
-            return self.click_browser_offer(x, y);
+            return self.click_browser_offer(mouse);
         }
         let Some((language, server)) = self.offer() else {
             return false;
         };
         let area = self.offer_area();
-        if !area.contains(x, y) {
+        if !area.contains(mouse.x, mouse.y) {
             return false;
         }
-        if self.offer_install.is_some() || y != self.offer_button_row() {
+        if self.offer_install.is_some() {
             return true;
         }
-        let hit = self
-            .offer_buttons()
-            .into_iter()
-            .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
-        match hit.map(|(label, _, _)| label) {
+        match self.offer_hit(mouse.at()) {
             Some("Install") => {
                 let (done, result) = crate::wake::channel();
                 let plan = self.offer_plan(server);
@@ -2410,19 +2425,15 @@ impl App {
         true
     }
 
-    fn click_browser_offer(&mut self, x: u16, y: u16) -> bool {
+    fn click_browser_offer(&mut self, mouse: MouseEvent) -> bool {
         let area = self.offer_area();
-        if !area.contains(x, y) {
+        if !area.contains(mouse.x, mouse.y) {
             return false;
         }
-        if self.browser_install.is_some() || y != self.offer_button_row() {
+        if self.browser_install.is_some() {
             return true;
         }
-        let hit = self
-            .offer_buttons()
-            .into_iter()
-            .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
-        match hit.map(|(label, _, _)| label) {
+        match self.offer_hit(mouse.at()) {
             Some("Install") => self.install_browser(),
             Some("Not Now") => self.browser_offer = false,
             Some("Never") => {
@@ -2506,6 +2517,9 @@ impl App {
         let theme = &self.theme;
         let area = self.offer_area();
         self.draw_card(grid, area, measures::DialogLast::Words);
+        // What it holds goes down with its panel.
+        let held = grid.painted_so_far();
+        let drop = self.card_drop(area, measures::DialogLast::Words);
         let base = Style {
             fg: theme.text.fg,
             bg: theme.popup,
@@ -2527,6 +2541,7 @@ impl App {
             for (i, line) in lines.iter().enumerate() {
                 grid.label(area.x + 2, top + 1 + i as u16, line, dim, right);
             }
+            grid.lift_since(held, -drop);
             return;
         }
         let words = grid.painted_so_far();
@@ -2545,7 +2560,8 @@ impl App {
         let y = self.offer_button_row();
         // The first is the answer, unless all there is to do is put it off.
         let answer = labels.first() != Some(&OFFER_BUTTONS[1]);
-        self.draw_card_buttons(grid, y, &placed, (&labels, answer));
+        self.draw_card_buttons(grid, (y, drop), &placed, (&labels, answer));
+        grid.lift_since(held, -drop);
     }
 
     /// Sends edits to servers and handles their replies. Returns true if anything changed.
@@ -9828,7 +9844,8 @@ impl App {
     fn linger_area(&self) -> Rect {
         let (x, width) = self.linger_frame();
         let height = self.linger_detail().len() as u16 + 5 + 2 * self.card_gap();
-        Rect::new(x, self.size.1.saturating_sub(height + 2), width, height)
+        let end = self.corner_card_end(x, self.size.1.saturating_sub(2));
+        Rect::new(x, end.saturating_sub(height), width, height)
     }
 
     fn linger_buttons(&self) -> Vec<(String, u16)> {
@@ -9857,8 +9874,10 @@ impl App {
     /// A card's panel, raised and rounded. It starts and ends inside its first and last rows,
     /// so the title and the buttons have the same air above and below them, and what's under
     /// those rows is cleared so no text shows half covered.
+    /// It's a card in a sheet's corner, its panel dropped as `card_drop` says.
     fn draw_card(&self, grid: &mut Grid, area: Rect, last: measures::DialogLast) {
-        self.draw_card_led(grid, area, (self.card_lead(area), last));
+        let drop = self.card_drop(area, last);
+        self.draw_card_led(grid, area, (self.card_lead(area), last, drop));
     }
 
     /// How far into its first column a card's panel starts: over the side pane, where it
@@ -9875,15 +9894,78 @@ impl App {
         }
     }
 
+    /// The sheet a card in a corner stands on: the side pane's where its last row is the
+    /// pane's, or the file's.
+    fn card_sheet(&self, area: Rect) -> Rect {
+        let last = area.bottom().saturating_sub(1);
+        match self.dock_area() {
+            Some(pane) if pane.contains(area.x, last) => pane,
+            _ => self.main_area(),
+        }
+    }
+
+    /// The row a card in a sheet's corner, starting at column `x`, ends before: where a row
+    /// has room, the sheet's own, so the card's last row is the sheet's last and the card
+    /// stands over its foot (`card_drop`); elsewhere `cells_end`, a row over it, as on cells,
+    /// where a card is whole rows and no line is drawn round a sheet, and on the terminal's
+    /// line, which has no air to share.
+    fn corner_card_end(&self, x: u16, cells_end: u16) -> u16 {
+        if !self.corner_cards_stand() {
+            return cells_end;
+        }
+        let probe = Rect::new(x, cells_end.saturating_sub(1), 1, 1);
+        self.card_sheet(probe).bottom()
+    }
+
+    /// How far a card in a sheet's corner is painted under its rows, in rows, so its panel's
+    /// foot stands as far over the line at its sheet's foot as its side stands in from the
+    /// sheet's side line: 16 px over the side pane, about 32 over the file. Its last row is the
+    /// sheet's (`corner_card_end`) and its panel stops part way up that row, so on a row of 50
+    /// it goes 14 px down. The install, logout and stopped cards floated 79 px over the pane's
+    /// foot against 16 px at its sides (0.11.0's release check, P6). A press lands where it's
+    /// painted (`card_at`). Nothing on cells or on the terminal's line.
+    fn card_drop(&self, area: Rect, last: measures::DialogLast) -> f32 {
+        let Some((wide, tall)) = self.measure.cell_pixels() else {
+            return 0.0;
+        };
+        if !self.corner_cards_stand() || tall == 0 {
+            return 0.0;
+        }
+        let (wide, tall) = (wide as f32, tall as f32);
+        let sheet = self.card_sheet(area);
+        let line = measures::line_pixels(&*self.measure);
+        let (_, foot) = self.card_ends(last, self.card_lead(area));
+        let side = f32::from(sheet.right().saturating_sub(area.right())) * wide - line;
+        let rows = f32::from(sheet.bottom().saturating_sub(area.bottom()));
+        let under = (rows + foot) * tall - line;
+        // In whole pixels, so its panel's edges stay as sharp as `card_ends` makes them.
+        ((under - side).round() / tall).clamp(-0.5, 0.5)
+    }
+
+    /// Whether a card in a sheet's corner stands over the sheet's foot (`card_drop`): where
+    /// there are pictures and a row has room.
+    fn corner_cards_stand(&self) -> bool {
+        let measure = self.measure.as_ref();
+        !measure.in_cells() && measure.cell_pixels().is_some() && measures::roomy(measure)
+    }
+
+    /// Where a press at `at` (columns and rows, with their fractions) lands on a card dropped
+    /// `drop` rows under its rows (`card_drop`): where its buttons are painted.
+    fn card_at(at: (f32, f32), drop: f32) -> (f32, f32) {
+        (at.0, at.1 - drop)
+    }
+
     /// A card whose panel starts `lead` columns into its first column where there are
     /// pictures (`PANE_CARD_LEAD`), the pane's sheet before it, on the rows between its first
     /// and last. What it holds last before its buttons, words or a control, sets how far its
-    /// words are raised (`card_lift`) and with them where its panel starts.
+    /// words are raised (`card_lift`) and with them where its panel starts. Its panel is
+    /// painted `drop` rows under where its rows put it, and what it holds is moved with it by
+    /// what draws that.
     fn draw_card_led(
         &self,
         grid: &mut Grid,
         area: Rect,
-        (lead, last): (f32, measures::DialogLast),
+        (lead, last, drop): (f32, measures::DialogLast, f32),
     ) {
         let theme = &self.theme;
         let plain = self.measure.in_cells();
@@ -9939,7 +10021,7 @@ impl App {
         let (top, foot) = self.card_ends(last, lead);
         let bounds = Bounds::cells(
             f32::from(area.x) + lead,
-            f32::from(area.y) + top,
+            f32::from(area.y) + top + drop,
             f32::from(area.w) - lead,
             f32::from(area.h) - top - foot,
         );
@@ -9993,11 +10075,12 @@ impl App {
         u16::from(!measures::roomy(self.measure.as_ref()))
     }
 
-    /// A card's row of buttons, the first the one to press.
+    /// A card's row of buttons, the first the one to press, on a card dropped `drop` rows under
+    /// its rows (`card_drop`), which a pointer's place is taken against.
     fn draw_card_buttons(
         &self,
         grid: &mut Grid,
-        y: u16,
+        (y, drop): (u16, f32),
         placed: &[(String, u16)],
         (labels, filled): (&[&str], bool),
     ) {
@@ -10011,7 +10094,7 @@ impl App {
             // The first is the answer, filled, unless this row only carries on another.
             let first = i == 0 && filled;
             let width = cells.chars().count() as u16;
-            let hovered = self.over_button((*x, y), width);
+            let hovered = self.over_raised_button((*x, y), width, -drop);
             // A quiet button stands a step further off what's behind it when pointed at, as
             // every one that isn't the main one does.
             let quiet = theme.quiet_button(theme.popup);
@@ -10081,11 +10164,12 @@ impl App {
             } else {
                 (0.1, 1.2)
             };
-            // 16 px outside the card's words on either side, its command on their column:
-            // its edge stood on that column, 12 px from its own words. The words end as far
-            // from the panel's right as they start from its left, `lead` short of two columns.
+            // 12 px outside the card's words on either side, its command on their column, so
+            // over the side pane it's as far in from the card's edge as its command is from
+            // its own (`COMMAND_BOX_OUT`). The words end as far from the panel's right as they
+            // start from its left, `lead` short of two columns.
             let lead = self.card_lead(area);
-            let out = measures::columns(measures::BOX_PADDING, &*self.measure).unwrap_or(0.0);
+            let out = measures::columns(COMMAND_BOX_OUT, &*self.measure).unwrap_or(0.0);
             let bounds = Bounds::cells(
                 f32::from(area.x) + 2.0 - out,
                 f32::from(row) - over,
@@ -10110,7 +10194,10 @@ impl App {
         let lift = self.card_lift(measures::DialogLast::Control, self.card_lead(area));
         grid.lift_since(words, lift);
         let y = self.linger_button_row();
-        self.draw_card_buttons(grid, y, &self.linger_buttons(), (&LINGER_BUTTONS, true));
+        let drop = self.card_drop(area, measures::DialogLast::Control);
+        let placed = self.linger_buttons();
+        self.draw_card_buttons(grid, (y, drop), &placed, (&LINGER_BUTTONS, true));
+        grid.lift_since(words, -drop);
     }
 
     /// A press on the logout card. Returns whether the card took it.
@@ -10123,9 +10210,12 @@ impl App {
             return false;
         }
         let row = self.linger_button_row();
-        let hit = self.linger_buttons().into_iter().position(|(cells, x)| {
-            on_large_button((x, row), cells.chars().count() as u16, mouse.at())
-        });
+        let drop = self.card_drop(area, measures::DialogLast::Control);
+        let at = Self::card_at(mouse.at(), drop);
+        let hit = self
+            .linger_buttons()
+            .into_iter()
+            .position(|(cells, x)| on_large_button((x, row), cells.chars().count() as u16, at));
         let user = user_name();
         match hit.map(|index| LINGER_BUTTONS[index]) {
             Some("Turn On") => {
@@ -10173,12 +10263,10 @@ impl App {
         // Without the gap where a row has room: see `card_gap`.
         let fixed = STOPPED_CARD_ROWS - 1 + self.card_gap();
         let height = (fixed + lines + rows - 1).min(screen.h);
-        Some(Rect::new(
-            x,
-            screen.bottom().saturating_sub(height + 1),
-            width,
-            height,
-        ))
+        let end = self
+            .corner_card_end(x, screen.bottom().saturating_sub(1))
+            .min(screen.bottom());
+        Some(Rect::new(x, end.saturating_sub(height), width, height))
     }
 
     /// The card's detail, in the lines it takes in a card `width` wide.
@@ -10296,6 +10384,7 @@ impl App {
         let card = self.stopped_card()?;
         let (_, _, buttons) = self.stopped_offer()?;
         let placed = self.stopped_buttons(card, &buttons);
+        let at = Self::card_at(at, self.card_drop(card, measures::DialogLast::Words));
         placed.into_iter().find_map(|(cells, x, row, choice)| {
             let width = cells.chars().count() as u16;
             on_large_button((x, row), width, at).then_some(choice)
@@ -10352,6 +10441,7 @@ impl App {
         let placed = self.stopped_buttons(card, &buttons);
         let mut rows: Vec<u16> = placed.iter().map(|(_, _, y, _)| *y).collect();
         rows.dedup();
+        let drop = self.card_drop(card, measures::DialogLast::Words);
         for (index, y) in rows.into_iter().enumerate() {
             let (spots, labels): (Vec<(String, u16)>, Vec<&str>) = placed
                 .iter()
@@ -10359,8 +10449,9 @@ impl App {
                 .filter(|((_, _, row, _), _)| *row == y)
                 .map(|((cells, x, _, _), (label, _))| ((cells.clone(), *x), *label))
                 .unzip();
-            self.draw_card_buttons(grid, y, &spots, (&labels, index == 0));
+            self.draw_card_buttons(grid, (y, drop), &spots, (&labels, index == 0));
         }
+        grid.lift_since(words, -drop);
     }
 
     /// Breaks text into lines that fit `width` cells, by words.
@@ -15179,7 +15270,7 @@ impl App {
         if mouse.kind == MouseKind::Left && self.click_linger(mouse) {
             return;
         }
-        if mouse.kind == MouseKind::Left && self.click_offer(mouse.x, mouse.y) {
+        if mouse.kind == MouseKind::Left && self.click_offer(mouse) {
             return;
         }
         if mouse.kind == MouseKind::Left
