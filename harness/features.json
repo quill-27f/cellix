@@ -6970,5 +6970,12 @@
     "title": "Tabs behind show the same number of letters, fill the row before the +, and go to their marks only all together",
     "test": "tabs_behind_share_the_room_evenly",
     "passes": true
+  },
+  {
+    "id": "L3-status-wait-keeps-details",
+    "milestone": 15,
+    "title": "What Cellix waits on and the file's details share the status bar by what they take as drawn",
+    "test": "a_wait_leaves_the_files_details_the_room_they_have",
+    "passes": true
   }
 ]

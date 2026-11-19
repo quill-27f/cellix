@@ -20371,31 +20371,40 @@ impl App {
         let end = bell
             .map_or(last, |(at, _)| at.saturating_sub(1))
             .saturating_sub(self.status_room.get().1);
+        let status_font = Font {
+            size: 90,
+            ..Font::default()
+        };
+        // How many columns the bar's words take as they're drawn: painted, their letters'
+        // width, a good deal short of a column each; on cells, a column each. Counted a column
+        // a letter, "rust-analyzer: fetching" left "Spaces: 4" no room with 600 px of the bar
+        // free (0.11.0's release check, P9 and R6).
+        let span = |words: &str| -> u16 {
+            if self.measure.in_cells() {
+                words.chars().count() as u16
+            } else {
+                self.measure.width(words, status_font).ceil() as u16
+            }
+        };
         // What Cellix itself waits on stands before the message, and gives way to one that
         // wouldn't fit beside it.
-        let left_wide = left.chars().count().min(kept) as u16;
+        let left_wide = usize::from(span(left)).min(kept) as u16;
         let waits = self.waiting().filter(|_| !self.compact()).filter(|words| {
-            let wide = words.chars().count() as u16 + WAIT_ROOM;
+            let wide = span(words) + WAIT_ROOM;
             message.is_empty() || start + flagged + wide + left_wide < end
         });
-        let wait_wide = waits
-            .as_ref()
-            .map_or(0, |words| words.chars().count() as u16 + WAIT_ROOM);
+        let wait_wide = waits.as_ref().map_or(0, |words| span(words) + WAIT_ROOM);
         let used = left_wide + start + flagged + wait_wide + 3 + (width - end);
-        let room = width.saturating_sub(used) as usize;
+        let room = width.saturating_sub(used);
         let mut shown = right.clone();
-        while shown.len() > 1 && shown.join("   ").chars().count() > room {
+        while shown.len() > 1 && span(&shown.join("   ")) > room {
             shown.pop();
         }
         // Dropped from the far end, and read from the other, with the cursor last.
         shown.reverse();
         let mut right = shown.join("   ");
-        let mut right_x = end.saturating_sub(right.chars().count() as u16 + 1);
+        let mut right_x = end.saturating_sub(span(&right) + 1);
         // The cursor's place is back when the message goes, at the next key.
-        let status_font = Font {
-            size: 90,
-            ..Font::default()
-        };
         let wide = self.measure.width(left, status_font).ceil() as u16;
         if !message.is_empty() && start + flagged + wide + 1 > right_x {
             right.clear();

@@ -264,3 +264,58 @@ fn the_bar_and_the_picker_have_the_marks_tabs_have() {
         assert!(marked, "{}'s own mark: {}", agent.name(), grid.row_text(at));
     }
 }
+
+/// What Cellix waits on and the file's details share the bar by what they take as they're
+/// drawn. Counted a column a letter, where painted letters are a good deal narrower,
+/// "rust-analyzer: fetching" took "Spaces: 4" off the bar with 600 px of it free (0.11.0's
+/// release check, P9 and R6). On cells, where a letter is a column, what doesn't fit still
+/// goes from the far end, and nothing is drawn over the wait's words.
+#[test]
+fn a_wait_leaves_the_files_details_the_room_they_have() {
+    use cellix_render::{FontMeasure, Paint, UNIT};
+    let (dir, mut app) = project();
+    fs::write(
+        dir.path().join("queue.rs"),
+        "fn main() {\n    let x = 1;\n}\n",
+    )
+    .unwrap();
+    app.open(&dir.path().join("queue.rs")).unwrap();
+    // A window where, a column a letter, the details and the wait don't fit side by side,
+    // and painted they do with room to spare.
+    app.handle(cellix_input::Event::Resize(84, 30));
+    // As long as rust-analyzer's words when it fetches.
+    app.source.busy = Some("rust-analyzer: fetching…");
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 36)));
+    // What's painted, which the screen's text, a cell a letter, can't show side by side.
+    let (_, grid) = status(&app);
+    // Painted, every detail is there, and the wait's words end well before the details start.
+    let unit = UNIT as f32;
+    let y = i32::from(grid.height() - 1) * UNIT;
+    let on_bar = |p: &&Paint| matches!(p, Paint::Text { y: at, .. } if *at >= y);
+    let texts: Vec<_> = (grid.paint.iter().filter(on_bar))
+        .filter_map(|p| match p {
+            Paint::Text {
+                x,
+                text,
+                font,
+                align_right,
+                ..
+            } => Some((*x as f32 / unit, text.clone(), *font, *align_right)),
+            _ => None,
+        })
+        .collect();
+    let wait = (texts.iter())
+        .find(|(_, text, _, _)| text == "rust-analyzer: fetching")
+        .map(|(x, text, font, _)| x + app.measure().width(text, *font))
+        .unwrap_or_else(|| panic!("the wait isn't painted whole: {texts:?}"));
+    let details = (texts.iter())
+        .find(|(_, text, _, right)| *right && text.contains("Spaces: 4"))
+        .map(|(x, text, font, _)| x - app.measure().width(text, *font))
+        .unwrap_or_else(|| panic!("the details aren't painted: {texts:?}"));
+    assert!(details - wait >= 2.0, "{wait} to {details}");
+    // On cells the details that fit keep their place and the rest go from the far end.
+    app.set_measure(std::rc::Rc::new(cellix_render::CellMeasure));
+    let (row, _) = status(&app);
+    assert!(row.contains("rust-analyzer: fetching"), "{row}");
+    assert!(row.contains("Ln 1, Col 1"), "{row}");
+}
