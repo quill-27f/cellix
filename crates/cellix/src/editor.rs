@@ -1198,8 +1198,20 @@ impl Editor {
             let from = (top + 0.2 - over).max(area.y as f32);
             let to = (top + 0.2 + figure.height + over).min(area.bottom() as f32);
             let wide = figure.width + 2.0 * side;
-            let shown = (picked && to > from)
-                .then(|| Bounds::cells(left + x - side, from, wide, to - from));
+            // An equation's number stands at the column's end: with it the selection is one
+            // band across the column, where the number had a box of its own far off.
+            let rows_of = (figure.height + 0.4).ceil().max(1.0) as usize;
+            let number_end = (rows.iter().skip(index).take(rows_of))
+                .flat_map(|row| &row.glyphs)
+                .filter(|g| matches!(g.tone, Tone::Margin(_)))
+                .map(|g| g.x + g.advance)
+                .reduce(f32::max);
+            let (band, band_wide) = match number_end {
+                Some(end) if ink => (left, end.max(x + figure.width + side)),
+                _ => (left + x - side, wide),
+            };
+            let shown =
+                (picked && to > from).then(|| Bounds::cells(band, from, band_wide, to - from));
             if let Some(shown) = shown.filter(|_| ink) {
                 grid.panel(shown, 6, Some(theme.selection), None);
             }
@@ -5203,7 +5215,9 @@ impl Editor {
         // A table's selection is drawn under its lines, with its box.
         if row.table.is_none() {
             let (top, tall) = self.selection_rows(row, y);
-            for (from, to, shift) in stretches(row, &taken, hidden) {
+            // An equation's number is inside its formula's band (`draw_figures`).
+            let banded = |g: &Glyph| hidden(g) || matches!(g.tone, Tone::Margin(_));
+            for (from, to, shift) in stretches(row, &taken, banded) {
                 let bounds = Bounds::cells(origin + from, top + shift, to - from, tall);
                 grid.panel(bounds, 0, Some(theme.selection), None);
             }

@@ -485,6 +485,28 @@ fn a_papers_numbers_are_inside_its_selection() {
         }),
         "(1) at {column}, {row}: {selection:?}"
     );
+    // And in the formula's own band, one across the column, where it had a box of its own
+    // far right of the formula's (s1-paper-shift-select).
+    let formula = (grid.paint.iter())
+        .find_map(|paint| match paint {
+            Paint::Image { bounds, .. } => Some(bounds.x as f32 / unit + 0.5),
+            _ => None,
+        })
+        .expect("the formula");
+    let holding: Vec<_> = (selection.iter())
+        .filter(|(_, [left, top, right, foot])| {
+            *left <= column + 0.1
+                && *right >= column + 1.0
+                && *top <= row + 0.5
+                && *foot >= row + 0.5
+        })
+        .collect();
+    assert_eq!(holding.len(), 1, "(1) in one shape: {selection:?}");
+    let [left, ..] = holding[0].1;
+    assert!(
+        left <= formula,
+        "the shape that holds (1) holds the formula from {formula}: {holding:?}"
+    );
 }
 
 /// A cell of 17 by 50 px with words set for a line of 36, as the tour's Airy rows are.

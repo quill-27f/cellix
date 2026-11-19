@@ -6697,5 +6697,12 @@
     "title": "A branch's age is said as a commit's is, in Compare With and the branch menu",
     "test": "compare_with_says_a_branchs_age_as_a_commits",
     "passes": true
+  },
+  {
+    "id": "equation-one-band",
+    "milestone": 15,
+    "title": "A selected equation with a number is one band across the text column, number and all",
+    "test": "a_papers_numbers_are_inside_its_selection",
+    "passes": true
   }
 ]

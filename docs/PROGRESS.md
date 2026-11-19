@@ -3769,3 +3769,10 @@ The relC track, from the release review's C5.
 
 - 84-git-compare said one time three ways: "63 seconds ago" by a branch, git's own words, "tour, 1 min" by a commit and "1 min" in the graph. Branches are read with their commit time and said as commits are ("now", "4 min", "3 hr", "yesterday"), in Compare With and in the branch menu; a commit keeps its author before it.
 - Test: `compare_with_says_a_branchs_age_as_a_commits`.
+
+## A selected equation is one band with its number (2026-11-19)
+
+The relC track, from the release review's C5.
+
+- s1-paper-shift-select drew an equation's number "(1)" selected as a box of its own, 395 px right of the formula's. A selected display equation with a number is one band across the text column now, from the column's edge to the number's end, the height the formula's was; a formula with no number keeps its own box, and a picture its wash.
+- Test: `a_papers_numbers_are_inside_its_selection` asks for (1) in one shape that holds the formula too, where it asked only for (1) to be inside some shape.
