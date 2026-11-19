@@ -6683,5 +6683,12 @@
     "title": "A deletion's or struck words' spaces at either end aren't struck, so no struck space reads as a hyphen",
     "test": "a_deletions_spaces_at_its_ends_are_not_struck",
     "passes": true
+  },
+  {
+    "id": "context-detail-kept",
+    "milestone": 15,
+    "title": "A quiet detail beside a name in Agent Context is shown whole, or cut with twelve letters or more kept, or not at all",
+    "test": "a_detail_is_shown_whole_or_with_twelve_letters_kept_or_not_at_all",
+    "passes": true
   }
 ]

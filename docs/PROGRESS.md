@@ -3755,3 +3755,10 @@ The relC track, from the release review's C5.
 
 - A suggestion that takes out " by a wide margin" struck its leading space too, and the line through the space after "baseline" read as a hyphen: "baseline-by" (69 to 71, 82-paper-changes). The line through what's taken out, or through `~~struck~~` words, starts at its first letter and ends at its last now; the spaces stay in the deleted colour, unstruck.
 - Test: `a_deletions_spaces_at_its_ends_are_not_struck`.
+
+## Agent Context shows a detail whole or with twelve letters kept (2026-11-19)
+
+The relC track, from the release review's C5.
+
+- 81-context cut skills' descriptions beside their names to "Revi…" and "Rea…", which said nothing. A quiet detail beside a name (a skill's description, an instruction's scope, a file's folder) is shown whole, or cut with twelve letters or more kept, or not at all; the name and the tail at the right are as before.
+- Test: `a_detail_is_shown_whole_or_with_twelve_letters_kept_or_not_at_all`.

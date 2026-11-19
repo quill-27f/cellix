@@ -32,6 +32,8 @@ const SHORT_CHECKS: usize = 3;
 const CHECK_ROWS: usize = 3;
 /// Cells a quiet detail needs free beside a name before any of it is shown.
 const ROOM: f32 = 3.0;
+/// Letters a quiet detail cut short keeps at least, or none of it is shown.
+const KEPT: usize = 12;
 /// The space between a name and its quiet detail, as Source Control sets it.
 const GAP: f32 = 0.8;
 /// Where the context bar sits in its row, and how tall it is, in rows.
@@ -959,12 +961,14 @@ fn row_of(
     let name = elide(name, edge - x as f32, measure);
     grid.label(x, y, &name, look, edge.ceil() as u16);
     let at = x as f32 + measure.width(&name, font) + GAP;
-    if !detail.is_empty() && edge - at >= ROOM {
+    let cut = (!detail.is_empty() && edge - at >= ROOM).then(|| elide(detail, edge - at, measure));
+    // Cut to a stub ("Revi…") a detail says nothing, so it's shown whole or with enough kept.
+    let kept = |cut: &String| cut == detail || cut.trim_end_matches('…').chars().count() >= KEPT;
+    if let Some(detail) = cut.filter(kept) {
         let quiet = Style {
             fg: theme.gutter.fg,
             ..look
         };
-        let detail = elide(detail, edge - at, measure);
         grid.label_at(
             at,
             at.ceil() as u16,
@@ -1167,6 +1171,44 @@ mod tests {
     fn a_name_too_long_for_its_row_ends_in_an_ellipsis() {
         assert_eq!(elide("docs/STYLE.md", 13.0, &CellMeasure), "docs/STYLE.md");
         assert_eq!(elide("docs/STYLE.md", 8.0, &CellMeasure), "docs/ST…");
+    }
+
+    /// 0.11.0's tour (81-context): skills' descriptions cut to "Revi…" and "Rea…" beside their
+    /// names said nothing. A quiet detail is shown whole, or cut with twelve letters or more
+    /// kept, or not at all.
+    #[test]
+    fn a_detail_is_shown_whole_or_with_twelve_letters_kept_or_not_at_all() {
+        let theme = Theme::default();
+        let look = theme.text;
+        let row = |right: u16| {
+            let mut grid = Grid::new(60, 1, look);
+            let detail = "Reviews a change for its bugs";
+            let name = ("reviewer", look);
+            let tail = ("agent", look);
+            row_of(
+                &mut grid,
+                &CellMeasure,
+                (0, right, 0),
+                name,
+                detail,
+                tail,
+                &theme,
+            );
+            grid.row_text(0)
+        };
+        let whole = row(60);
+        assert!(whole.contains("Reviews a change for its bugs"), "{whole}");
+        let cut = row(32);
+        assert!(
+            cut.contains("Reviews a change") && cut.contains('…'),
+            "{cut}"
+        );
+        let stub = row(22);
+        assert!(!stub.contains("Rev") && !stub.contains('…'), "{stub}");
+        assert!(
+            stub.contains("reviewer") && stub.contains("agent"),
+            "{stub}"
+        );
     }
 
     #[test]
