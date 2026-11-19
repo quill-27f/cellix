@@ -213,7 +213,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 287
+SCENES_IN_ALL = 288
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # The scene shot last, with its picture's digest and what it was taken from; and this one's.
@@ -1897,6 +1897,12 @@ with tempfile.TemporaryDirectory() as made:
                   os.path.join(samples, "paper", "results.tex"), **light)
             continue
         shoot(f"{78 + number}-paper-{name}", to_line(line_of(PAPER, start)), PAPER, **light)
+    # With no LaTeX on the PATH the drawings say so under their source, 16 px under its box,
+    # where they said "Drawing with LaTeX…" for ever (0.11.0's release check, P4). The note
+    # is small proportional words, whose letters the screen's text loses, so a pause.
+    shoot("80-paper-drawn-no-latex", [*to_line(line_of(PAPER, "\\subsection{Algorithms}")),
+                                      ["wait", 3.0]], PAPER,
+          env={"PATH": "/usr/bin:/bin"}, **light)
     PAPER_CHANGES = to_line(line_of(PAPER, "\\section{Track changes}"))
     shoot("82-paper-changes-chips", [*PAPER_CHANGES, *command("Next Change"),
                                      ["until", "Suggestion 1 of 3"], ["wait", 0.5]], PAPER, **light)

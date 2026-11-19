@@ -279,6 +279,10 @@ fn roomy_rows(text: &str) -> String {
 /// Where each row of a display stands in its picture, as shares of its height, from what
 /// each row measures alone. None if one of them can't be set by itself.
 pub fn row_centres(rows: &[String], em: u32) -> Option<Vec<f32>> {
+    // Where a row's line is, on its own: its math axis, a quarter of an em over its baseline,
+    // where a number set beside it centres. The middle of its height is lower wherever
+    // limits stand under it, and an equation's number stood 30 px under its line there.
+    let mut lines = Vec::with_capacity(rows.len());
     let mut heights = Vec::with_capacity(rows.len());
     for row in rows {
         let mut text = row.replace('&', " ");
@@ -298,17 +302,25 @@ pub fn row_centres(rows: &[String], em: u32) -> Option<Vec<f32>> {
         ] {
             text = text.replace(word, " ");
         }
-        heights.push(render(&text, true, em).ok()?.height as f32);
+        let formula = render(&text, true, em).ok()?;
+        let height = formula.height as f32;
+        let axis = formula.baseline as f32 - em as f32 * MATH_AXIS;
+        lines.push(axis.clamp(0.0, height));
+        heights.push(height);
     }
     let total: f32 = heights.iter().sum();
     let mut done = 0.0;
-    let centres = heights.iter().map(|height| {
-        let centre = (done + height / 2.0) / total.max(1.0);
+    let centres = heights.iter().zip(&lines).map(|(height, line)| {
+        let centre = (done + line) / total.max(1.0);
         done += height;
         centre
     });
     Some(centres.collect())
 }
+
+/// How far a formula's math axis, the middle of its operators and fraction bars, stands over
+/// its baseline, in ems.
+const MATH_AXIS: f32 = 0.25;
 
 fn pixels(dim: &Dim, em: u32) -> f64 {
     let (top, bottom) = dim.as_ratio().unwrap_or((0, 1));
@@ -415,6 +427,35 @@ mod tests {
             render(under, true, 30).unwrap(),
         );
         assert!(high.height > low.height + 10);
+    }
+
+    /// A row with limits under it has its number on its line, not in the middle of the line
+    /// and the limits: there it stood about 30 px under its line (0.11.0's final review, S6).
+    #[test]
+    fn a_rows_number_stands_on_its_line_over_limits_under_it() {
+        let rows = vec![
+            r"\begin{align} a &= b".to_string(),
+            r"c &= \arg\min_{\theta \in \mathbb{R}^d} f(\theta) \end{align}".to_string(),
+        ];
+        let centres = row_centres(&rows, 30).unwrap();
+        let first = render("a = b", true, 30).unwrap();
+        let second = render(
+            r"c = \arg\min_{\theta \in \mathbb{R}^d} f(\theta)",
+            true,
+            30,
+        )
+        .unwrap();
+        let total = (first.height + second.height) as f32;
+        let at = centres[1] * total - first.height as f32;
+        let line = second.baseline as f32 - 30.0 * MATH_AXIS;
+        assert!(
+            (at - line).abs() < 1.0,
+            "{at} px down the row, its line at {line}"
+        );
+        assert!(
+            at < second.height as f32 / 2.0 - 4.0,
+            "over the middle of it and its limits"
+        );
     }
 
     #[test]

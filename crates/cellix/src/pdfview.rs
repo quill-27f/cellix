@@ -13,6 +13,8 @@ use crate::theme::Theme;
 /// Space between pages, and around them, in rows and columns.
 const GAP: f32 = 0.6;
 const SIDE: f32 = 1.0;
+/// Pixels a page or picture keeps from the pane's sides however far it's zoomed.
+const SIDE_AIR: f32 = 16.0;
 
 /// How much one press of the zoom buttons changes the size.
 const ZOOM_STEP: f32 = 0.25;
@@ -453,13 +455,20 @@ impl PdfView {
         grid.label(plus, area.y, "+", quiet_bar, plus + 1);
         grid.label(fit, area.y, "Fit", quiet_bar, area.right());
         let area = Rect::new(area.x, area.y + 1, area.w, area.h.saturating_sub(1));
-        // Pages scroll under the bar's own margin, not up against its text.
-        let clip = Bounds::cells(
-            area.x as f32,
-            area.y as f32 + GAP,
-            area.w as f32,
-            area.h as f32 - GAP,
+        // Pages scroll under the bar's own margin, not up against its text, and keep
+        // `SIDE_AIR` from the sheet's lines: zoomed past them, a picture ran to the line on
+        // its right and stood 8 px from the one on its left (91). The sheet's left line is
+        // half a column before its first, and its right one at its end.
+        let side = match self.fit.1 {
+            (wide, _) if wide > 0 => SIDE_AIR / wide as f32,
+            _ => 0.0,
+        };
+        let (from, to) = (
+            area.x as f32 + (side - 0.5).max(0.0),
+            area.right() as f32 - side,
         );
+        let clip = Bounds::cells(from, area.y as f32 + GAP, to - from, area.h as f32 - GAP);
+        let view = (from, f32::from(area.y), to, f32::from(area.bottom()));
         let mut y = area.y as f32 + GAP - self.top;
         for page in self.pages.iter().flatten() {
             let (bitmap, width, height) = page;
@@ -472,7 +481,7 @@ impl PdfView {
                     bitmap: bitmap.clone(),
                     color: theme.text.fg,
                 });
-                draw_edge(grid, (x, y, *width, *height), area, theme);
+                draw_edge(grid, (x, y, *width, *height), view, theme);
             }
             y += height + GAP;
         }
@@ -517,9 +526,12 @@ impl PdfView {
 
 /// A page's outline, as far as it shows: a page moved past the view's edge mustn't draw its
 /// outline over what stands beside the view.
-fn draw_edge(grid: &mut Grid, (x, y, w, h): (f32, f32, f32, f32), area: Rect, theme: &Theme) {
-    let (left, top) = (f32::from(area.x), f32::from(area.y));
-    let (right, bottom) = (f32::from(area.right()), f32::from(area.bottom()));
+fn draw_edge(
+    grid: &mut Grid,
+    (x, y, w, h): (f32, f32, f32, f32),
+    (left, top, right, bottom): (f32, f32, f32, f32),
+    theme: &Theme,
+) {
     let (x0, x1) = (x.max(left), (x + w).min(right));
     let (y0, y1) = (y.max(top), (y + h).min(bottom));
     if x1 <= x0 || y1 <= y0 {

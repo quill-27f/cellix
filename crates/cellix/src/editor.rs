@@ -234,6 +234,9 @@ pub struct Editor {
     dark: Cell<bool>,
     /// How wide the text was drawn, for what's drawn beside it.
     view_width: Cell<u16>,
+    /// How far down the scrollbar's track something floats over its top, in rows: a page's
+    /// Show Source button. The thumb's painted track starts under it.
+    pub scrollbar_clear: Cell<f32>,
     /// Whether typing here is kept as suggested changes.
     pub tracking: bool,
     /// The suggestions in the text, for the revision they were found at: every frame asks
@@ -380,6 +383,7 @@ impl Editor {
             library: RefCell::default(),
             dark: Cell::new(false),
             view_width: Cell::new(0),
+            scrollbar_clear: Cell::new(0.0),
             tracking: false,
             suggestions: RefCell::new(None),
             agent_review: None,
@@ -763,6 +767,17 @@ impl Editor {
     pub fn text_end(&self, area: Rect) -> u16 {
         let area = self.text_area(area);
         area.x + self.page_margin(area) + self.page_width(area) as u16
+    }
+
+    /// The column a line of the text starts in: a page's left edge, or code's first column
+    /// after its gutter.
+    pub fn text_start(&self, area: Rect) -> u16 {
+        let area = self.text_area(area);
+        if self.rendered {
+            area.x + self.page_margin(area)
+        } else {
+            area.x + self.gutter_width(area.w)
+        }
     }
 
     /// The columns a page shows of what's on it, from its own left edge to its right one.
@@ -4680,8 +4695,12 @@ impl Editor {
         for y in cells.y..cells.bottom() {
             grid.put_str(cells.x, y, "▐", thumb, cells.right());
         }
+        // Painted, the track starts under what floats over its top, and the thumb keeps to it.
+        let clear = self.scrollbar_clear.get().clamp(0.0, track.h as f32 / 2.0);
+        let scale = (track.h as f32 - clear) / track.h as f32;
+        let top = track.y as f32 + clear + top as f32 * scale;
         let bounds =
-            cellix_render::Bounds::cells(cells.x as f32 + 0.3, cells.y as f32, 0.5, cells.h as f32);
+            cellix_render::Bounds::cells(cells.x as f32 + 0.3, top, 0.5, height as f32 * scale);
         grid.panel(bounds, 20, Some(theme.scrollbar), None);
     }
 
@@ -4711,13 +4730,16 @@ impl Editor {
                 // Its box reaches a little over and under its rows, and no further than
                 // the page's own: it lay over the line under the bar, and under the sheet.
                 let (over, under) = (area.y as f32, area.bottom() as f32);
-                let (from, to) = ((top - 0.08).max(over), (top + height + 0.12).min(under));
+                let foot = top + height + rendered::BOX_UNDER;
+                let (from, to) = ((top - 0.08).max(over), foot.min(under));
                 let bounds = Bounds::cells(left, from, edge - left, to - from);
                 grid.panel(bounds, 22, Some(theme.code_bg), Some(theme.border));
                 if let (Some((at, most)), true) = (wide, whole) {
+                    // Inside the box, over its foot: under it, it ran through what came next,
+                    // a drawing's "Drawing with LaTeX…" (82-paper-changes-row).
                     let moved = self.row_shift(area, at);
-                    let under = (top + height + 0.12).min(area.bottom() as f32 - 0.4);
-                    self.draw_block_thumb(grid, (left, edge, under), (moved, most), theme);
+                    let y = self.thumb_inside(to);
+                    self.draw_block_thumb(grid, (left, edge, y), (moved, most), theme);
                 }
             } else if let Some(table) = &row.table {
                 // A table too wide even with its cells wrapped shows as much as there's room
@@ -4800,7 +4822,8 @@ impl Editor {
                 }
                 if let (Some((_, most)), true) = (wide, whole) {
                     let under = (top + height - 0.02).min(area.bottom() as f32 - 0.4);
-                    self.draw_block_thumb(grid, (left, edge, under), (moved, most), theme);
+                    let y = under + THUMB_UNDER;
+                    self.draw_block_thumb(grid, (left, edge, y), (moved, most), theme);
                 }
             }
             index = end;
@@ -4812,19 +4835,33 @@ impl Editor {
     fn draw_block_thumb(
         &self,
         grid: &mut Grid,
-        (left, right, bottom): (f32, f32, f32),
+        (left, right, y): (f32, f32, f32),
         (moved, most): (f32, usize),
         theme: &Theme,
     ) {
-        /// Rows of air between the block and its thumb, about 9 px, and how thick the thumb is.
-        const UNDER: f32 = 0.25;
-        const THICK: f32 = 0.12;
         let shown = right - left;
         let all = shown + most as f32;
         let long = (shown * shown / all).max(2.0);
         let start = left + moved / all * shown;
-        let bounds = Bounds::cells(start, bottom + UNDER, long.min(shown), THICK);
-        grid.panel(bounds, (THICK * 50.0) as u8, Some(theme.scrollbar), None);
+        let bounds = Bounds::cells(start, y, long.min(shown), THUMB_THICK);
+        grid.panel(
+            bounds,
+            (THUMB_THICK * 50.0) as u8,
+            Some(theme.scrollbar),
+            None,
+        );
+    }
+
+    /// Where a sideways thumb inside a box whose foot is at `foot` (rows) stands, its top in
+    /// rows: its ink `THUMB_INSIDE` px over the box's foot. Shorter than a row, it's painted
+    /// the height it has on the terminal's line, in the middle of its place (`stood`).
+    fn thumb_inside(&self, foot: f32) -> f32 {
+        let (row, line) = self.measure.cell_pixels().map_or((1.0, 1.0), |(_, row)| {
+            let row = row.max(1) as f32;
+            (row, row / self.measure.row_air().max(1.0))
+        });
+        let ink = THUMB_THICK * line.min(row);
+        foot - THUMB_INSIDE / row - (THUMB_THICK * row + ink) / 2.0 / row
     }
 
     fn draw_page(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool, marks: &Marks) {
@@ -5135,7 +5172,7 @@ impl Editor {
         if !proportional {
             return;
         }
-        let text_y = y as f32 + if row.tall { TALL_DROP } else { 0.0 };
+        let text_y = y as f32 + if row.tall { TALL_DROP } else { 0.0 } + row.drop;
         // A row's glyphs in runs of one look, each drawn at once so kerning counts. A table's
         // cells are apart, so a run stops at a jump in position.
         let mut runs = Vec::new();
@@ -5199,17 +5236,25 @@ impl Editor {
             let end = (index..row.glyphs.len())
                 .find(|at| !shown(&row.glyphs[*at]))
                 .unwrap_or(row.glyphs.len());
-            let first = row.glyphs[index];
-            let width: f32 = row.glyphs[index..end].iter().map(|g| g.advance).sum();
-            // Its room before it, but not past the text's edge where it runs on to a row.
-            let from = (first.x - 0.25).max(0.0);
-            let pill = Bounds::cells(
-                origin + from,
-                text_y + 0.05,
-                first.x - from + width + 0.25,
-                0.9,
-            );
-            grid.panel(pill, 8, Some(theme.tint), None);
+            // `LINE_AIR` either side of what it holds on each row, its spaces at either end
+            // left out: it had 6 px before the ◆, 11 after a space at a row's end, and 1 px
+            // where it ran on to the next row, stopped at the text's edge (69 to 71).
+            let glyphs = &row.glyphs[index..end];
+            let ((lead, before), (trail, after)) = spaces_at_ends(glyphs);
+            if lead + trail < glyphs.len() {
+                let width: f32 = glyphs.iter().map(|g| g.advance).sum();
+                let air = (self.measure.cell_pixels()).map_or(0.25, |(wide, _)| {
+                    crate::measures::LINE_AIR / wide.max(1) as f32
+                });
+                let from = glyphs[0].x + before - air;
+                let pill = Bounds::cells(
+                    origin + from,
+                    text_y + 0.05,
+                    width - before - after + air * 2.0,
+                    0.9,
+                );
+                grid.panel(pill, 8, Some(theme.tint), None);
+            }
             index = end;
         }
         // A table's selection is drawn under its lines, with its box.
@@ -5288,21 +5333,28 @@ impl Editor {
                         _ => 0.0,
                     };
                     let inked = g.underline || g.tone == Tone::Inserted;
-                    let color = (fg_of(g.tone), inked);
-                    grid.text_run((x, text_y + shift), right, &text, color, g.font);
+                    let glyphs = &row.glyphs[run.clone()];
+                    let ((lead, before), (trail, after)) = spaces_at_ends(glyphs);
+                    let letters = lead + trail < glyphs.len();
+                    if inked && letters && lead + trail > 0 {
+                        // A line under words keeps to their letters, as one through them does:
+                        // under a space at an insertion's end it ran on under the next word
+                        // ("clearly_improves"). The spaces have no ink of their own to draw.
+                        let words: String = (glyphs[lead..glyphs.len() - trail].iter())
+                            .map(|g| g.ch)
+                            .collect();
+                        let color = (fg_of(g.tone), true);
+                        grid.text_run((x + before, text_y + shift), right, &words, color, g.font);
+                    } else {
+                        let color = (fg_of(g.tone), inked);
+                        grid.text_run((x, text_y + shift), right, &text, color, g.font);
+                    }
                     if matches!(g.tone, Tone::Struck | Tone::Deleted) {
                         // A space at either end isn't struck: struck, the space after a word
                         // read as a hyphen joining it to what was taken out ("baseline-by").
-                        let glyphs = &row.glyphs[run.clone()];
-                        let space = |g: &&Glyph| g.ch.is_whitespace();
-                        let lead: f32 = glyphs.iter().take_while(space).map(|g| g.advance).sum();
-                        let trail: f32 = (glyphs.iter().rev())
-                            .take_while(space)
-                            .map(|g| g.advance)
-                            .sum();
-                        let inked = width - lead - trail;
+                        let inked = width - before - after;
                         if inked > 0.0 {
-                            let line = Bounds::cells(x + lead, text_y + 0.5, inked, 0.0);
+                            let line = Bounds::cells(x + before, text_y + 0.5, inked, 0.0);
                             grid.hairline(line, fg_of(g.tone));
                         }
                     }
@@ -5333,7 +5385,7 @@ impl Editor {
         if !row.tall && line <= 1.0 {
             return (f32::from(y), 1.0);
         }
-        let middle = f32::from(y) + if row.tall { TALL_DROP } else { 0.0 } + 0.5;
+        let middle = f32::from(y) + if row.tall { TALL_DROP } else { 0.0 } + row.drop + 0.5;
         let tall = line.max(1.0);
         (middle - tall / 2.0, tall)
     }
@@ -5375,7 +5427,7 @@ impl Editor {
         let mut inks = Vec::new();
         let size = row.glyphs.iter().map(|g| g.font.size).max().unwrap_or(100);
         let (up, down) = self.reach(size);
-        let middle = if row.tall { TALL_DROP } else { 0.0 } + 0.5;
+        let middle = if row.tall { TALL_DROP } else { 0.0 } + row.drop + 0.5;
         let inked = (row.glyphs.iter()).filter(|g| g.tone != Tone::TableLine && g.advance > 0.0);
         let across = inked.fold((f32::MAX, f32::MIN), |(from, to), g| {
             (from.min(g.x), to.max(g.x + g.advance))
@@ -5743,6 +5795,26 @@ fn check_box(x: f32, y: u16, width: f32, measure: &dyn Measure) -> Bounds {
     let side = (rendered::CHECK_SIDE * line).min(room);
     let tall = side / line;
     Bounds::cells(x, f32::from(y) + (1.0 - tall) / 2.0, side / wide, tall)
+}
+
+/// How thick a block's sideways thumb is, in rows; how far under a table it stands, about
+/// 9 px; and how far its ink stands over the foot of a code box it's inside, in pixels.
+const THUMB_THICK: f32 = 0.12;
+const THUMB_UNDER: f32 = 0.25;
+const THUMB_INSIDE: f32 = 4.0;
+
+/// How many of a run's glyphs are spaces at its start and at its end, each with how far they
+/// reach, in cells. A line under or through the run keeps to its letters, from the first to
+/// the last; all spaces, the run is all start.
+fn spaces_at_ends(glyphs: &[Glyph]) -> ((usize, f32), (usize, f32)) {
+    let space = |g: &&Glyph| g.ch.is_whitespace();
+    let lead = glyphs.iter().take_while(space).count();
+    let trail = glyphs[lead..].iter().rev().take_while(space).count();
+    let reach = |glyphs: &[Glyph]| glyphs.iter().map(|g| g.advance).sum::<f32>();
+    (
+        (lead, reach(&glyphs[..lead])),
+        (trail, reach(&glyphs[glyphs.len() - trail..])),
+    )
 }
 
 /// The stretches of a row a selection covers, from and to across the row and how far down

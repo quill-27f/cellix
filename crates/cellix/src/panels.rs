@@ -33,17 +33,49 @@ pub struct TablePicker {
     pub size: (usize, usize),
     /// Rows its squares stand below its top row's top (`grid_drop`).
     drop: f32,
+    /// Where there are pixels, how far its label is lowered from the row under the squares,
+    /// and where its panel's foot is, in rows from its top (`label_place`).
+    label: Option<(f32, f32)>,
 }
 
-/// Rows a picker square keeps from its row's top and foot.
+/// Rows a picker square keeps from its row's top and foot, and columns from its sides.
 const SQUARE_INSET: f32 = 0.1;
+const SQUARE_SIDE: f32 = 0.2;
+/// Pixels from the squares' foot to the label's capitals, and from the label's words to the
+/// panel's foot: it stood 59 px under the squares and 12 over the foot, a row of nothing
+/// between (0.11.0's release review, B7, 48-table-picker).
+const LABEL_OVER: f32 = 24.0;
+const LABEL_UNDER: f32 = 22.0;
+
+/// Where the picker's label stands, under squares `drop` rows down their rows: lowered from
+/// the row under the squares so its capitals are `LABEL_OVER` under them, and the panel's
+/// foot `LABEL_UNDER` under its words' tails, its comma's, in rows. None on cells.
+fn label_place(drop: f32, measure: &dyn Measure) -> Option<(f32, f32)> {
+    let (_, row) = measure.cell_pixels().filter(|_| !measure.in_cells())?;
+    let row = row.max(1) as f32;
+    let line = row / measure.row_air().max(1.0);
+    let (caps, tails) = crate::measures::words_in_row(measure)?;
+    let last = PICK_ROWS as f32 - 1.0 + SQUARE_INSET + drop;
+    let tall = 1.0 - SQUARE_INSET * 2.0;
+    let (top, high) = cellix_render::stood(
+        cellix_render::units(last),
+        cellix_render::units(tall),
+        row,
+        line,
+    );
+    let at = top + high + LABEL_OVER - caps;
+    let foot = at + tails + LABEL_UNDER;
+    Some((at / row - PICK_ROWS as f32, foot / row))
+}
 
 impl TablePicker {
     pub fn new(origin: (u16, u16), measure: &dyn Measure) -> Self {
+        let drop = grid_drop(SQUARE_INSET, measure);
         Self {
             origin,
             size: (3, 3),
-            drop: grid_drop(SQUARE_INSET, measure),
+            drop,
+            label: label_place(drop, measure),
         }
     }
 
@@ -79,7 +111,27 @@ impl TablePicker {
 
     pub fn draw(&self, grid: &mut Grid, hover: Option<(u16, f32)>, theme: &Theme) {
         let area = self.area();
-        raised(grid, area, theme);
+        match self.label {
+            // As tall as what it holds: its last row, which it only partly covers, keeps
+            // what's under it.
+            Some((_, foot)) => {
+                let base = Style {
+                    fg: theme.text.fg,
+                    bg: theme.popup,
+                    ..theme.bar
+                };
+                let whole = (foot.floor() as u16).min(area.h);
+                grid.fill(Rect::new(area.x, area.y, area.w, whole), base);
+                let bounds = Bounds::cells(
+                    f32::from(area.x),
+                    f32::from(area.y),
+                    f32::from(area.w),
+                    foot,
+                );
+                grid.popup(bounds, 28, theme.popup, theme.popup_border);
+            }
+            None => raised(grid, area, theme),
+        }
         let (rows, columns) = hover
             .and_then(|h| self.size_at(h.0, h.1))
             .unwrap_or(self.size);
@@ -98,7 +150,7 @@ impl TablePicker {
                     theme.popup_hover
                 };
                 let border = if on { theme.accent } else { theme.popup_border };
-                let mut bounds = Bounds::inset(square, 0.2, SQUARE_INSET);
+                let mut bounds = Bounds::inset(square, SQUARE_SIDE, SQUARE_INSET);
                 bounds.y += cellix_render::units(self.drop);
                 grid.panel(bounds, 8, Some(fill), Some(border));
             }
@@ -109,8 +161,21 @@ impl TablePicker {
             bg: theme.popup,
             ..theme.bar
         };
-        let y = area.y + PICK_ROWS as u16 + 1;
-        grid.label(area.x + 2, y, &label, style, area.right().saturating_sub(1));
+        let end = area.right().saturating_sub(1);
+        match self.label {
+            // On the squares' left edge, under them.
+            Some((lowered, _)) => {
+                let y = area.y + PICK_ROWS as u16;
+                let from = grid.painted_so_far();
+                let x = f32::from(area.x) + 1.0 + SQUARE_SIDE;
+                grid.label_at(x, area.x + 1, y, &label, style, end, 100);
+                grid.lift_since(from, -lowered);
+            }
+            None => {
+                let y = area.y + PICK_ROWS as u16 + 1;
+                grid.label(area.x + 2, y, &label, style, end);
+            }
+        }
     }
 }
 

@@ -244,3 +244,91 @@ fn a_deletions_spaces_at_its_ends_are_not_struck() {
     );
     assert!((to - end).abs() < 0.05, "to its last at {end}: {lines:?}");
 }
+
+/// An insertion's line runs under its letters, not its spaces at either end, as a deletion's
+/// line through it does (0.11.0's release check, P8). Under the space after "clearly" it ran on
+/// under the next word, "clearly_improves" (69 to 71), and in a paper 8 px past "these" (82).
+#[test]
+fn an_insertions_spaces_at_its_ends_are_not_underlined() {
+    let text = "The model {++ clearly ++}improves on the baseline, and holds.\n";
+    let (_dir, app) = open("added.md", text, 150, true);
+    let grid = screen(&app);
+    let (from, row) = spot(&app, "clearly");
+    let underlined: Vec<(f32, String)> = (grid.paint.iter())
+        .filter_map(|paint| match paint {
+            Paint::Text {
+                x,
+                y,
+                text,
+                underline: true,
+                ..
+            } if cells(*y).floor() == f32::from(row) => Some((cells(*x), text.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(underlined.len(), 1, "one line under it: {underlined:?}");
+    let (x, words) = &underlined[0];
+    assert_eq!(words, "clearly", "its letters alone: {underlined:?}");
+    assert!(
+        (x - from).abs() < 0.05,
+        "from its first letter at {from}: {x}"
+    );
+    // The words beside it are drawn, with no line under them.
+    let painted: String = (grid.paint.iter())
+        .filter_map(|paint| match paint {
+            Paint::Text { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(painted.contains("improves"), "{painted}");
+}
+
+/// A reviewer's note's tint keeps 8 px either side of what it holds on every row it runs on:
+/// it had 6 px before the ◆, 11 after the space ending its first row, and 1 px on the row it
+/// ran on to, where it stopped at the text's edge (0.11.0's release review, B7, 69 to 71).
+#[test]
+fn a_reviewers_notes_tint_keeps_its_air_on_every_row() {
+    let note = "A note for a reviewer that goes on for long enough to run on past the end of \
+        the first row it starts on and onto the next one";
+    let text = format!("The model holds at scale, and the experiments say so.{{>>{note}<<}}\n");
+    let theme = crate::theme::Theme::default();
+    let (_dir, app) = open("note.md", &text, 100, true);
+    let grid = screen(&app);
+    let pills: Vec<(f32, f32, f32)> = (grid.paint.iter())
+        .filter_map(|paint| match paint {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == theme.tint => Some((
+                cells(bounds.y).floor(),
+                cells(bounds.x),
+                cells(bounds.x + bounds.w),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert!(pills.len() >= 2, "it runs on to a second row: {pills:?}");
+    for (row, left, right) in pills {
+        // What's painted on the pill's row inside it: the mark and the note's words.
+        let held: Vec<(f32, f32)> = (grid.paint.iter())
+            .filter_map(|paint| match paint {
+                Paint::Text {
+                    x, y, text, font, ..
+                } if cells(*y).floor() == row && cells(*x) >= left && cells(*x) < right => {
+                    let start = text.chars().take_while(|c| c.is_whitespace()).count();
+                    let lead: String = text.chars().take(start).collect();
+                    let x = cells(*x) + app.measure.width(&lead, *font);
+                    let shown = text.trim();
+                    Some((x, x + app.measure.width(shown, *font)))
+                }
+                _ => None,
+            })
+            .collect();
+        let first = held.iter().map(|h| h.0).fold(f32::MAX, f32::min);
+        let last = held.iter().map(|h| h.1).fold(f32::MIN, f32::max);
+        let (before, after) = ((first - left) * 17.0, (right - last) * 17.0);
+        assert!((before - 8.0).abs() < 1.0, "row {row}: {before} px before");
+        assert!((after - 8.0).abs() < 1.0, "row {row}: {after} px after");
+    }
+}

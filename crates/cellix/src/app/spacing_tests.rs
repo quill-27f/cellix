@@ -466,6 +466,70 @@ fn show_source_keeps_clear_of_the_tab_line() {
     );
 }
 
+/// The scrollbar beside Show Source starts 8 px under the button's foot, its thumb at the top
+/// of the page as well as further down: at the top it stood 2 px under the button and 5 px
+/// right of it (0.11.0's release check, P3, 65 and 66).
+#[test]
+fn the_scrollbar_starts_clear_of_show_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let path: PathBuf = dir.path().join("data.csv");
+    let rows: String = (0..200).map(|n| format!("{n},{}\n", n * 2)).collect();
+    fs::write(&path, format!("a,b\n{rows}")).unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    // With a minimap there's no scrollbar.
+    app.settings.minimap = Some(false);
+    app.open(&path).unwrap();
+    let Some((cell, _)) = app.page_switch() else {
+        panic!("a page with a switch");
+    };
+    let thumb_top = |app: &App| {
+        let grid = screen(app);
+        let scrollbar = app.theme.scrollbar;
+        let thumb = panels(&grid)
+            .into_iter()
+            .find(|(_, fill, ..)| *fill == Some(scrollbar))
+            .expect("a thumb: the page is longer than the pane");
+        let chip = panels(&grid)
+            .into_iter()
+            .find(|(bounds, fill, _, inset)| {
+                fill.is_some()
+                    && *inset
+                    && bounds.x >= i32::from(cell.x) * UNIT
+                    && bounds.x < i32::from(cell.right()) * UNIT
+            })
+            .expect("Show Source's chip");
+        let (top, height) = cellix_render::inset(chip.0.y, chip.0.h, ROW, LINE);
+        (
+            tall(thumb.0).0,
+            top + height,
+            px(thumb.0.x),
+            px(chip.0.x + chip.0.w),
+        )
+    };
+    let (thumb, foot, x, end) = thumb_top(&app);
+    assert!(
+        x > end,
+        "the scrollbar is right of the button: {x} and {end}"
+    );
+    assert!(
+        thumb - foot >= 8.0 - 0.5,
+        "at the top, {} px under the button",
+        thumb - foot
+    );
+    // Scrolled a little, the thumb is still on its track, under the button.
+    for _ in 0..2 {
+        app.handle(mouse(MouseKind::ScrollDown, 40, 20));
+    }
+    let (moved, foot, ..) = thumb_top(&app);
+    assert!(moved >= thumb, "the thumb went down: {moved} from {thumb}");
+    assert!(
+        moved - foot >= 8.0 - 0.5,
+        "{} px under the button",
+        moved - foot
+    );
+}
+
 /// Find's marks in a list are put in under the letters they mark, which moves along what's
 /// painted after them; the status bar's paint, which the bar at the foot moves with its row
 /// later, is still the status bar's alone. Its range had slipped a step back, and the pane's
@@ -855,6 +919,71 @@ fn a_panels_grid_is_as_far_from_its_top_as_its_sides() {
     assert_eq!(picker.size_at(area.x + 2, fine), Some((1, 1)));
 }
 
+/// The table picker's label stands on the squares' left edge, its capitals 24 px under them
+/// and its words 22 px over the panel's foot: it stood 15 px right of their edge, 59 px under
+/// them and 12 over the foot (0.11.0's release review, B7, 48-table-picker).
+#[test]
+fn the_table_pickers_label_stands_under_its_squares() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    fs::write(&path, "# Title\n\nSome words.\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.open(&path).unwrap();
+    let picker = TablePicker::new((40, 3), &*app.measure);
+    let area = picker.area();
+    app.overlay = Overlay::TablePicker(picker);
+    let grid = screen(&app);
+    let theme = app.theme;
+    let squares: Vec<Bounds> = panels(&grid)
+        .into_iter()
+        .filter(|(bounds, _, border, _)| {
+            border.is_some() && bounds.y >= i32::from(area.y) * UNIT && bounds.h < UNIT
+        })
+        .map(|(bounds, ..)| bounds)
+        .collect();
+    let left = px(squares.first().expect("the squares").x);
+    let (top, high) = tall(*squares.last().unwrap());
+    let under_squares = top + high;
+    let panel = grid
+        .paint
+        .iter()
+        .find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                fill: Some(fill),
+                ..
+            } if *fill == theme.popup => Some(*bounds),
+            _ => None,
+        })
+        .expect("the picker's panel");
+    let (panel_top, panel_tall) = tall(panel);
+    let foot = panel_top + panel_tall;
+    // The label's ink, under the squares and inside the panel.
+    let rows = picture(&grid, area.y..area.bottom());
+    let (from, to) = (left as usize - 10, left as usize + 260);
+    let inked: Vec<(f32, usize)> = (rows.iter().enumerate())
+        .map(|(line, pixels)| (row_top(area.y) + line as f32, pixels))
+        .filter(|(at, _)| *at > under_squares + 2.0 && *at < foot - 2.0)
+        .filter_map(|(at, pixels)| {
+            let first = (from..to).find(|x| apart(pixels[*x], theme.popup))?;
+            Some((at, first))
+        })
+        .collect();
+    let (ink_top, _) = *inked.first().expect("the label's words");
+    let (ink_foot, _) = *inked.last().unwrap();
+    let ink_left = inked.iter().map(|(_, x)| *x).min().unwrap() as f32;
+    let over = ink_top - under_squares;
+    let under = foot - (ink_foot + 1.0);
+    assert!((over - 24.0).abs() <= 1.5, "{over} px under the squares");
+    assert!((under - 22.0).abs() <= 2.0, "{under} px over the foot");
+    assert!(
+        (ink_left - left).abs() <= 3.0,
+        "the words at {ink_left} px, the squares' edge at {left}"
+    );
+}
+
 /// The tip on screen, the last raised panel painted, as its left and right edges and its top
 /// and foot in pixels.
 fn tip_pixels(grid: &Grid) -> (f32, f32, f32, f32) {
@@ -1010,4 +1139,63 @@ fn a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start() {
     );
     let end = f32::from(area.right()) * CELL;
     assert!(tip.1 < end, "{} px past the pane", tip.1 - end);
+}
+
+/// A drawing's source, wider than the page, keeps its sideways thumb inside its box, 4 px over
+/// its foot, and "Drawing with LaTeX…" stands 16 px under the box, the first thing under it.
+/// The thumb ran 14 px under the box, through the note, which stood 10 px under the box and
+/// read as its caption (0.11.0's release check, P4, 82-paper-changes-row).
+#[test]
+fn a_drawings_note_stands_clear_under_its_box_and_thumb() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "\\draw (0,0) node {a label long enough to run on past the edge of the page} \
+        -- (4,0) node {and on past it again} -- (8,0) node {and once more};";
+    let text = format!("Before it.\n\n```tikz\n{long}\n```\n\nAfter the drawing.\n");
+    fs::write(dir.path().join("note.md"), text).unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    // Nothing built here and nothing polled, so nothing runs: it waits to be drawn.
+    app.built_folder = dir.path().join("built");
+    app.open(&dir.path().join("note.md")).unwrap();
+    let grid = screen(&app);
+    let theme = app.theme;
+    let code = panels(&grid)
+        .into_iter()
+        .find(|(_, fill, border, _)| *fill == Some(theme.code_bg) && *border == Some(theme.border))
+        .expect("the source's box");
+    let (top, height) = tall(code.0);
+    let foot = top + height;
+    let thumb = panels(&grid)
+        .into_iter()
+        .find(|(_, fill, ..)| *fill == Some(theme.scrollbar))
+        .expect("a sideways thumb: the source is wider than the page");
+    let (thumb_top, thumb_tall) = tall(thumb.0);
+    assert!(thumb_top > top, "inside the box");
+    let over = foot - (thumb_top + thumb_tall);
+    assert!((over - 4.0).abs() <= 0.5, "{over} px over the box's foot");
+    // The note, the first ink under the box across its words.
+    let note = grid
+        .paint
+        .iter()
+        .find_map(|p| match p {
+            Paint::Text { x, y, text, .. } if text.starts_with("Drawing with LaTeX") => {
+                Some((*x, *y))
+            }
+            _ => None,
+        })
+        .expect("the note");
+    let row = (note.1 / UNIT) as u16;
+    let first = row.saturating_sub(1);
+    let rows = picture(&grid, first..row + 1);
+    let from = px(note.0) as usize;
+    let ground = theme.text.bg;
+    let ink = (0..rows.len())
+        .map(|line| row_top(first) + line as f32)
+        .zip(&rows)
+        .filter(|(at, _)| *at >= foot)
+        .find(|(_, pixels)| pixels[from..from + 120].iter().any(|p| apart(*p, ground)))
+        .map(|(at, _)| at)
+        .expect("the note's words");
+    let under = ink - foot;
+    assert!((under - 16.0).abs() <= 1.5, "{under} px under the box");
 }

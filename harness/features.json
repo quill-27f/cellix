@@ -6725,5 +6725,89 @@
     "title": "Installing a language server works without root on Linux, finds what it installed, and says why where it can't",
     "test": "a_server_installs_without_root_on_linux_and_starts_from_local_bin",
     "passes": true
+  },
+  {
+    "id": "selection-bar-twelve-px",
+    "milestone": 15,
+    "title": "The buttons by a selection stand 12 px from it, or in the middle of a smaller gap, at its start or the text column's",
+    "test": "the_selection_bar_stands_twelve_pixels_from_its_selection",
+    "passes": true
+  },
+  {
+    "id": "selection-bar-pressed-where-painted",
+    "milestone": 15,
+    "title": "The buttons by a selection take a click where they're painted, reaching into the row by theirs",
+    "test": "a_click_on_the_selection_bar_where_its_painted_presses_it",
+    "passes": true
+  },
+  {
+    "id": "insertion-underline-letters",
+    "milestone": 15,
+    "title": "An insertion's underline runs under its letters, not its spaces at either end",
+    "test": "an_insertions_spaces_at_its_ends_are_not_underlined",
+    "passes": true
+  },
+  {
+    "id": "scrollbar-clear-of-show-source",
+    "milestone": 15,
+    "title": "The scrollbar beside Show Source starts 8 px under its foot",
+    "test": "the_scrollbar_starts_clear_of_show_source",
+    "passes": true
+  },
+  {
+    "id": "drawing-note-under-box",
+    "milestone": 15,
+    "title": "A drawing's note stands 16 px under its source's box, with the box's sideways thumb inside it",
+    "test": "a_drawings_note_stands_clear_under_its_box_and_thumb",
+    "passes": true
+  },
+  {
+    "id": "latex-drawing-time-limit",
+    "milestone": 15,
+    "title": "LaTeX that gives no answer in a minute is stopped and the page says so",
+    "test": "latex_that_never_answers_is_stopped_and_the_page_says_so",
+    "passes": true
+  },
+  {
+    "id": "table-picker-label-air",
+    "milestone": 15,
+    "title": "The table picker's label stands on its squares' edge, 24 px under them and 22 over the panel's foot",
+    "test": "the_table_pickers_label_stands_under_its_squares",
+    "passes": true
+  },
+  {
+    "id": "submenu-over-its-menu",
+    "milestone": 15,
+    "title": "A submenu stands 4 px over its menu's edge with no shadow on it",
+    "test": "a_submenu_overlaps_its_menu_with_no_shadow_on_it",
+    "passes": true
+  },
+  {
+    "id": "note-tint-air",
+    "milestone": 15,
+    "title": "A reviewer's note's tint keeps 8 px either side on every row it runs on",
+    "test": "a_reviewers_notes_tint_keeps_its_air_on_every_row",
+    "passes": true
+  },
+  {
+    "id": "equation-number-on-its-line",
+    "milestone": 15,
+    "title": "An equation's number stands on its row's line, not in the middle of the row and its limits",
+    "test": "a_rows_number_stands_on_its_line_over_limits_under_it",
+    "passes": true
+  },
+  {
+    "id": "zoomed-picture-side-air",
+    "milestone": 15,
+    "title": "A zoomed picture keeps 16 px from the pane's sides",
+    "test": "a_zoomed_picture_keeps_its_air_from_the_panes_sides",
+    "passes": true
+  },
+  {
+    "id": "selection-bar-in-its-gap",
+    "milestone": 15,
+    "title": "The buttons by a selection stand in the gap next to its block, never past what comes after it",
+    "test": "the_selection_bar_stays_in_the_gap_next_to_its_block",
+    "passes": true
   }
 ]

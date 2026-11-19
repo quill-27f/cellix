@@ -11,6 +11,10 @@ pub const BUTTON_GAP: u16 = 2;
 /// menu that opens under a tab row stands at least this far from its line, and a band
 /// behind a row stands this far in from both edges of its sheet. See DESIGN.md, Look.
 pub const LINE_AIR: f32 = 8.0;
+/// Pixels between the buttons by a selection and the selection they're for: their foot this
+/// far over its first line, or their top this far under its last where they stand under it.
+/// 0.11.0's release check measured them 5 to 45 px from it, scene by scene (P1).
+pub const SELECTION_BAR_AIR: f32 = 12.0;
 /// Pixels between a dialog's last line, or control, and its row of buttons.
 pub const DIALOG_GAP: f32 = 24.0;
 

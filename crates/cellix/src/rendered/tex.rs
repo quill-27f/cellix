@@ -530,6 +530,15 @@ impl Page<'_, '_> {
         });
     }
 
+    /// A label about the box of source over it, as far under the box as `under_box` keeps.
+    fn label_under_box(&mut self, text: &str, index: usize) {
+        self.label(text, index);
+        if let Some(row) = self.rows.pop() {
+            let row = super::under_box(row, self.context);
+            self.rows.push(row);
+        }
+    }
+
     /// What the paper cites, numbered in the order it cites them, as the list prints.
     fn references(&mut self, index: usize) {
         let offset = self.lines[index].0;
@@ -762,8 +771,8 @@ impl Page<'_, '_> {
                     self.rows[at].stop = false;
                 }
             }
-            Built::Waiting => self.label("Drawing with LaTeX…", last),
-            Built::Failed(why) => self.label(&format!("Can't draw this: {why}"), last),
+            Built::Waiting => self.label_under_box("Drawing with LaTeX…", last),
+            Built::Failed(why) => self.label_under_box(&format!("Can't draw this: {why}"), last),
             Built::Never => {}
         }
     }

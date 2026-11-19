@@ -126,6 +126,14 @@ const ACCEPT: &str = "Accept";
 const SELECTION_CHIP: (f32, f32) = (0.2, 0.96);
 /// How far Reject and Accept lean toward the suggestion they stand by, in rows.
 const CHANGE_CHIP_LEAN: f32 = 0.08;
+
+/// Which side of a bar what it's for is on: under it, as a selection's first line is under
+/// the buttons over it, or over it, as its last is over the buttons under it.
+#[derive(Clone, Copy)]
+enum Serves {
+    Under,
+    Over,
+}
 /// Rows kept over a suggestion Next goes up to: its chips' row and one of what's before it.
 const CHANGE_CONTEXT: usize = 2;
 /// The list an empty window shows, its width, the rows above it, and the height it needs.
@@ -1690,6 +1698,8 @@ pub struct App {
     /// Where pieces of LaTeX built for pages are kept, and what builds them.
     built_folder: PathBuf,
     snippets: Option<crate::snippets::Worker>,
+    /// How long LaTeX may take over one of them before it's stopped.
+    snippet_limit: std::time::Duration,
     /// A page on its way to the browser, and whether it got there.
     browser_result: Option<(String, std::sync::mpsc::Receiver<bool>)>,
     /// No browser would open and terminal-browser isn't here, so the corner card offers it.
@@ -1815,6 +1825,7 @@ impl App {
             last_edit: (0, std::time::Instant::now()),
             built_folder: crate::snippets::default_folder(),
             snippets: None,
+            snippet_limit: crate::snippets::LIMIT,
             system_browser: crate::agents::opener(),
             browser_result: None,
             browser_offer: false,
@@ -2999,13 +3010,24 @@ impl App {
     fn poll_snippets(&mut self) -> bool {
         let wanted: Vec<_> = self.editors.iter().flat_map(Editor::take_wanted).collect();
         if !wanted.is_empty() && self.snippets.is_none() {
-            let folder = self.built_folder.clone();
+            let (folder, limit) = (self.built_folder.clone(), self.snippet_limit);
             self.snippets = self
                 .latex_engine()
-                .map(|engine| crate::snippets::Worker::start(engine, folder));
+                .map(|engine| crate::snippets::Worker::start(engine, folder, limit));
         }
         let Some(worker) = &mut self.snippets else {
-            return false;
+            // With nothing to build them, the page says so, where "Drawing with LaTeX…"
+            // stood for ever. An engine installed since is found the next time they're asked.
+            let folder = &self.built_folder;
+            let said = (wanted.iter())
+                .filter(|snippet| crate::snippets::cannot(folder, snippet, "LaTeX isn't installed"))
+                .count();
+            if said > 0 {
+                for editor in &mut self.editors {
+                    editor.refresh_page();
+                }
+            }
+            return said > 0;
         };
         for snippet in wanted {
             worker.ask(snippet);
@@ -5238,33 +5260,65 @@ impl App {
         (tall / row, (air / wide, air / row))
     }
 
+    /// `SELECTION_BAR_AIR` in rows, where there are pixels; none on cells.
+    fn bar_air(&self) -> f32 {
+        (self.measure.cell_pixels())
+            .filter(|_| !self.measure.in_cells())
+            .map_or(0.0, |(_, row)| {
+                measures::SELECTION_BAR_AIR / row.max(1) as f32
+            })
+    }
+
     /// Where a bar across `span` (columns) stands in its row, given what's drawn about that
-    /// row (`inks`, measured from its top): its top, in rows from the row's top, so that it
-    /// keeps `LINE_AIR` from every word, line and selection it would stand over or under, as
-    /// near its row's middle as that allows and leaning no further from it than a selection's
-    /// buttons lean, `SELECTION_CHIP.0`. None where something is in its way.
-    fn bar_top(&self, inks: &[editor::Ink], span: (f32, f32)) -> Option<f32> {
+    /// row (`inks`, measured from its top): its top, in rows from the row's top, keeping
+    /// `LINE_AIR` from every word, line and selection it would stand over or under. None where
+    /// something is in its way. A bar for what `serves` it, on one side, stands
+    /// `SELECTION_BAR_AIR` from that, or in the middle of the gap where that would leave less on
+    /// the other side, reaching into the row by its own if it must (`on_selection_bar` takes a
+    /// click where it's painted). Any other stands as near its row's middle as the air allows,
+    /// leaning no further from it than `SELECTION_CHIP.0`.
+    fn bar_top(
+        &self,
+        inks: &[editor::Ink],
+        span: (f32, f32),
+        serves: Option<Serves>,
+    ) -> Option<f32> {
         let (tall, (air_x, air_y)) = self.bar_room();
         let middle = (1.0 - tall) / 2.0;
         let (lean, near) = (SELECTION_CHIP.0, |ink: &&editor::Ink| {
             ink.across.0 < span.1 + air_x && ink.across.1 > span.0 - air_x
         });
-        let (mut over, mut under) = (middle - lean - 1.0, middle + lean + 1.0);
+        // The nearest ink over the bar's place and under it.
+        let far = 1.0 + lean + air_y;
+        let (mut above, mut below) = (middle - far, middle + far + tall);
         for ink in inks.iter().filter(near) {
             // Something across the row's middle is in the bar's way.
             if ink.down.0 < 0.5 && ink.down.1 > 0.5 {
                 return None;
             }
             if ink.down.1 <= 0.5 {
-                over = over.max(ink.down.1 + air_y);
+                above = above.max(ink.down.1);
             } else {
-                under = under.min(ink.down.0 - air_y - tall);
+                below = below.min(ink.down.0);
             }
         }
+        let (over, under) = (above + air_y, below - air_y - tall);
         if over > under + 0.001 {
             return None;
         }
-        let top = ((over + under) / 2.0).clamp(middle - lean, middle + lean);
+        let top = match serves.filter(|_| air_y > 0.0) {
+            None => ((over + under) / 2.0).clamp(middle - lean, middle + lean),
+            Some(side) => {
+                let centred = (above + below - tall) / 2.0;
+                let air = self.bar_air();
+                let wanted = match side {
+                    Serves::Under => (below - air - tall).max(centred),
+                    Serves::Over => (above + air).min(centred),
+                };
+                // Some of it on its own row, whatever's asked.
+                wanted.clamp(0.2 - tall, 0.8)
+            }
+        };
         Some(top.clamp(over, under.max(over)))
     }
 
@@ -5327,17 +5381,52 @@ impl App {
         let text = editor.text_bounds(area);
         let first = editor.cell_of(area, start);
         let last = editor.cell_of(area, end.saturating_sub(1).max(start));
-        let fits = |x: u16, y: u16| {
+        // Their left edge at the selection's start, or the text column's with that out of
+        // view: at the caret's column they stood 123 px into the text (s1-page-drag-scroll).
+        let left = place(first.map_or(f32::from(editor.text_start(area)), |(x, _)| x));
+        let fits = |x: u16, y: u16, serves: Option<Serves>| {
             let span = (f32::from(x), f32::from(x + width));
-            Some((x, y, self.bar_top(&self.inks_near(editor, area, y), span)?))
+            Some((
+                x,
+                y,
+                self.bar_top(&self.inks_near(editor, area, y), span, serves)?,
+            ))
+        };
+        // Past the rest of the block the line is in to the gap after it, and no further:
+        // past that gap, what stands there is something else (s1-page-shift-select-scrolled
+        // had them under the table after the selection's paragraph, 11 px over the next).
+        let span = (f32::from(left), f32::from(left + width));
+        let words_across = |row: u16| {
+            (editor.row_inks(area, row).iter()).any(|ink| {
+                ink.down.0 < 0.5
+                    && ink.down.1 > 0.5
+                    && ink.across.0 < span.1
+                    && ink.across.1 > span.0
+            })
+        };
+        let in_the_gap = |rows: &mut dyn Iterator<Item = u16>, serves: Serves| {
+            let mut gap = false;
+            for row in rows {
+                if words_across(row) {
+                    if gap {
+                        return None;
+                    }
+                    continue;
+                }
+                gap = true;
+                if let Some(found) = fits(left, row, Some(serves)) {
+                    return Some(found);
+                }
+            }
+            None
         };
         let over = || {
-            let (x, y) = first?;
-            (text.y..y).rev().find_map(|row| fits(place(x), row))
+            let (_, y) = first?;
+            in_the_gap(&mut (text.y..y).rev(), Serves::Under)
         };
         let under = || {
-            let (x, y) = last?;
-            (y + 1..text.bottom()).find_map(|row| fits(place(x), row))
+            let (_, y) = last?;
+            in_the_gap(&mut (y + 1..text.bottom()), Serves::Over)
         };
         // After the end of the last line's words, or of the block it's in.
         let beside = || {
@@ -5349,13 +5438,13 @@ impl App {
                 .filter(|ink| ink.down.0 < 1.0 && ink.down.1 > 0.0);
             let end = across.map(|ink| ink.across.1).fold(x, f32::max);
             let x = (end + air).ceil() as u16 + 1;
-            (x + width <= column).then(|| fits(x, y)).flatten()
+            (x + width <= column).then(|| fits(x, y, None)).flatten()
         };
         // With the first line out of view and no room by the last, over the last, which
         // keeps them by what's selected.
         let over_last = || {
-            let (x, y) = last?;
-            (text.y..y).rev().find_map(|row| fits(place(x), row))
+            let (_, y) = last?;
+            in_the_gap(&mut (text.y..y).rev(), Serves::Under)
         };
         let (tall, _) = self.bar_room();
         let lift = |top: f32| (1.0 - tall) / 2.0 - top;
@@ -5622,7 +5711,7 @@ impl App {
         let width_cells = f32::from(width);
         let lifted = |(x, row): (u16, u16)| {
             let span = (f32::from(x), f32::from(x) + width_cells);
-            Some((x, row, self.bar_top(&inks_near(row), span)?))
+            Some((x, row, self.bar_top(&inks_near(row), span, None)?))
         };
         let above = from.1.checked_sub(1);
         let below = Some(to.1 + 1).filter(|row| *row < screen.h);
@@ -5997,8 +6086,27 @@ impl App {
         }
     }
 
+    /// Which of the buttons by a selection is at a place, as they're painted: across their
+    /// columns and within their height, lifted as they're drawn, `fine_y` saying where in a
+    /// row. Lifted, they reach into the row by theirs. A terminal that says only the row says
+    /// its middle, and there their own row takes the click wherever they stand in it. True
+    /// for Ask Agent.
+    fn on_selection_bar(&self, x: u16, fine_y: f32) -> Option<bool> {
+        let (comment, ask, lift) = self.selection_bar_at()?;
+        let (tall, _) = self.bar_room();
+        let middle = f32::from(comment.y) + 0.5 - lift;
+        let only_row = fine_y.fract() == 0.5 && fine_y.floor() == f32::from(comment.y);
+        if (fine_y - middle).abs() > tall / 2.0 && !only_row {
+            return None;
+        }
+        let across = |chip: Rect| x >= chip.x && x < chip.right();
+        across(comment)
+            .then_some(false)
+            .or_else(|| across(ask).then_some(true))
+    }
+
     /// Takes a click on those buttons.
-    fn click_companion(&mut self, x: u16, y: u16) -> bool {
+    fn click_companion(&mut self, x: u16, y: u16, fine_y: f32) -> bool {
         if self.view_comment().is_some_and(|chip| chip.contains(x, y)) {
             self.comment_on_view();
             return true;
@@ -6018,13 +6126,9 @@ impl App {
             self.comment_on_output(ask.contains(x, y));
             return true;
         }
-        if let Some((comment, ask)) = self.selection_bar() {
-            if comment.contains(x, y) {
-                self.prompt_comment_at_cursor(false);
-                return true;
-            }
-            if ask.contains(x, y) {
-                self.prompt_comment_at_cursor(true);
+        if self.selection_bar().is_some() {
+            if let Some(ask) = self.on_selection_bar(x, fine_y) {
+                self.prompt_comment_at_cursor(ask);
                 return true;
             }
         } else if self.picture_comment().is_none()
@@ -14866,7 +14970,7 @@ impl App {
         if self.glance_mouse(mouse) {
             return;
         }
-        if mouse.kind == MouseKind::Left && self.click_companion(mouse.x, mouse.y) {
+        if mouse.kind == MouseKind::Left && self.click_companion(mouse.x, mouse.y, mouse.fine_y) {
             return;
         }
         if mouse.kind == MouseKind::Left && self.click_consent(mouse) {
@@ -17010,6 +17114,7 @@ impl App {
                 };
                 // While a comment is being written the keys go to it, and so does the caret.
                 let focused = pane == self.focus && self.dock.draft.is_none();
+                editor.scrollbar_clear.set(self.scrollbar_clear(area));
                 editor.draw(grid, area, theme, focused, &self.registry, &marks);
                 let look = (self.hover, &*self.measure);
                 crate::conflicts::draw(grid, editor, area, look, theme);
@@ -18556,24 +18661,46 @@ impl App {
             // 7 px under the line and 16 from the side.
             let from = grid.painted_so_far();
             grid.row_button((cell.x, cell.y), &cells, name, fill, label);
-            if let Some((wide, tall)) = self
-                .measure
-                .cell_pixels()
-                .filter(|_| measures::roomy(&*self.measure) && !self.measure.in_cells())
-            {
-                let tall = tall as f32;
-                let line = tall / self.measure.row_air().max(1.0);
-                let (top, _) = cellix_render::row_button_in_row(tall, line);
-                // The line's own pixels and then the air the side has, which is a column
-                // less the side's line.
-                let wanted = wide as f32;
-                let unit = cellix_render::UNIT as f32;
-                let drop = ((wanted - top) / tall * unit).ceil() / unit;
-                if drop > 0.0 {
-                    grid.lift_since(from, -drop);
-                }
+            if let Some((drop, _)) = self.page_switch_stands().filter(|(drop, _)| *drop > 0.0) {
+                grid.lift_since(from, -drop);
             }
         }
+    }
+
+    /// How far the page's Show Source button is lowered in its row, and where its foot
+    /// stands, in rows from its row's top, where rows have room to lower it in. The line's
+    /// own pixels and then the air the side has, which is a column less the side's line.
+    fn page_switch_stands(&self) -> Option<(f32, f32)> {
+        let (wide, tall) = self
+            .measure
+            .cell_pixels()
+            .filter(|_| measures::roomy(&*self.measure) && !self.measure.in_cells())?;
+        let tall = tall as f32;
+        let line = tall / self.measure.row_air().max(1.0);
+        let (top, foot) = cellix_render::row_button_in_row(tall, line);
+        let unit = cellix_render::UNIT as f32;
+        let drop = (((wide as f32 - top) / tall * unit).ceil() / unit).max(0.0);
+        Some((drop, foot / tall + drop))
+    }
+
+    /// How far into the top of a pane's scrollbar the page's Show Source button reaches, with
+    /// `LINE_AIR` under it, in rows: the thumb starts under that. At the top of its track it
+    /// stood 2 px under the button's foot and 5 px right of it (65, 66).
+    fn scrollbar_clear(&self, area: Rect) -> f32 {
+        let (Some((cell, _)), Some((_, foot))) = (self.page_switch(), self.page_switch_stands())
+        else {
+            return 0.0;
+        };
+        // Only the scrollbar under the button: the pane at the main area's right.
+        if area.right() < cell.x || area.x > cell.right() {
+            return 0.0;
+        }
+        let row = self
+            .measure
+            .cell_pixels()
+            .map_or(1.0, |(_, row)| row.max(1) as f32);
+        let reach = f32::from(cell.y) + foot + measures::LINE_AIR / row;
+        (reach - f32::from(area.y)).max(0.0)
     }
 
     /// The row the document toolbar sits in, if the page in view has one.
@@ -29165,6 +29292,29 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(kept, 1);
     }
 
+    /// LaTeX that never answers is stopped once a piece's time is up, with what it started,
+    /// and the page says so where "Drawing with LaTeX…" stood for ever (0.11.0's release
+    /// check, P4). The stand-in writes where it ran, proving it's what ran, and then waits.
+    #[test]
+    #[cfg(unix)]
+    fn latex_that_never_answers_is_stopped_and_the_page_says_so() {
+        let (dir, mut app) = tikz_paper("echo $$ > \"$(dirname SAMPLE)/ran\"; exec sleep 30");
+        app.snippet_limit = std::time::Duration::from_secs(1);
+        assert!(painted_text(&app).contains("Drawing with LaTeX"));
+        waits_for(&mut app, |app| painted_text(app).contains("gave no answer"));
+        let text = painted_text(&app);
+        assert!(
+            text.contains("Can't draw this: LaTeX gave no answer in a second, so it was stopped"),
+            "{text}"
+        );
+        assert!(!text.contains("Drawing with LaTeX"), "{text}");
+        let ran = fs::read_to_string(dir.path().join("ran")).expect("the stand-in ran");
+        let pid: i32 = ran.trim().parse().unwrap();
+        // SAFETY: signal 0 only asks whether the process is there.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        assert!(!alive, "it was stopped: {pid} still runs");
+    }
+
     #[test]
     #[cfg(unix)]
     fn a_piece_latex_refuses_says_why() {
@@ -31419,6 +31569,27 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             })
             .collect();
         thumbs.into_iter().partition(|b| b.w > b.h)
+    }
+
+    /// A picture zoomed past the pane's width keeps 16 px from both of its sides, where it ran
+    /// to the pane's line on its right and stood 8 px from it on its left (0.11.0's final
+    /// review, C14, 91-preview-zoomed).
+    #[test]
+    fn a_zoomed_picture_keeps_its_air_from_the_panes_sides() {
+        let (_dir, app) = zoomed_preview();
+        let screen_area = app.dock_screen().unwrap();
+        let clip = (screen(&app).paint.iter())
+            .find_map(|p| match p {
+                Paint::Image { clip, .. } => Some(*clip),
+                _ => None,
+            })
+            .expect("the picture");
+        let px = |units: i32| units as f32 * 10.0 / cellix_render::UNIT as f32;
+        // The sheet's lines: half a column before its first column, and at its end.
+        let left = px(clip.x) - (f32::from(screen_area.x) - 0.5) * 10.0;
+        let right = f32::from(screen_area.right()) * 10.0 - px(clip.x + clip.w);
+        assert!((left - 16.0).abs() < 0.5, "{left} px from its left");
+        assert!((right - 16.0).abs() < 0.5, "{right} px from its right");
     }
 
     #[test]

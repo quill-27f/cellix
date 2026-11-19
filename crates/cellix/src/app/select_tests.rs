@@ -530,6 +530,20 @@ fn open_airy(name: &str, text: &str, size: (u16, u16)) -> (TempDir, App) {
 /// round them are drawn, and every pixel not the page's ground is measured from the buttons'
 /// box, across or down whichever is further.
 fn air_round(grid: &Grid, buttons: (Rect, Rect)) -> f32 {
+    air_about(grid, buttons).round
+}
+
+/// How near anything comes to the buttons, in pixels: round them, as `air_round` says; over
+/// them and under them, from what's drawn across their columns; and their box, as painted.
+struct Air {
+    round: f32,
+    over: f32,
+    under: f32,
+    left: f32,
+    foot: f32,
+}
+
+fn air_about(grid: &Grid, buttons: (Rect, Rect)) -> Air {
     use cellix_render::{Rasterizer, SoftwareRasterizer};
     let (row, line) = (CELL.1 as f32, LINE as f32);
     let unit = cellix_render::units(1.0) as f32;
@@ -587,7 +601,13 @@ fn air_round(grid: &Grid, buttons: (Rect, Rect)) -> f32 {
         .expect("fonts are in the binary")
         .with_type_row(LINE);
     let rows = buttons.0.y.saturating_sub(2)..(buttons.0.y + 3).min(grid.height());
-    let mut nearest = f32::MAX;
+    let mut air = Air {
+        round: f32::MAX,
+        over: f32::MAX,
+        under: f32::MAX,
+        left,
+        foot,
+    };
     for y in rows {
         let image = raster.row(&without, y);
         for py in 0..image.height {
@@ -602,11 +622,16 @@ fn air_round(grid: &Grid, buttons: (Rect, Rect)) -> f32 {
                 }
                 let across = px as f32 + 0.5;
                 let dx = (left - across).max(across - right).max(0.0);
-                nearest = nearest.min(dx.max(dy));
+                air.round = air.round.min(dx.max(dy));
+                if dx == 0.0 && down < top {
+                    air.over = air.over.min(top - down - 0.5);
+                } else if dx == 0.0 && down > foot {
+                    air.under = air.under.min(down - 0.5 - foot);
+                }
             }
         }
     }
-    nearest
+    air
 }
 
 /// The air the user asked of everything: 8 px of a Retina screen.
@@ -682,6 +707,184 @@ fn the_selection_bar_under_or_beside_the_end_keeps_clear_too() {
     assert!(f32::from(bar.0.x) > x, "after the table");
     let air = air_round(&screen(&app), bar);
     assert!(air >= AIR, "{air} px from the buttons");
+}
+
+/// One distance from the buttons to their selection (0.11.0's release check, P1, where it was
+/// 5 to 45 px scene by scene): their foot 12 px over its first line where they stand over it,
+/// their top 12 px under its last where they stand under it, and in the middle of the gap they
+/// stand in where that would leave less on its other side. Their left edge is at the
+/// selection's start, or at the text column's with the start out of view.
+#[test]
+fn the_selection_bar_stands_twelve_pixels_from_its_selection() {
+    let mut page = String::from(
+        "---\ntitle: Front matter\nauthor: Someone who writes\n---\n\n\
+         # Everything a page can do\n\n\
+         A paragraph of a few words under the heading.\n\n## Text\n\n\
+         Plain words of a paragraph that runs on under a heading of its own.\n\n",
+    );
+    page.push_str(&filler(30));
+    page.push_str(
+        "## Tables\n\nRight-click a cell for rows, columns and alignment. Click any cell to type \
+         in it, and Tab goes on.\n\n| name | value |\n|------|-------|\n",
+    );
+    page.push_str(
+        &(0..40)
+            .map(|n| format!("| row {n} | {n} |\n"))
+            .collect::<String>(),
+    );
+    page.push_str("\nThe last paragraph of the page.\n");
+    let (_dir, mut app) = open_airy("gap.md", &page, (150, 40));
+    let near = |a: f32, b: f32| (a - b).abs() <= 1.5;
+    let drag = |app: &mut App, from: usize, to: usize| {
+        let (x, y) = spot(app, from).unwrap();
+        app.handle(pointer(MouseKind::Left, x + 0.1, y, false));
+        let (x2, y2) = spot(app, to).unwrap();
+        app.handle(pointer(MouseKind::Drag, x2 + 0.1, y2, false));
+        app.handle(pointer(MouseKind::Up, x2 + 0.1, y2, false));
+        assert_eq!(selected(app), source(app, from, to));
+    };
+    let start_px = |app: &App, place: usize| spot(app, place).unwrap().0 * CELL.0 as f32;
+
+    // A word of a heading under front matter (73, where they stood 9 px under the front
+    // matter's box and 30 over the word): over the word, with more air over them.
+    for (word, length) in [("page", 4), ("words of", 8)] {
+        let from = at(&app, word);
+        drag(&mut app, from, from + length);
+        let bar = app.selection_bar().expect("the buttons");
+        let air = air_about(&screen(&app), bar);
+        assert!(bar.0.y < spot(&app, from).unwrap().1, "{word}: over it");
+        assert!(near(air.under, 12.0), "{word}: {} px over it", air.under);
+        assert!(
+            air.over >= 12.0 - 1.5,
+            "{word}: {} px under what's over",
+            air.over
+        );
+        let left = start_px(&app, from);
+        assert!(
+            (air.left - left).abs() < CELL.0 as f32,
+            "{word}: at its start, {left} px, not {}",
+            air.left
+        );
+    }
+
+    // Its start out of view and its end on the paragraph under "Tables", one row with too
+    // little room after its words and a table under it: over the end's line, in a gap too
+    // small for 12 px and 12 (s1-page-shift-select-scrolled, 5 px under the heading and 16 over
+    // the paragraph).
+    let start = at(&app, "Plain words");
+    click(&mut app, start, false);
+    let end = after(&app, "Right-click a cell");
+    let table = at(&app, "| row 20 |");
+    scroll_to(&mut app, table);
+    let (_, last) = spot(&app, end).expect("the end in view");
+    assert!(last >= 5, "the heading over it in view");
+    assert!(spot(&app, start).is_none(), "the start is out of view");
+    click(&mut app, end, true);
+    let bar = app.selection_bar().expect("the buttons");
+    assert!(bar.0.y < last, "over the end's line");
+    let air = air_about(&screen(&app), bar);
+    assert!(
+        air.over >= 8.0 && air.under >= 8.0,
+        "{} and {}",
+        air.over,
+        air.under
+    );
+    assert!(
+        // Within 2 px: the words over it are reckoned to their tallest letters' reach.
+        air.under < 12.0 + 12.0 && (air.over - air.under).abs() <= 2.0,
+        "in the middle of the gap: {} px over, {} under",
+        air.over,
+        air.under
+    );
+    let column = start_px(&app, at(&app, "Right-click"));
+    assert!(
+        (air.left - column).abs() < CELL.0 as f32,
+        "on the text column, {column} px, not {}",
+        air.left
+    );
+
+    // Its start out of view and its end on the page's last line, with the page's end under
+    // it: 12 px under it, on the text column (s1-page-drag-scroll, 45 px under and at the
+    // caret's column).
+    let end = after(&app, "The last paragraph");
+    scroll_to(&mut app, end);
+    for _ in 0..3 {
+        app.handle(pointer(MouseKind::ScrollDown, 60.0, 20, false));
+    }
+    let (_, last) = spot(&app, end).expect("the end in view");
+    click(&mut app, end, true);
+    let bar = app.selection_bar().expect("the buttons");
+    assert!(bar.0.y > last, "under the end's line");
+    let air = air_about(&screen(&app), bar);
+    assert!(near(air.over, 12.0), "{} px under it", air.over);
+    let column = start_px(&app, at(&app, "The last paragraph"));
+    assert!(
+        (air.left - column).abs() < CELL.0 as f32,
+        "on the text column, {column} px, not {}",
+        air.left
+    );
+}
+
+/// Under or over, the buttons stand in the gap next to the block the selection's line is in,
+/// never one past what comes after it: with a table after the paragraph a selection ends in,
+/// they stood under the table, 11 px over the paragraph after it (the tour of this change,
+/// s1-page-shift-select-scrolled).
+#[test]
+fn the_selection_bar_stays_in_the_gap_next_to_its_block() {
+    let page = format!(
+        "# Top\n\nThe start of the selection.\n\n{}## Tables\n\nRight-click a cell for rows, \
+         columns and alignment. Click any cell to type in it, and Tab goes on.\n\n\
+         | name | value |\n|------|-------|\n| cell | 42 |\n\n\
+         Try: a paragraph after the table, with a row of room before it.\n\n{}",
+        filler(30),
+        filler(10)
+    );
+    let (_dir, mut app) = open_airy("gap.md", &page, (150, 40));
+    let start = at(&app, "start of the selection");
+    click(&mut app, start, false);
+    let after_table = at(&app, "Try: a paragraph");
+    scroll_to(&mut app, after_table);
+    assert!(spot(&app, start).is_none(), "the start is out of view");
+    let end = after(&app, "Right-click a cell");
+    let (_, last) = spot(&app, end).expect("the end in view");
+    click(&mut app, end, true);
+    let bar = app.selection_bar().expect("the buttons");
+    let (_, table) = spot(&app, at(&app, "name |")).expect("the table in view");
+    assert!(
+        bar.0.y < last,
+        "over the end's line, not under the table: row {}, the end on {last}, the table from {table}",
+        bar.0.y
+    );
+}
+
+/// Lifted toward their selection, the buttons reach into the row by theirs, and a click there
+/// on them, where a terminal says where in a row, presses them.
+#[test]
+fn a_click_on_the_selection_bar_where_its_painted_presses_it() {
+    let page = "---\ntitle: Front matter\nauthor: Someone who writes\n---\n\n\
+         # Everything a page can do\n\nA paragraph.\n";
+    let (_dir, mut app) = open_airy("press.md", page, (150, 40));
+    let from = at(&app, "page can");
+    let (x, y) = spot(&app, from).unwrap();
+    app.handle(pointer(MouseKind::Left, x + 0.1, y, false));
+    let (x2, _) = spot(&app, from + 4).unwrap();
+    app.handle(pointer(MouseKind::Drag, x2 + 0.1, y, false));
+    app.handle(pointer(MouseKind::Up, x2 + 0.1, y, false));
+    let bar = app.selection_bar().expect("the buttons");
+    let air = air_about(&screen(&app), bar);
+    // A few pixels over its foot, in whichever row that is.
+    let foot = (air.foot - 3.0) / CELL.1 as f32;
+    assert!(foot as u16 > bar.0.y, "the foot is in the row under theirs");
+    let press = Event::Mouse(MouseEvent {
+        kind: MouseKind::Left,
+        x: bar.0.x + 2,
+        y: foot as u16,
+        fine_x: f32::from(bar.0.x + 2),
+        fine_y: foot,
+        mods: Mods::default(),
+    });
+    app.handle(press);
+    assert!(app.dock.draft.is_some(), "a comment is being written");
 }
 
 #[test]

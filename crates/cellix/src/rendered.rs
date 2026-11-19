@@ -209,6 +209,8 @@ pub struct Row {
     pub heading: u8,
     /// Text stands two rows tall, centred across this row and an empty one under it.
     pub tall: bool,
+    /// How far its words stand lowered in the row, in rows: a note under a box, clear of it.
+    pub drop: f32,
     /// The column of a task checkbox, and the source position of its mark.
     pub checkbox: Option<(f32, usize)>,
     /// Where each table cell starts in the source.
@@ -246,6 +248,7 @@ impl Row {
             callout: None,
             heading: 0,
             tall: false,
+            drop: 0.0,
             checkbox: None,
             cells: Vec::new(),
             cell_ends: Vec::new(),
@@ -895,13 +898,12 @@ fn note(
     out: &mut Vec<Glyph>,
 ) -> Option<usize> {
     let end = (3..rest.len()).find(|i| rest[*i..].starts_with(&['<', '<', '}']))?;
-    // Two spaces' room, which the tint's own edge takes a little of.
+    // Room for the tint, which keeps 8 px round what it holds, and 8 px or more of the page
+    // before it: three spaces where words are measured, two on cells, where it's the cells'.
     let spaces = out.iter().rev().take_while(|g| g.ch == ' ').count();
+    let room = if context.measure.in_cells() { 2 } else { 3 };
     if !out.is_empty() {
-        out.extend(decoration(
-            &" ".repeat(2usize.saturating_sub(spaces)),
-            Tone::Text,
-        ));
+        out.extend(decoration(&" ".repeat(room - spaces.min(room)), Tone::Text));
     }
     let small = Font {
         size: NOTE_SIZE,
@@ -1655,6 +1657,12 @@ impl Context<'_> {
                 Built::Waiting
             }
             State::Failed(reason) => Built::Failed(reason),
+            // Said as a failure, and asked for once more a session: the worker asks LaTeX
+            // again only if it hasn't this session.
+            State::Stopped(reason) => {
+                self.extras.wanted.borrow_mut().push(snippet);
+                Built::Failed(reason)
+            }
             State::Ready(path) => {
                 let make = || {
                     let document = cellix_doc::pdf::Document::open(std::fs::read(&path).ok()?);
@@ -1928,11 +1936,34 @@ fn cell_outputs(
     }
 }
 
+/// How far a code box reaches under its last row, in rows.
+pub(crate) const BOX_UNDER: f32 = 0.12;
+/// Pixels between a box's foot and the capitals of a note about it under it, and how large
+/// the note's words are.
+const NOTE_UNDER_BOX: f32 = 16.0;
+const ROW_NOTE_SIZE: u8 = 85;
+
+/// A note under a box, its words lowered so their capitals stand `NOTE_UNDER_BOX` under the
+/// box's foot. In their row's middle they stood 10 px under it and 30 over what came next,
+/// so "Drawing with LaTeX…" read as the box's caption (82-paper-changes-row).
+fn under_box(mut row: Row, context: &Context) -> Row {
+    if let (Some((caps, _)), Some((_, tall))) = (
+        crate::measures::words_in_row(context.measure),
+        context.measure.cell_pixels(),
+    ) {
+        let tall = tall.max(1) as f32;
+        // Its smaller words' tops stand about where the interface's capitals do.
+        let drop = NOTE_UNDER_BOX - (caps - BOX_UNDER * tall);
+        row.drop = (drop / tall).max(0.0);
+    }
+    row
+}
+
 /// A small line under something, saying what's wrong with it.
 fn note_row(text: &str, line: usize, at: usize, context: &Context) -> Row {
     let mut note = decoration(text, Tone::Dim);
     for g in &mut note {
-        g.font.size = 85;
+        g.font.size = ROW_NOTE_SIZE;
     }
     measure_glyphs(&mut note, context.measure);
     let mut x = CODE_PADDING;
@@ -2084,9 +2115,14 @@ pub fn layout_with(
                         }
                     }
                     Built::Waiting => {
-                        rows.push(note_row("Drawing with LaTeX…", i, offset, &context));
+                        let note = note_row("Drawing with LaTeX…", i, offset, &context);
+                        rows.push(under_box(note, &context));
                     }
-                    Built::Failed(why) => rows.push(note_row(&why, i, offset, &context)),
+                    Built::Failed(why) => {
+                        // In the words a paper's says it in.
+                        let why = format!("Can't draw this: {why}");
+                        rows.push(under_box(note_row(&why, i, offset, &context), &context));
+                    }
                     Built::Never => {}
                 }
                 i = close + 1;
@@ -2162,7 +2198,7 @@ pub fn layout_with(
                     }
                 }
                 Some((Err(why), _)) if !why.is_empty() => {
-                    rows.push(note_row(&why, i, offset, &context));
+                    rows.push(under_box(note_row(&why, i, offset, &context), &context));
                 }
                 _ => {}
             }

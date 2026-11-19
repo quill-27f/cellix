@@ -19,6 +19,11 @@ const KEYS_SIZE: u8 = 85;
 /// How far the keys are dropped in their row, in rows, to share the words' baseline.
 const KEYS_DROP: f32 = 0.035;
 const MIN_WIDTH: u16 = 16;
+/// Pixels a submenu's panel reaches over the edge of the menu that opened it. Side by side,
+/// their borders merged into one line, and the submenu's shadow darkened 10 px of the other.
+const SUBMENU_OVERLAP: f32 = 4.0;
+/// How far a panel's shadow reaches, in rows, as the painter casts it.
+const SHADOW_REACH: f32 = 0.35;
 /// Air above the first row and below the last, in rows, the same in every menu: half a row,
 /// 25 px of an airy row. Painted menus only; the cell tier has no fractions of a row. It was
 /// a quarter, with what rounding to whole rows left over shared above and below, so a menu
@@ -270,8 +275,14 @@ pub struct Menu {
     /// that opened it keeps the same air under its last row as over its first.
     foot: f32,
     /// How far into its first column its panel starts: a menu dropped from a button stands on
-    /// the button's left edge, which needn't be a column's.
+    /// the button's left edge, which needn't be a column's. Less than none, it starts in the
+    /// column before, over the edge of the menu that opened it.
     shift: f32,
+    /// How far past its last column its panel reaches, over the menu that opened it there.
+    reach: f32,
+    /// Where it was opened from beside a menu, in columns: how far its own shadow is kept in
+    /// from its edge on that side (`SHADOW_REACH`), and whether that side is its left.
+    opener: Option<(f32, bool)>,
     /// Columns from the text edge to a row's words: an icon's, where any row has one.
     lead: f32,
     /// How wide each row's words are, for what comes after them.
@@ -340,6 +351,8 @@ impl Menu {
             drop: 0.0,
             foot: 0.0,
             shift: 0.0,
+            reach: 0.0,
+            opener: None,
             lead,
             widths,
             selected: None,
@@ -362,12 +375,13 @@ impl Menu {
             return None;
         }
         let width = Self::width(&items, measure).min(screen.w);
-        let x = if self.area.right() + width <= screen.right() {
-            self.area.right()
+        // The side of it the menu that opened it is on, where there's one.
+        let (x, opener) = if self.area.right() + width <= screen.right() {
+            (self.area.right(), Some(true))
         } else if self.area.x >= screen.x + width {
-            self.area.x - width
+            (self.area.x - width, Some(false))
         } else {
-            screen.right().saturating_sub(width)
+            (screen.right().saturating_sub(width), None)
         };
         // Its first row level with the row that opened it, as the pointer leaves that row:
         // its panel as far above that as every menu's first row is below its edge. On whole
@@ -378,6 +392,17 @@ impl Menu {
         let mut sub = Menu::new((x, top), items, measure, screen);
         if sub.area.y == top {
             sub.level(edge - f32::from(top), measure, screen);
+        }
+        if let (true, Some(left), Some((wide, row))) = (self.fine, opener, measure.cell_pixels()) {
+            // Over the other's edge, as one sheet over another, with no shadow on it.
+            let (wide, row) = (wide.max(1) as f32, row.max(1) as f32);
+            let over = SUBMENU_OVERLAP / wide;
+            if left {
+                sub.shift = -over;
+            } else {
+                sub.reach = over;
+            }
+            sub.opener = Some((SHADOW_REACH * row / wide, left));
         }
         Some(sub)
     }
@@ -744,13 +769,17 @@ impl Menu {
             .collect();
         let left = self.left();
         let width = f32::from(area.w) - self.shift;
-        if self.fine && (self.drop > 0.0 || self.foot > 0.0 || self.shift > 0.0) {
+        let reaches = self.shift != 0.0 || self.reach > 0.0;
+        if self.fine && (self.drop > 0.0 || self.foot > 0.0 || reaches) {
             hung(grid, area, (self.drop, self.foot, self.shift), theme);
         } else if self.fine {
             // On its rows, covering each it touches whole: nothing reaches past its edges.
             popup(grid, area, theme);
         } else {
             raised(grid, area, theme);
+        }
+        if self.fine {
+            self.over_its_opener(grid);
         }
         let base = Style {
             fg: theme.text.fg,
@@ -897,6 +926,45 @@ impl Menu {
         if let Some(child) = self.child() {
             child.draw(grid, hover, theme);
         }
+    }
+}
+
+impl Menu {
+    /// A submenu's panel, just painted, reaches `reach` further over the menu that opened it
+    /// on its right, and casts its shadow down and away from that menu, not onto it: a panel
+    /// as tall, kept in from that side by as far as a shadow reaches, casts it, and the panel
+    /// itself, with none, covers it.
+    fn over_its_opener(&self, grid: &mut Grid) {
+        let Some((kept, left)) = self.opener else {
+            return;
+        };
+        let Some(Paint::Panel {
+            mut bounds,
+            radius,
+            fill,
+            border,
+            ..
+        }) = grid.paint.pop()
+        else {
+            return;
+        };
+        bounds.w += units(self.reach);
+        let kept = units(kept).min(bounds.w / 2);
+        let caster = Bounds {
+            x: if left { bounds.x + kept } else { bounds.x },
+            w: bounds.w - kept,
+            ..bounds
+        };
+        grid.paint.push(Paint::Panel {
+            bounds: caster,
+            radius,
+            fill,
+            border,
+            shadow: true,
+            dashed: false,
+            inset: false,
+        });
+        grid.panel(bounds, radius, fill, border);
     }
 }
 
@@ -1373,5 +1441,81 @@ mod tests {
         );
         assert_eq!(menu.row_at(2, on(4)), Some(2));
         assert_eq!(menu.row_at(2, on(9)), None);
+    }
+
+    /// A submenu stands 4 px over the edge of the menu that opened it, and its shadow falls
+    /// down and away from that menu, not on it (0.11.0's release review, B7,
+    /// 57-dock-menu-format: their borders merged into one line, and the submenu's shadow
+    /// darkened 10 px of the menu beside it).
+    #[test]
+    fn a_submenu_overlaps_its_menu_with_no_shadow_on_it() {
+        use cellix_render::{Rasterizer, SoftwareRasterizer};
+        let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        let format = vec![
+            Item::run("Bold", Command::Cut),
+            Item::run("Italic", Command::Copy),
+            Item::run("Strikethrough", Command::Copy),
+            Item::run("Plain Text", Command::Paste).after_rule(),
+        ];
+        let items = vec![
+            Item::run("Show Source", Command::Cut),
+            Item::run("Cut", Command::Cut).after_rule(),
+            Item::run("Copy", Command::Copy),
+            Item::run("Paste", Command::Paste),
+            Item::submenu("Format", format).after_rule(),
+            Item::run("Insert", Command::Cut),
+            Item::run("Add Comment", Command::Cut).after_rule(),
+        ];
+        let mut menu = Menu::new((1, 1), items, &measure, SCREEN);
+        // It opens on the pointer.
+        menu.hover(3, menu.top_of(4) + 0.5);
+        let theme = Theme::default();
+        let mut grid = Grid::new(SCREEN.w, SCREEN.h, Style::default());
+        menu.draw(&mut grid, None, &theme);
+        let child = menu.child().expect("Format opened on the pointer");
+        let edge = f32::from(menu.area.right()) * 17.0;
+        let panels: Vec<(Bounds, bool)> = (grid.paint.iter())
+            .filter_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    shadow,
+                    border: Some(border),
+                    ..
+                } if *border == theme.popup_border => Some((*bounds, *shadow)),
+                _ => None,
+            })
+            .collect();
+        let px = |units: i32| units as f32 * 17.0 / units_of_cell();
+        let (sheet, _) = *panels.last().expect("the submenu's panel");
+        assert!(
+            (px(sheet.x) - (edge - SUBMENU_OVERLAP)).abs() < 0.5,
+            "{} px over the menu's edge",
+            edge - px(sheet.x)
+        );
+        // Beside its second row, the menu's own ground right up to it, darkened by nothing.
+        let mut raster = SoftwareRasterizer::new(17, 50)
+            .expect("fonts are in the binary")
+            .with_type_row(36);
+        // In the middle of that row, which needn't be the window's.
+        let at = child.top_of(1) + 0.5;
+        let y = at.floor() as u16;
+        let image = raster.row(&grid, y);
+        let middle = ((at - at.floor()) * 50.0) as usize;
+        let from = (edge - SUBMENU_OVERLAP - 18.0) as usize;
+        let to = (edge - SUBMENU_OVERLAP - 2.0) as usize;
+        for x in from..to {
+            let at = (middle * image.width + x) * 3;
+            let pixel = Rgb(image.rgb[at], image.rgb[at + 1], image.rgb[at + 2]);
+            assert_eq!(
+                pixel,
+                theme.popup,
+                "at {} px from its edge",
+                edge - x as f32
+            );
+        }
+    }
+
+    fn units_of_cell() -> f32 {
+        units(1.0) as f32
     }
 }

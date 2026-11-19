@@ -680,13 +680,22 @@ Whatever can be seen can be talked about. A selection, in code or on a page, get
 Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and
 Alt+A unless changed), and a picture, diagram or formula gets a Comment button under the pointer.
 Where they stand is one rule (`App::selection_bar_at`, after 0.11.0's review): in a row of their own
-over the first selected line, `LINE_AIR` or more clear of words, lines and the selection, as near
-the row's middle as that allows; where the line is in a block, a table or front matter or a
-paragraph's later lines, that's above the block. With no such row over it in view, its start
-scrolled away or only blocks over it, the same under the last selected line, and failing both,
-beside the end of that line, then over it. Until then they stood on the row over the first line
-whatever was there, straddling a box's edge, over a label or 0 to 5 px over their own selection, or
-under the end on a table's lines when the start was out of view. Comments are written in the side
+over the first selected line, `LINE_AIR` or more clear of words, lines and the selection; where
+the line is in a block, a table or front matter or a paragraph's later lines, that's above the
+block. With no such row over it in view, its start scrolled away or only blocks over it, the same
+under the last selected line, and failing both, beside the end of that line, then over it. Until
+then they stood on the row over the first line whatever was there, straddling a box's edge, over a
+label or 0 to 5 px over their own selection, or under the end on a table's lines when the start was
+out of view. Over or under, it's the gap next to the block the line is in, never one past
+whatever comes after that: under a paragraph with a table after it they stood under the table,
+11 px over the next paragraph. In the gap they stand in, their foot is 12 px over what they're for, or their top 12 px
+under it where they stand under the last line (`measures::SELECTION_BAR_AIR`); where that would
+leave less on the gap's other side, they stand in its middle. Their left edge is at the selection's
+start, or at the text column's with the start out of view. In 0.11.0 they leaned no more than a
+fifth of a row from their row's middle, which put them 5 to 45 px from the selection scene by
+scene, and at the caret's column with the start out of view (its release check, P1). Lifted so,
+they can reach into the row by theirs, and a click takes them where they're painted; a terminal
+that reports no pixels says a click is in its row's middle, and there their own row takes it. Comments are written in the side
 pane, with what they're about in view. Ask Agent sends the comment to the agent as soon as it's
 written, with its file, line and all of what was selected, and how to answer
 with `cellix reply`, so the answer lands under it. Inside Claude Code it puts the file and the whole
@@ -764,9 +773,13 @@ on its own thread after a pause in typing. Words added to the dictionary go in
 Pages read more than CommonMark: strikethrough, `==highlight==`, `H~2~O`, `x^2^`, footnotes, GitHub
 callouts such as `> [!NOTE]`, and CriticMarkup for tracked changes. All of it is still plain text in
 the file, and it reaches the web page and the PDF. A reviewer's note in the text (`{>>note<<}`) is
-shown as a comment is, two spaces after the words before it, after the comment's ◆ and on a
-comment's tint, in the small words; until 0.11.0's review it stood against the period before it in
-small grey words and read as a typo. A horizontal rule is one hairline across the text's column, as
+shown as a comment is, three spaces after the words before it (two on cells), after the comment's
+◆ and on a comment's tint, in the small words; until 0.11.0's review it stood against the period
+before it in small grey words and read as a typo. The tint keeps `LINE_AIR` either side of what it
+holds on every row it runs on, its spaces at either end left out, past the text's edge on a row
+it runs on to; it had 6 px before the ◆, 11 after a row's last space and 1 px on the next row. A
+line under words, as an insertion's, or through them, as a deletion's, runs from the first letter
+to the last: under the space at an insertion's end it ran on under the next word. A horizontal rule is one hairline across the text's column, as
 wide as its words are set; its dashes are the cell tier's (in 0.11.0 they were drawn over a shorter
 hairline too, a line that changed colour part way and stopped short in a wide pane). Track Changes
 keeps edits as suggestions in the text itself, as CriticMarkup or the `changes` package, so they
@@ -819,7 +832,12 @@ a picture, and opens to its source with the picture under it while it's written.
 pure Rust (`mermaid-rs-renderer`, `layout-rs`, `resvg`), so nothing needs a browser or Node, and
 the web page and PDF export carry them too. What only LaTeX can draw (TikZ, `tikzcd`, `forest`,
 `circuitikz`, `algorithm`) is built alone in the background with the paper's own engine and setup,
-and kept by its content in the cache folder, so typing never waits. Line art becomes ink in the
+and kept by its content in the cache folder, so typing never waits. Until it's drawn its source
+stands in its box, with "Drawing with LaTeX…" 16 px under the box and a thumb for its width inside
+the box, 4 px over its foot, where the thumb ran through the note (0.11.0's release check, P4).
+LaTeX that gives no answer in a minute (`snippets::LIMIT`) is stopped, with whatever it started,
+and the note says so where it waited for ever; what held it up may pass, as a first fetch of
+packages does, so each session asks once more. With no LaTeX installed the note says that. Line art becomes ink in the
 sheet's colour, so it reads in both themes. An image's size is written as `{width=50%}`, which
 Pandoc reads as well, and as `width=0.5\linewidth` in a paper. Dragging an image's edge sets the
 same thing, in steps of five percent.
@@ -830,7 +848,11 @@ and editing work the same in both, and the file is always the document.
 
 LaTeX on the page is a reading of the source, not a compiler. Commands it knows hide, and anything
 else shows as source, so a paper can never lose text to the page. Numbers come from a first pass
-over the labels, as LaTeX's own does. The PDF is the truth for how a paper prints.
+over the labels, as LaTeX's own does. An equation's number stands at the right margin level with
+its row's math axis, a quarter of an em over the row's baseline, as each row measures alone: on
+the middle of the row's height, limits under it pulled the number about 30 px under its line. The
+PDF is the truth for how a paper prints. A page or picture zoomed in the side pane keeps 16 px
+from the pane's sides however far it's zoomed (`pdfview::SIDE_AIR`).
 
 Formulas are pictures made by `latex-rust`, in pure Rust with STIX Two Math in the binary, because
 pixels are drawn on the host and a server has no TeX. A picture holds one place in the text, inside
@@ -1287,7 +1309,8 @@ that was 5 px from the tab row's line. So, where a row has room: a control on a 
 lines keeps the height it has on the terminal's line (a button at a pointed row's end, Show
 Source under the tab row, the conflict header's buttons, the chip of the view showing in a
 docked pane's header: a panel's `inset`; Show Source stands as far under the tab line as its end
-is from the sheet's side, 15 px); a tooltip under a bar stands under its control 8 px under
+is from the sheet's side, 15 px, and the scrollbar beside it starts `LINE_AIR` under its foot, where
+its thumb stood 2 px under it); a tooltip under a bar stands under its control 8 px under
 its row's top, where the line it hangs from is (10 px from the line's top), and ends 8 px from
 the line down the window's side (`App::tip_end`). It's a layer, and covers the top of what's
 under it, the branch's chip on the heading under the views or a minimap's first lines: moved
@@ -1300,7 +1323,10 @@ menu that opens on the row under a tab row starts 8 px down it and
 takes another row where it needs one (`Menu::hang`), and one dropped from a button stands on
 the button's left edge 8 px under its foot (`Menu::under`), the Comments pane's order menu
 too, in a menu's colour as every menu is; a submenu's first row is level with the row that
-opened it, with every menu's air over and under its rows (`Menu::level`); a floating panel,
+opened it, with every menu's air over and under its rows (`Menu::level`), and its panel stands 4 px
+over that menu's edge and casts its shadow down and away from it, not onto it: side by side, their
+borders merged into one line and its shadow darkened 10 px of the other (0.11.0's release review,
+B7); a floating panel,
 a menu, a palette or a tip, keeps both its sides 8 px or more from the sheets' upright lines,
 moving a column along where it would stand on one (`measures::clear_of_lines`): Go to Symbol
 and a tab's menu had their left line on the file's sheet's; the Find bar over the side pane
@@ -1314,7 +1340,10 @@ Context's were 0.4 of a column in, 6 px); a comment's card is as far from that l
 card over the side pane is (`PANE_CARD_LEAD`, below); a program in the
 side pane keeps the window's last column as air, as its first keeps the half column before the
 sheet's edge. A floating panel's grid, the table picker's squares and the math panel's
-buttons, stands as far from the panel's top as from its sides. A task's box on a page is
+buttons, stands as far from the panel's top as from its sides, and the table picker's label stands
+on the squares' left edge, its capitals 24 px under them and its words 22 px over the panel's foot,
+the panel no taller than that: it stood 15 px right of their edge, 59 px under them and 12 over
+the foot. A task's box on a page is
 square, at most two thirds of the line, in the room a list's marker has, with 9 px before its
 words, which line up with every other item's (`rendered::MARKER`). A status message has the
 bar up to where the details at its other end are painted, and an ellipsis only where that's
