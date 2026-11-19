@@ -1170,6 +1170,44 @@ fn a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start() {
     assert!(tip.1 < end, "{} px past the pane", tip.1 - end);
 }
 
+/// A formula's picture under its open source stands 16 px under the source's box: it stood
+/// 4 px under it, and its numerator touched the box's thumb (0.11.0's final review, C14,
+/// 46-formula-open).
+#[test]
+fn an_open_formulas_picture_stands_clear_under_its_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.md");
+    let text = "Words before it.\n\n$$\n\\frac{a}{b} = c\n$$\n\nWords after it.\n";
+    fs::write(&path, text).unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.open(&path).unwrap();
+    let theme = app.theme;
+    let picture = |grid: &Grid| {
+        grid.paint.iter().find_map(|p| match p {
+            Paint::Image { bounds, .. } => Some(*bounds),
+            _ => None,
+        })
+    };
+    assert!(
+        picture(&screen(&app)).is_some(),
+        "typeset with the caret away"
+    );
+    // The caret in its source opens it, with the picture under it.
+    let inside = text.find("frac").unwrap();
+    let editor = app.editor_mut().unwrap();
+    editor.selections.set_single(Selection::cursor(inside));
+    let grid = screen(&app);
+    let code = panels(&grid)
+        .into_iter()
+        .find(|(_, fill, border, _)| *fill == Some(theme.code_bg) && *border == Some(theme.border))
+        .expect("the source's box");
+    let (top, height) = tall(code.0);
+    let below = picture(&grid).expect("its picture under it");
+    let gap = below.y as f32 / UNIT as f32 * ROW - (top + height);
+    assert!((gap - 16.0).abs() <= 1.0, "{gap} px under the box");
+}
+
 /// A drawing's source, wider than the page, keeps its sideways thumb inside its box, 4 px over
 /// its foot, and "Drawing with LaTeX…" stands 16 px under the box, the first thing under it.
 /// The thumb ran 14 px under the box, through the note, which stood 10 px under the box and

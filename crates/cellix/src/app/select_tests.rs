@@ -1239,6 +1239,61 @@ mod terminal {
         panic!("{words:?} never showed");
     }
 
+    /// Where the buttons by output selected in a terminal stand, their box's foot in pixels
+    /// from the window's top, as it's painted on rows of 50 with a line of 36.
+    fn output_bar_foot(app: &App) -> f32 {
+        let (comment, ask) = app.output_bar().expect("the buttons by the output");
+        let edge = crate::theme::Theme::default().popup_border;
+        let unit = cellix_render::units(1.0);
+        let foot = screen(app).paint.iter().find_map(|paint| match paint {
+            Paint::Panel {
+                bounds,
+                border: Some(border),
+                ..
+            } if *border == edge
+                && (bounds.y / unit - i32::from(comment.y)).abs() <= 1
+                && bounds.x / unit >= i32::from(comment.x) - 1
+                && bounds.x / unit < i32::from(ask.right()) =>
+            {
+                let (top, tall) = cellix_render::stood(bounds.y, bounds.h, 50.0, 36.0);
+                Some(top + tall)
+            }
+            _ => None,
+        });
+        foot.expect("their box is painted")
+    }
+
+    /// The buttons by output selected in a terminal stand as a page's do: their foot 12 px
+    /// over the selection with clear rows over it, and 12 px over it still where no row is
+    /// clear and they stand over the end of the output before it, where they stood 6 px over
+    /// it (0.11.0's release review of track P, 108-terminal-ask).
+    #[test]
+    fn the_buttons_by_selected_output_stand_twelve_pixels_over_it() {
+        let (_dir, mut app) = open_airy("a.md", "# A page\n", (160, 40));
+        app.run(Command::ListAgents);
+        let width = usize::from(app.dock_screen().unwrap().w) - 2;
+        let full = |c: &str| c.repeat(width);
+        let script = format!(
+            "printf 'ready\\n\\n\\n\\nThe line to ask about\\n{}\\n{}\\n{}\\n'; sleep 30",
+            full("a"),
+            full("c"),
+            full("b")
+        );
+        run(&mut app, &script);
+        // Clear rows over it, and then rows of output all round it.
+        for words in ["The line to ask about", "ccccccccc"] {
+            let (x, y) = find(&app, words).expect("the output");
+            let end = (x + 8, y);
+            press(&mut app, MouseKind::Left, (x, y), false);
+            press(&mut app, MouseKind::Drag, end, false);
+            press(&mut app, MouseKind::Up, end, false);
+            let (comment, _) = app.output_bar().expect("the buttons by the output");
+            assert_eq!(comment.y, y - 1, "{words}: on the row over it");
+            let gap = f32::from(y) * 50.0 - output_bar_foot(&app);
+            assert!((gap - 12.0).abs() <= 1.0, "{words}: {gap} px over it");
+        }
+    }
+
     #[test]
     fn a_shift_click_in_a_terminal_selects_from_the_click_however_far_it_scrolled() {
         let (_dir, mut app) = open("a.md", "# A page\n", false);

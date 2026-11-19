@@ -136,10 +136,29 @@ fn guarded<T>(draw: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     result.unwrap_or_else(|_| Err("This diagram can't be drawn yet".to_string()))
 }
 
+/// A pie's slices, and their swatches, in colours that stand 3:1 or more from the page and
+/// apart from each other, on a light sheet and a dark one. The theme's own were pale greys and
+/// blues, the first white on white beside "Writing" (67-sample-charts).
+const PIE_LIGHT: [&str; 12] = [
+    "#3f6fd8", "#21877b", "#b5720c", "#c8456a", "#7a5ad0", "#5a6a80", "#3f8f3f", "#c8642a",
+    "#2a86a8", "#b04a92", "#7e7e2a", "#8a5a3a",
+];
+const PIE_DARK: [&str; 12] = [
+    "#7aa2f7", "#4fd1c5", "#f2c26b", "#f28fad", "#b49cf5", "#94a3b8", "#7fcf7f", "#f5a26b",
+    "#6cc8e6", "#e08fd0", "#c8c86b", "#c89a70",
+];
+
 fn mermaid(source: &str, dark: bool) -> Result<String, String> {
     let mut theme = if dark { Theme::dark() } else { Theme::modern() };
     // The page shows through, in whichever theme it has.
     theme.background = "transparent".to_string();
+    let (slices, words) = if dark {
+        (PIE_DARK, "#17191d")
+    } else {
+        (PIE_LIGHT, "#ffffff")
+    };
+    theme.pie_colors = slices.map(String::from);
+    theme.pie_section_text_color = words.to_string();
     let options = RenderOptions {
         theme,
         ..RenderOptions::default()
@@ -271,6 +290,44 @@ mod tests {
             let svg = svg(Kind::Mermaid, source, false).unwrap();
             let picture = rasterize(&svg, 2.0, 1600).unwrap();
             assert!(inked(&picture) > 100, "{source}");
+        }
+    }
+
+    /// The contrast of two colours written `#rrggbb`, as WCAG reckons it.
+    fn contrast(a: &str, b: &str) -> f32 {
+        let luminance = |hex: &str| {
+            let channel = |at: usize| {
+                let c = f32::from(u8::from_str_radix(&hex[at..at + 2], 16).unwrap()) / 255.0;
+                if c <= 0.039_28 {
+                    c / 12.92
+                } else {
+                    ((c + 0.055) / 1.055).powf(2.4)
+                }
+            };
+            0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5)
+        };
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
+    /// A pie's slices and their swatches stand 3:1 or more from the page in both themes, and
+    /// the slices' numbers 3:1 from them: the theme's first colour was near white, its swatch
+    /// white on white beside "Writing" (0.11.0's final review, S6, 67-sample-charts).
+    #[test]
+    fn a_pies_colours_stand_apart_from_the_page() {
+        let source = "pie title Share\n  \"A\" : 40\n  \"B\" : 35\n  \"C\" : 25\n";
+        for (dark, page, words, slices) in [
+            (false, "#ffffff", "#ffffff", PIE_LIGHT),
+            (true, "#17191d", "#17191d", PIE_DARK),
+        ] {
+            let svg = svg(Kind::Mermaid, source, dark).unwrap().to_lowercase();
+            for colour in &slices[..3] {
+                assert!(svg.contains(colour), "{colour} drawn, dark: {dark}");
+            }
+            for colour in slices {
+                assert!(contrast(colour, page) >= 3.0, "{colour} on {page}");
+                assert!(contrast(colour, words) >= 3.0, "{words} on {colour}");
+            }
         }
     }
 

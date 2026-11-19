@@ -415,7 +415,8 @@ A page keeps to a reading width: its text is set to at most 88 columns, about 14
 a line in the interface font and 88 on cells, and in a pane wider than that it stands in the
 middle. Tables wrap their cells to that width and blocks of code end with it, so the page has
 one right edge; what's still wider (a table with too many columns, a long line of code) moves
-sideways inside the page, and a letter that would be cut in half at its edge is left out.
+sideways inside the page, and a letter that would be cut in half at its edge is left out, as are
+all of a table's cell's words once its left edge cuts them: "col06" showed as "l06".
 The middle is that of the columns the page has: the pane's, less its minimap's when one is
 showing, so a long page isn't pushed against its minimap. A page is laid out before that's
 decided, so its first frame is where it stays. A pane no wider than the page sets it as
@@ -643,7 +644,8 @@ words in place of the hint, the nearest first: Tab takes that one and a click an
 stand the eight last used, the usual eight until then, each a click, kept between runs with the
 project's other state; after them a face opens every emoji in a grid under a search field, by kind
 under the most used, where the arrows move, Enter or a click takes one and typing looks through
-names and GitHub's names both. What's offered is what the emoji font in the binary holds whole (Emoji 14.0, asked of the font
+names and GitHub's names both; the grid is as tall as what's found, up to nine rows, where it stood
+about 450 px empty under one row, and opened over its place it keeps its foot there. What's offered is what the emoji font in the binary holds whole (Emoji 14.0, asked of the font
 itself once), so no machine is offered a box; one typed by name is taken whatever its age. A name
 an agent spells out in an answer shows as its emoji. Should no font draw emoji in colour, none
 of this shows and names stay as typed.
@@ -718,8 +720,9 @@ Output is seen too, so a failing run needs no copy and paste. A selection in a t
 same two buttons, where they cover none of the output: on the row above the selection when its text
 ends before them, else on the row below, their right edge on the selection's, and failing both after
 the end of the selection's last row, each as a page's are, `LINE_AIR` clear of the output and the
-selection over and under them. Only output with no such room has them over the end of the row
-above. A terminal tab selects as a page does, and as terminals do: a drag, copied as it's let go,
+selection over and under them, and as far from the selection as a page's: their foot 12 px over it,
+or their top 12 px under it, or the middle of a smaller gap. Only output with no such room has them
+over the end of the row above, still 12 px over the selection, where they stood 6 px over it. A terminal tab selects as a page does, and as terminals do: a drag, copied as it's let go,
 and a Shift+click that ends the selection from where it started or from the click before, however
 far the scrollback has been scrolled in between, since a selection keeps to its words as they
 scroll (it kept to the screen's rows until 18 November 2026, so a scroll moved it onto other words).
@@ -836,7 +839,10 @@ goes to it. Wide glyphs are looked up as sans-serif rather than monospace in the
 monospaced Han glyph, the font search stops at a font that holds only blanks.
 
 Diagrams are text in the document. A fenced `mermaid`, `dot` or `svg` block stands on the page as
-a picture, and opens to its source with the picture under it while it's written. They are drawn by
+a picture, and opens to its source with the picture under it while it's written, 16 px under the
+source's box as a drawing's note is: a formula's numerator touched the box (46). A pie's slices
+and swatches take colours 3:1 or more from the page in both themes, where the renderer's first was
+white on white (67). They are drawn by
 pure Rust (`mermaid-rs-renderer`, `layout-rs`, `resvg`), so nothing needs a browser or Node, and
 the web page and PDF export carry them too. What only LaTeX can draw (TikZ, `tikzcd`, `forest`,
 `circuitikz`, `algorithm`) is built alone in the background with the paper's own engine and setup,

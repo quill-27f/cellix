@@ -6928,5 +6928,40 @@
     "title": "An order picked for the Comments pane is kept for every Cellix on the machine, and followed by one already running",
     "test": "a_comment_order_picked_is_kept_for_every_session",
     "passes": true
+  },
+  {
+    "id": "open-formula-clear-of-its-source",
+    "milestone": 15,
+    "title": "A picture under its open source stands 16 px under the source's box",
+    "test": "an_open_formulas_picture_stands_clear_under_its_source",
+    "passes": true
+  },
+  {
+    "id": "emoji-picker-as-tall-as-found",
+    "milestone": 15,
+    "title": "The emoji picker is as tall as what it finds, its foot kept where it opened over",
+    "test": "the_picker_is_as_tall_as_what_it_finds",
+    "passes": true
+  },
+  {
+    "id": "pie-colours-apart",
+    "milestone": 15,
+    "title": "A pie's slices and swatches stand 3:1 from the page in both themes",
+    "test": "a_pies_colours_stand_apart_from_the_page",
+    "passes": true
+  },
+  {
+    "id": "table-cut-cell-shows-none",
+    "milestone": 15,
+    "title": "A table moved sideways shows no part of a cell's words the page's edge cuts",
+    "test": "a_table_cut_at_the_pages_edge_shows_no_part_of_a_cells_words",
+    "passes": true
+  },
+  {
+    "id": "output-bar-twelve-px",
+    "milestone": 15,
+    "title": "The buttons by selected terminal output stand 12 px over it, as a page's do",
+    "test": "the_buttons_by_selected_output_stand_twelve_pixels_over_it",
+    "passes": true
   }
 ]

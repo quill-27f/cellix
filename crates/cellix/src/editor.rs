@@ -1081,7 +1081,7 @@ impl Editor {
                 continue;
             };
             let figure = figures.get(figure)?;
-            let top = area.y as f32 + index as f32 - self.top as f32 + 0.2;
+            let top = area.y as f32 + index as f32 - self.top as f32 + 0.2 + found.drop;
             if row < top || row > top + figure.height {
                 continue;
             }
@@ -1195,7 +1195,7 @@ impl Editor {
             let Some(figure) = figures.get(figure) else {
                 continue;
             };
-            let top = area.y as f32 + index as f32 - self.top as f32;
+            let top = area.y as f32 + index as f32 - self.top as f32 + row.drop;
             if top + figure.height < area.y as f32 {
                 continue;
             }
@@ -1218,7 +1218,7 @@ impl Editor {
             let wide = figure.width + 2.0 * side;
             // An equation's number stands at the column's end: with it the selection is one
             // band across the column, where the number had a box of its own far off.
-            let rows_of = (figure.height + 0.4).ceil().max(1.0) as usize;
+            let rows_of = (figure.height + 0.4 + row.drop).ceil().max(1.0) as usize;
             let number_end = (rows.iter().skip(index).take(rows_of))
                 .flat_map(|row| &row.glyphs)
                 .filter(|g| matches!(g.tone, Tone::Margin(_)))
@@ -5062,7 +5062,21 @@ impl Editor {
         // A letter that would cross where a cut row stops is left out whole: half a letter
         // at the edge reads as a mistake, not as more to come.
         let past = |g: &Glyph| proportional && cut && origin + g.x + g.advance > right;
-        let hidden = |g: &Glyph| (moved > 0.0 && g.x - moved < EDGE_AIR) || past(g);
+        // A table's cell whose words the page's left edge cuts shows none of them: its last
+        // letters read as a word of their own, "l06" for "col06" (161).
+        let cell_of = |x: f32| {
+            let columns = row.table.as_ref().map_or(&[][..], |t| &t.columns[..]);
+            columns.iter().rposition(|start| *start <= x)
+        };
+        let cut_cells: Vec<usize> = (row.glyphs.iter())
+            .filter(|g| moved > 0.0 && row.table.is_some() && !g.ch.is_whitespace())
+            .filter(|g| g.tone != Tone::TableLine && g.x - moved < EDGE_AIR)
+            .filter_map(|g| cell_of(g.x))
+            .collect();
+        let cut_cell = |g: &Glyph| {
+            !cut_cells.is_empty() && cell_of(g.x).is_some_and(|c| cut_cells.contains(&c))
+        };
+        let hidden = |g: &Glyph| (moved > 0.0 && g.x - moved < EDGE_AIR) || past(g) || cut_cell(g);
         let fg_of = |tone: Tone| match tone {
             Tone::Text | Tone::Block(None) => theme.text.fg,
             Tone::Heading => theme.heading,
@@ -5515,7 +5529,7 @@ impl Editor {
                 continue;
             };
             let (figure, x) = figure;
-            let top = at as f32 - index as f32 + 0.2;
+            let top = at as f32 - index as f32 + 0.2 + found.drop;
             if top + figure.height > -3.0 {
                 inks.push(Ink {
                     across: (page + x, page + x + figure.width),

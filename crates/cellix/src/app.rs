@@ -5756,9 +5756,16 @@ impl App {
             inks
         };
         let width_cells = f32::from(width);
+        // As a page's: their foot 12 px over the selection, or their top 12 px under it, where
+        // the rows by it are clear, and in the middle of a gap too small for that.
+        let serves = |row: u16| match row {
+            row if row < from.1 => Some(Serves::Under),
+            row if row > to.1 => Some(Serves::Over),
+            _ => None,
+        };
         let lifted = |(x, row): (u16, u16)| {
             let span = (f32::from(x), f32::from(x) + width_cells);
-            Some((x, row, self.bar_top(&inks_near(row), span, None)?))
+            Some((x, row, self.bar_top(&inks_near(row), span, serves(row))?))
         };
         let above = from.1.checked_sub(1);
         let below = Some(to.1 + 1).filter(|row| *row < screen.h);
@@ -5775,7 +5782,15 @@ impl App {
                     .first()
                     .copied()
                     .unwrap_or((wanted, above.or(below).unwrap_or(to.1)));
-                (x, row, 0.0)
+                // Over output with no room anywhere, still 12 px from the selection: in its
+                // row's middle it stood 6 px over it (108-terminal-ask).
+                let air = self.bar_air();
+                let top = match serves(row) {
+                    Some(Serves::Under) if air > 0.0 => 1.0 - air - tall,
+                    Some(Serves::Over) if air > 0.0 => air,
+                    _ => (1.0 - tall) / 2.0,
+                };
+                (x, row, (1.0 - tall) / 2.0 - top)
             }
         };
         let y = screen.y + row;
@@ -32059,6 +32074,49 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(app.dock.pdf.as_ref().unwrap().left, 0.0);
         app.handle(mouse(MouseKind::Drag, x - 20, y));
         assert_eq!(app.dock.pdf.as_ref().unwrap().left, 0.0, "the drag is over");
+    }
+
+    /// A table moved sideways shows a cell the page's edge cuts with none of its words, where
+    /// "col06" showed as "l06" (0.11.0's final review, S6, 161-reading-width-across).
+    #[test]
+    fn a_table_cut_at_the_pages_edge_shows_no_part_of_a_cells_words() {
+        let names: Vec<String> = (1..=40).map(|n| format!("name{n:02}")).collect();
+        let row = |cells: &[String]| format!("| {} |\n", cells.join(" | "));
+        let rule: Vec<String> = names.iter().map(|_| "---".to_string()).collect();
+        let values: Vec<String> = (1..=40).map(|n| format!("v{n:02}")).collect();
+        let source = format!(
+            "Before it.\n\n{}{}{}\nAfter it.\n",
+            row(&names),
+            row(&rule),
+            row(&values)
+        );
+        let (_dir, mut app) = page_app(&source);
+        let (x, y) = find(&screen(&app), "name01");
+        let whole: Vec<&str> = names.iter().chain(&values).map(String::as_str).collect();
+        let mut moved = false;
+        for _ in 0..40 {
+            app.handle(Event::Mouse(MouseEvent {
+                kind: MouseKind::ScrollRight,
+                x: x + 8,
+                y,
+                fine_x: f32::from(x + 8),
+                fine_y: f32::from(y) + 0.5,
+                mods: Mods::default(),
+            }));
+            let grid = screen(&app);
+            for line in [y, y + 2] {
+                let text = grid.row_text(line);
+                for word in text.split(|c: char| c == '│' || c.is_whitespace()) {
+                    let part = whole.iter().any(|w| w.ends_with(word) && *w != word);
+                    assert!(
+                        word.is_empty() || !part,
+                        "a cut cell's words: {word:?} in {text}"
+                    );
+                }
+            }
+            moved |= !grid.text().contains("name01");
+        }
+        assert!(moved, "it moved past its first column");
     }
 
     #[test]

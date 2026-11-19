@@ -228,6 +228,9 @@ pub struct Picker {
     rows: Vec<Row>,
     pub selected: usize,
     top: usize,
+    /// Standing over the place it was opened from, where the screen ends first: then its
+    /// foot stays where it is as what's found takes fewer rows.
+    over: bool,
 }
 
 impl Picker {
@@ -238,7 +241,8 @@ impl Picker {
         let x =
             at.0.min(screen.right().saturating_sub(width + 1))
                 .max(screen.x);
-        let y = if at.1 + height > screen.bottom() {
+        let over = at.1 + height > screen.bottom();
+        let y = if over {
             at.1.saturating_sub(height + 1).max(screen.y)
         } else {
             at.1
@@ -251,6 +255,7 @@ impl Picker {
             rows: Vec::new(),
             selected: 0,
             top: 0,
+            over,
         };
         picker.list();
         picker
@@ -264,9 +269,20 @@ impl Picker {
         )
     }
 
+    /// Rows its list has in view: what it found, up to `LIST_ROWS`, and one for saying it found
+    /// nothing. With all of them it stood about 450 px empty under one row that a name found
+    /// (50-emoji-picker-light).
+    fn list_rows(&self) -> u16 {
+        u16::try_from(self.rows.len())
+            .unwrap_or(LIST_ROWS)
+            .clamp(1, LIST_ROWS)
+    }
+
     pub fn area(&self) -> Rect {
         let (width, height) = Self::size();
-        Rect::new(self.origin.0, self.origin.1, width, height)
+        let fewer = LIST_ROWS - self.list_rows();
+        let y = self.origin.1 + if self.over { fewer } else { 0 };
+        Rect::new(self.origin.0, y, width, height - fewer)
     }
 
     /// Lists what the field asks for: everything by kind under the most used, or what's
@@ -390,14 +406,18 @@ impl Picker {
         if above < self.top {
             self.top = above;
         }
-        if row >= self.top + LIST_ROWS as usize {
-            self.top = row + 1 - LIST_ROWS as usize;
+        let rows = usize::from(self.list_rows());
+        if row >= self.top + rows {
+            self.top = row + 1 - rows;
         }
     }
 
     /// Moves the list by rows, as the wheel does.
     pub fn scroll(&mut self, by: isize) {
-        let last = self.rows.len().saturating_sub(LIST_ROWS as usize) as isize;
+        let last = self
+            .rows
+            .len()
+            .saturating_sub(usize::from(self.list_rows())) as isize;
         self.top = (self.top as isize + by).clamp(0, last.max(0)) as usize;
     }
 
@@ -405,7 +425,7 @@ impl Picker {
     pub fn at(&self, x: u16, y: u16) -> Option<usize> {
         let area = self.area();
         let row = y.checked_sub(area.y + HEADER_ROWS)?;
-        if row >= LIST_ROWS {
+        if row >= self.list_rows() {
             return None;
         }
         let column = (x.checked_sub(area.x + INSET)? / SQUARE) as usize;
@@ -467,7 +487,7 @@ impl Picker {
             .rows
             .iter()
             .skip(self.top)
-            .take(LIST_ROWS as usize)
+            .take(usize::from(self.list_rows()))
             .enumerate()
         {
             let y = area.y + HEADER_ROWS + line as u16;
@@ -662,6 +682,39 @@ mod tests {
         let mut text = ":shaking_face:".to_string();
         let mut caret = text.len();
         assert_eq!(close_code(&mut text, &mut caret), Some("🫨"));
+    }
+
+    /// The list is as tall as what's found, up to its nine rows, where it stood about 450 px
+    /// empty under one row (0.11.0's final review, C14, 50-emoji-picker-light). Over the place
+    /// it was opened from, its foot stays put.
+    #[test]
+    fn the_picker_is_as_tall_as_what_it_finds() {
+        let screen = Rect::new(0, 0, 80, 40);
+        for at in [(10, 2), (10, 38)] {
+            let mut picker = Picker::new(at, screen, &QUICK);
+            let full = picker.area();
+            assert_eq!(full.h, HEADER_ROWS + LIST_ROWS + FOOT_ROWS);
+            for c in "fire".chars() {
+                picker.key(Key::Char(c));
+            }
+            let found = picker.rows.len() as u16;
+            assert!((1..LIST_ROWS).contains(&found), "{found} rows for fire");
+            let area = picker.area();
+            assert_eq!(area.h, HEADER_ROWS + found + FOOT_ROWS, "{at:?}");
+            if at.1 > 20 {
+                assert_eq!(area.bottom(), full.bottom(), "its foot stays over {at:?}");
+            } else {
+                assert_eq!(area.y, full.y, "its top stays under {at:?}");
+            }
+            // A click on the first emoji found still takes it.
+            let (x, y) = (area.x + INSET, area.y + HEADER_ROWS);
+            assert_eq!(picker.at(x, y), Some(0));
+            // Nothing found keeps a row to say so.
+            for c in "zzzq".chars() {
+                picker.key(Key::Char(c));
+            }
+            assert_eq!(picker.area().h, HEADER_ROWS + 1 + FOOT_ROWS);
+        }
     }
 
     #[test]

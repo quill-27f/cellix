@@ -1819,7 +1819,7 @@ fn margin_numbers(
             .as_ref()
             .and_then(|c| c.get(index).copied())
             .unwrap_or((index as f32 + 0.5) / count);
-        let middle = 0.2 + height * share;
+        let middle = 0.2 + rows.get(first).map_or(0.0, |r| r.drop) + height * share;
         let row = first + middle.floor() as usize;
         let shift = ((middle.fract() - 0.5) * 64.0) as i8;
         let number = number.replace('$', "").replace("\\ast", "∗");
@@ -1858,15 +1858,37 @@ fn figure_rows(
         },
     );
     stop.advance = 0.0;
+    // Under a box, its source's while it's written, it keeps clear of it as a note does: its
+    // top stood 4 px under the box's foot, and a formula's numerator touched it (46).
+    let drop = if rows.last().is_some_and(|r| r.shaded) {
+        under_box_drop(0.2, context)
+    } else {
+        0.0
+    };
     rows.push(Row {
         glyphs: vec![stop],
         figure: Some((figure, ((width - shape_width) / 2.0).max(0.0))),
+        drop,
         ..Row::new(line, end)
     });
     // A click anywhere on the picture means the picture.
-    for _ in 1..(height + 0.4).ceil() as usize {
+    for _ in 1..(height + 0.4 + drop).ceil() as usize {
         rows.push(spacer(line, at));
     }
+}
+
+/// How far to lower what stands `top` rows into the row under a box, so it starts
+/// `NOTE_UNDER_BOX` px under the box's foot, in rows. None on cells.
+fn under_box_drop(top: f32, context: &Context) -> f32 {
+    let Some((_, tall)) = context
+        .measure
+        .cell_pixels()
+        .filter(|_| !context.measure.in_cells())
+    else {
+        return 0.0;
+    };
+    let tall = tall.max(1) as f32;
+    ((NOTE_UNDER_BOX - (top - BOX_UNDER) * tall) / tall).max(0.0)
 }
 
 /// Rows for a block of code, coloured by its language.
