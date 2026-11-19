@@ -1581,6 +1581,55 @@ fn control_drop(all: &[Line], index: usize, measure: &dyn Measure) -> f32 {
     }
 }
 
+/// Whether the control on row `index` of the list, on the screen's row `y`, would stand past
+/// the pane's foot: one painted part of a row down, on the pane's last row. It isn't painted
+/// there, nor pressed, till a scroll brings it up: "Show 1 resolved" stood cut in half by the
+/// docked pane's foot.
+fn cut_at_foot(all: &[Line], (index, y): (usize, u16), area: Rect, measure: &dyn Measure) -> bool {
+    y + 1 >= area.bottom() && control_drop(all, index, measure) > 0.0
+}
+
+/// A thumb at the list's right, in the air between the cards and the sheet's edge, where the
+/// list runs past the pane: as much of it as is in view, and as far down. The docked list ran
+/// on past its foot with nothing to say there was more. On cells, half blocks in the pane's
+/// last column.
+fn draw_thumb(
+    grid: &mut Grid,
+    area: Rect,
+    (rows, top): (usize, usize),
+    x: f32,
+    (measure, theme): (&dyn Measure, &Theme),
+) {
+    let last = last_of(rows, area.h);
+    if last == 0 {
+        return;
+    }
+    let shown = f32::from(area.h);
+    // Every row the list scrolls through, with the air kept under its last card.
+    let all = (rows + 1) as f32;
+    let tall = (shown * shown / all).max(THUMB_ROWS);
+    let y = f32::from(area.y) + (shown - tall) * top.min(last) as f32 / last as f32;
+    if measure.in_cells() {
+        let style = Style {
+            fg: theme.scrollbar,
+            ..theme.sidebar
+        };
+        let column = area.right().saturating_sub(1);
+        let from = y.round() as u16;
+        let to = (y + tall).round().max(f32::from(from) + 1.0) as u16;
+        for row in from..to.min(area.bottom()) {
+            grid.put_str(column, row, "\u{2590}", style, column + 1);
+        }
+        return;
+    }
+    let thumb = Bounds::cells(x - THUMB_WIDE / 2.0, y + 0.1, THUMB_WIDE, tall - 0.2);
+    grid.panel(thumb, 12, Some(theme.scrollbar), None);
+}
+
+/// The fewest rows the list's thumb is, and how wide it is in columns: the editor's, 8 px.
+const THUMB_ROWS: f32 = 1.0;
+const THUMB_WIDE: f32 = 0.5;
+
 /// Draws such a control: its chip, lighter under the pointer, with its chevron and its
 /// words from its left edge, `drop` of a row down its row.
 fn draw_control(
@@ -1782,8 +1831,15 @@ fn lay_out(
         out.push(Line::Gap);
     } else if open.is_empty() {
         out.push(Line::Empty(resolved.0 > 0));
+        // With suggestions in the text, it names them and how to go to each: "3 suggestions"
+        // over "No comments yet." read as the pane saying two things.
+        let said = match view.suggestions.map_or(0, |(count, _)| count) {
+            0 => EMPTY_HINT.to_string(),
+            1 => format!("1 suggestion in the text: Next goes to it. {EMPTY_HINT}"),
+            n => format!("{n} suggestions in the text: Next goes to each. {EMPTY_HINT}"),
+        };
         // It starts at the pane's text edge, a column outside a card's words either side.
-        let hint = wrap(EMPTY_HINT, hint_width, measure);
+        let hint = wrap(&said, hint_width, measure);
         out.extend(hint.into_iter().map(Line::EmptyHint));
         out.push(Line::Gap);
     }
@@ -2299,6 +2355,10 @@ pub fn hit(
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
     let mut row = top + y.checked_sub(area.y)? as usize;
+    // A control on the pane's last row isn't painted, as it would stand past its foot.
+    if cut_at_foot(&all, (row, y), area, measure) {
+        return None;
+    }
     // A control painted part of a row down is pressed where it's painted: not on the top
     // of its own row, and on the top of the row under it.
     let within = (fine_y - f32::from(y)).clamp(0.0, 1.0);
@@ -2685,6 +2745,9 @@ pub fn draw(
         let y = area.y + (index - top) as u16;
         if y >= area.bottom() {
             break;
+        }
+        if cut_at_foot(&all, (index, y), area, measure) {
+            continue;
         }
         let from = grid.painted_so_far();
         // A short card's buttons stand while the pointer is on it. Till then their row says
@@ -3419,6 +3482,9 @@ pub fn draw(
             grid.lift_since(from, -ACTIONS_DROP);
         }
     }
+    // The thumb in the middle of the air right of the cards.
+    let thumb_x = (a.right + f32::from(area.right())) / 2.0;
+    draw_thumb(grid, area, (all.len(), top), thumb_x, (measure, theme));
     grid.keep_to_rows(begun, area.y, area.bottom());
 }
 

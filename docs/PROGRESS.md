@@ -3630,3 +3630,13 @@ The fixcards track, from the final review's C1 and C5.
 - The tour's emoji button is a column on (`EMOJI_BUTTON`, by its column since emoji are two cells): the tools under a comment being written stand in its box with its words now.
 - Measured in the tour's pictures (50-*, 57-flow-dock, 57-dock-comments, 71-sample-*, 82-paper-changes-*, light, dark and narrow): words 24 px in from the card's edge (25 from the sheet's), the card's foot 24 px under its buttons, a short card's capitals 24 under its top and its note's tails 24 over its foot, a rewrite's box 16 px round its words and 16 over its buttons, the answer's line 12 px under the words over it with the verdict's chip 11 under it, the docked Comments' words at x45 where the Agents list's are. Delete's ink ends 26 px in, its glyphs' own side.
 - Tests: `every_card_keeps_one_inset_on_every_side`, `a_docked_cards_inset_is_the_panes_and_its_foot_is_its_top`, `an_answer_stands_on_the_cards_column_under_a_line`, `a_rewrite_stands_in_a_box_with_room_round_it`, `a_narrow_cards_buttons_stay_inside_it_with_edit_and_delete_behind_more`.
+
+## An empty list names the suggestions, and a long one has a thumb (2026-11-18)
+
+The fixcards track, from the final review's C4.
+
+- With suggestions in the text and no comment open, the pane said "3 suggestions" over "No comments yet." It says "No comments yet." and then "3 suggestions in the text: Next goes to each. Select text, then press Comment."
+- The docked list ran past its foot with nothing to say there was more, and "Show 1 resolved" stood cut in half at the pane's edge. A list that runs past the pane has a thumb in the air right of the cards, as the file has, and the order's and the resolved comments' buttons, which stand part of a row down theirs, aren't painted or pressed on the pane's last row until a scroll brings them up.
+- Not done: the thumb shows where the list is; it isn't dragged, as the file's is. The wheel scrolls the list.
+- Test changed with it: `with_no_file_in_view_comments_stand_under_a_heading_for_each_file` reads a file's count at its heading's end before the thumb, which stands in the pane's last column on cells.
+- Tests: `an_empty_list_names_the_suggestions_in_the_text`, `a_long_list_has_a_thumb_and_nothing_cut_at_the_panes_foot`.

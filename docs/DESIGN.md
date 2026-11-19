@@ -553,7 +553,12 @@ count quiet: filled grey, the kinds with comments read as switched on, which onl
 is. The pills count the
 reviewer's own comments: a suggestion not yet kept covers nothing, and was counted. With no
 comment open, the pane says to select text and press Comment, the button a selection shows,
-which names the keys as they're set; it named only Alt+C.
+which names the keys as they're set; it named only Alt+C. With suggestions in the text it names
+them first, "3 suggestions in the text: Next goes to each.", since "3 suggestions" over "No
+comments yet." read as the pane saying two things. A list that runs past the pane has a thumb at
+its right, in the air between the cards and the sheet's edge, as the file has; and the order's
+and the resolved comments' buttons, which stand part of a row down theirs, aren't painted or
+pressed on the pane's last row, where its foot cut them in half, until a scroll brings them up.
 
 An agent that has done what a comment asks says so with `cellix reply <id> --done "what it
 did"`, a reply that starts "Addressed:". Its card says "Addressed by Claude" in a green pill, and

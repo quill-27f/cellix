@@ -6599,5 +6599,12 @@
     "title": "Every comment card keeps one 24 px inset on every side, a rewrite its own 16 px box, and Edit and Delete go behind a ⋯ where they don't fit",
     "test": "every_card_keeps_one_inset_on_every_side",
     "passes": true
+  },
+  {
+    "id": "empty-list-and-thumb",
+    "milestone": 15,
+    "title": "An empty Comments list names the suggestions in the text, and a long one has a thumb with nothing cut at the pane's foot",
+    "test": "a_long_list_has_a_thumb_and_nothing_cut_at_the_panes_foot",
+    "passes": true
   }
 ]

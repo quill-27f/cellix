@@ -586,6 +586,117 @@ fn the_kinds_pills_are_outlines_and_the_head_says_the_kind_listed() {
     }
 }
 
+/// The words in the Comments pane, its rows joined, so what wraps reads as one run.
+fn pane_words(app: &App, grid: &Grid) -> String {
+    let pane = app.dock_panel().expect("the Comments pane");
+    let rows: Vec<String> = (pane.y..pane.bottom())
+        .map(|y| grid.row_text(y).chars().skip(usize::from(pane.x)).collect())
+        .collect();
+    rows.join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// With no comment open and suggestions in the text, the empty list names them and how to go
+/// to each: "3 suggestions" stood over "No comments yet." with nothing to say how the two
+/// went together.
+#[test]
+fn an_empty_list_names_the_suggestions_in_the_text() {
+    let (_dir, mut app) = page("# Notes\n\nKeep {++added++} and {--gone--} and {~~old~>new~~}.\n");
+    show_comments(&mut app);
+    let words = pane_words(&app, &screen(&app));
+    assert!(words.contains("3 suggestions"), "{words}");
+    assert!(
+        words.contains("No comments yet. 3 suggestions in the text: Next goes to each."),
+        "{words}"
+    );
+    assert!(words.contains("then press Comment."), "{words}");
+}
+
+/// A list that runs past the docked pane has a thumb at its right, in the air beside the
+/// cards, as the file has; and a control that would stand past the pane's foot isn't painted
+/// or pressed until a scroll brings it up: "Show 1 resolved" stood cut in half at the docked
+/// pane's foot, with nothing to say the list went on.
+#[test]
+fn a_long_list_has_a_thumb_and_nothing_cut_at_the_panes_foot() {
+    let words = [
+        "alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf",
+    ];
+    let text: String = words.iter().map(|w| format!("The {w} line.\n\n")).collect();
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("note.md"), text).unwrap();
+    // About the size Claude Code docks Cellix at, the pane under the file.
+    let mut app = App::new(dir.path().to_path_buf(), (64, 40));
+    app.open(&dir.path().join("note.md")).unwrap();
+    for (line, word) in words.iter().enumerate() {
+        app.add_comment("note.md".to_string(), line * 2, format!("About {word}?"));
+    }
+    let last = app.threads.last().unwrap().id;
+    app.thread_hit(crate::threads::Hit::Resolve(last));
+    show_comments(&mut app);
+    let pane = app.dock_panel().expect("the pane");
+    let grid = painted(&mut app);
+    let thumb = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            fill: Some(fill),
+            ..
+        } if *fill == app.theme.scrollbar && bounds.y >= i32::from(pane.y) * UNIT => Some(*bounds),
+        _ => None,
+    });
+    let thumb = thumb.expect("a thumb, as the list runs past the pane");
+    let card = cards(&app, &grid)[0].0;
+    let (thumb_left, card_right) = (px(thumb.x), px(card.x + card.w));
+    assert!(
+        thumb_left - card_right >= 8.0,
+        "clear of the cards: {thumb_left} {card_right}"
+    );
+    assert!(px(thumb.x + thumb.w) <= f32::from(pane.right()) * CELL - 8.0);
+    // Where the button for the resolved one is in the list, as the pixels lay it out: the
+    // first scroll that paints it, and the row it's on then.
+    airy(&mut app);
+    let shown = |grid: &Grid| {
+        grid.paint.iter().find_map(|p| match p {
+            Paint::Text { y, text, .. } if text.starts_with("Show 1 resolved") => Some(*y),
+            _ => None,
+        })
+    };
+    let index = (0..60)
+        .find_map(|top| {
+            app.dock.tops.set(super::Front::Comments, top);
+            let y = shown(&screen(&app))?;
+            Some(top + (y / UNIT) as usize - usize::from(pane.y))
+        })
+        .expect("the button for the resolved one");
+    // A scroll that puts it on the row over the pane's last: painted whole there.
+    let foot = usize::from(pane.h - 1);
+    app.dock.tops.set(super::Front::Comments, index - foot + 1);
+    let y = shown(&screen(&app)).expect("painted while it's whole");
+    assert_eq!(
+        y / UNIT,
+        i32::from(pane.bottom() - 2),
+        "on the row over the last"
+    );
+    assert!(
+        y + UNIT <= i32::from(pane.bottom()) * UNIT,
+        "inside the pane"
+    );
+    // A row further on it's on the last row: not painted cut in half, nor pressed there.
+    app.dock.tops.set(super::Front::Comments, index - foot);
+    assert_eq!(shown(&screen(&app)), None, "not painted cut in half");
+    click(&mut app, pane.x + 4, pane.bottom() - 1);
+    assert!(
+        !screen(&app).text().contains("Hide 1 resolved"),
+        "nor pressed"
+    );
+    // Up again, a press on it shows the resolved one.
+    app.dock.tops.set(super::Front::Comments, index - foot + 1);
+    click(&mut app, pane.x + 4, pane.bottom() - 2);
+    cells(&mut app);
+    assert!(screen(&app).text().contains("Hide 1 resolved"));
+}
+
 /// Rows of the tour's terminal, in pixels, and the line its words are set for.
 const ROW: f32 = 50.0;
 const LINE: f32 = 36.0;

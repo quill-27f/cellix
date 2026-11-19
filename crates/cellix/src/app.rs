@@ -28019,8 +28019,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             row("Name it better"),
         ];
         assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{text}");
+        // Its count ends the row, before the list's thumb in the pane's last column.
         let heading = grid.row_text(row("alpha.txt"));
-        assert!(heading.trim_end().ends_with('2'), "how many: {heading}");
+        let heading = heading.trim_end().trim_end_matches('\u{2590}').trim_end();
+        assert!(heading.ends_with('2'), "how many: {heading}");
 
         let (x, y) = find(&grid, "src/lib.rs");
         click(&mut app, x, y);
