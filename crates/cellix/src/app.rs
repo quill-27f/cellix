@@ -20020,10 +20020,14 @@ impl App {
                 .filter(|chip| chip.y == y)
                 .map_or(screen.right(), |chip| chip.x.saturating_sub(2));
             if self.hover.is_some_and(|h| line.contains(h.0, h.1)) {
-                // From the pane's first column, where its sheet starts, to its last.
+                // From the pane's first column, where its sheet starts, to its last, and the
+                // row's whole height, as a row of a list that holds a button is washed (a
+                // server's row in Settings too): its button keeps 8 px and more from the
+                // band's edges. Set in from the row, the band stood a pixel under Ask Agent
+                // once the button went down onto the row's baseline.
                 let pane = self.dock_area().unwrap_or(screen);
                 let whole = Rect::new(pane.x, y, pane.right().saturating_sub(pane.x), 1);
-                let band = measures::band(whole, self.pane_edge(), 0.06, &*self.measure);
+                let band = measures::band(whole, self.pane_edge(), 0.0, &*self.measure);
                 grid.panel(band, 12, Some(theme.row_hover), None);
             }
             match row {
@@ -20079,7 +20083,10 @@ impl App {
                 },
                 ..theme.sidebar
             };
+            // On the row's baseline as far as keeps `LINE_AIR` from the band's foot.
+            let from = grid.painted_so_far();
             grid.row_button((chip.x, chip.y), &cells, "Ask Agent", fill, style);
+            grid.lift_since(from, measures::row_button_foot_lift(&*self.measure));
         }
     }
 
@@ -32766,10 +32773,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     }
 
     /// Where a row has room, the button on a pointed row is shorter than the wash behind it:
-    /// the height it has on the terminal's line, 32 px, on the row's baseline with its words, so
-    /// the wash shows 7 px over it and its foot is on the wash's. Both were a control's height,
-    /// 39 px in a row of 50: the button's edges lay on
-    /// the wash's, and the two read as one shape with a step in it. At 27 px, for 6 px of
+    /// the height it has on the terminal's line, 32 px, in a wash the row's whole height, 8 px
+    /// and more from its top and its foot. Both were a control's height, 39 px in a row of 50:
+    /// the button's edges lay on the wash's, and the two read as one shape with a step in it;
+    /// in a wash of 39 on the row's baseline, its foot was on the wash's. At 27 px, for 6 px of
     /// wash, a "g"'s tail ended a pixel off its foot.
     #[test]
     fn a_button_on_a_pointed_row_stands_inside_the_wash() {
@@ -32822,21 +32829,23 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         };
         // Rows of 50 px, the airy height on a line of 36.
         let ((wash_top, wash), (top, button)) = shapes(&mut app, 50);
-        assert!((wash - 39.0).abs() < 0.5, "the wash is a control: {wash}");
-        // Down with its words onto the row's baseline (`WORDS_BASELINE`), 3 px under the
-        // wash's middle, its foot on the wash's.
+        assert!(
+            wash_top.abs() < 0.5 && (wash - 50.0).abs() < 0.5,
+            "the wash is the whole row: {wash_top}, {wash}"
+        );
+        // Down towards the row's baseline as far as keeps 8 px from the wash's foot.
         let (over, under) = (top - wash_top, wash_top + wash - top - button);
         assert!(
-            under >= 0.0 && (5.0..=7.5).contains(&(over - under)),
+            over >= 8.0 && under >= 8.0 && over >= under,
             "{over} px of the wash over the button and {under} under it"
         );
         assert!(
             (button - 0.88 * 36.0).abs() < 0.5,
             "its height on the terminal's line: {button}"
         );
-        // On the terminal's own line there's no room for that: a button like any other.
+        // On the terminal's own line it's a button like any other, inside the row's wash.
         let ((wash_top, wash), (top, button)) = shapes(&mut app, 36);
-        assert!((wash - button).abs() < 0.5 && (wash_top - top).abs() < 0.5);
+        assert!(top >= wash_top && top + button <= wash_top + wash + 0.5);
     }
 
     /// A problem's message that doesn't fit its row ends in an ellipsis, two columns clear

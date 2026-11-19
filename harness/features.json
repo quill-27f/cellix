@@ -7061,5 +7061,12 @@
     "title": "A card that asks has its buttons at its right, the answer last and rightmost, one gap between each",
     "test": "a_cards_buttons_end_at_its_right_with_the_answer_last",
     "passes": true
+  },
+  {
+    "id": "pointed-row-washed-whole",
+    "milestone": 15,
+    "title": "A pointed row of a list that holds a button is washed its whole height, its button 8 px and more from the wash's edges",
+    "test": "a_pointed_row_with_a_button_is_washed_whole_round_it",
+    "passes": true
   }
 ]

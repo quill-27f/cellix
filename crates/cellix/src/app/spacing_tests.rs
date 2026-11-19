@@ -1047,6 +1047,56 @@ fn a_cards_buttons_end_at_its_right_with_the_answer_last() {
     assert!(app.outgoing_clipboard.is_some(), "Copy Command copied");
 }
 
+/// A row of a list that holds a button is washed its whole height when pointed at, so the
+/// button on it has 8 px and more of the wash over and under it: Problems' Ask Agent, as a
+/// language server's Install in Settings. In a wash of 39 px set in from the row, Ask Agent's
+/// foot lay on the wash's once it went down onto the row's baseline (the polish review).
+/// Measured in the picture.
+#[test]
+fn a_pointed_row_with_a_button_is_washed_whole_round_it() {
+    let (dir, mut app) = project((150, 40));
+    let problem = Diagnostic {
+        line: 0,
+        column: 0,
+        message: "cannot find value".to_string(),
+        severity: 1,
+    };
+    app.diagnostics
+        .insert(dir.path().join("src/lib.rs"), vec![problem]);
+    app.toggle_problems();
+    let text = screen(&app).text();
+    let (y, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("cannot find"))
+        .expect("the problem's row");
+    let x = line[..line.find("cannot find").unwrap()].chars().count();
+    let y = u16::try_from(y).unwrap();
+    app.handle(mouse(MouseKind::Move, u16::try_from(x).unwrap(), y));
+    let (chip, ..) = app.problem_ask_at(y).expect("Ask Agent");
+    let grid = screen(&app);
+    let rows = picture(&grid, y..y + 1);
+    let wash = app.theme.row_hover;
+    let quiet = app.theme.quiet_button(wash);
+    // Down a column inside the button, clear of its corners and its words.
+    let column: Vec<Rgb> = rows
+        .iter()
+        .map(|row| row[usize::from(chip.x) * 17 + 12])
+        .collect();
+    let button: Vec<usize> = (0..column.len()).filter(|y| column[*y] == quiet).collect();
+    let (top, foot) = (button[0], *button.last().expect("its chip"));
+    let washed = |range: std::ops::Range<usize>| range.into_iter().all(|y| column[y] == wash);
+    assert!(
+        washed(0..top.saturating_sub(1)) && washed(foot + 2..column.len()),
+        "the wash the whole row round it: {column:?}"
+    );
+    let under = column.len() - 1 - foot;
+    assert!(
+        top >= 8 && under >= 8,
+        "{top} px of the wash over the button and {under} under it"
+    );
+}
+
 /// The table picker's squares stand as far from its top as from its sides: on its first row
 /// they were 7 px from its top and 20 from its sides.
 #[test]

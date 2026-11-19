@@ -1128,16 +1128,19 @@ either (see Look). Three more follow from the same room:
   the row's own ground. Given the wash's colour, they were a whole row of it behind a button
   that's 0.78 of one.
 - That button stands inside the wash (`Grid::row_button`, `raster::inset`): it's the
-  height it has on the terminal's line, 32 px, in a row of 50, and the wash, a control of 39
-  px, shows over it. Its words' span, a capital's top to a tail's foot, stands in its middle,
+  height it has on the terminal's line, 32 px, in a row of 50, and a row of a list that holds
+  a button is washed its whole height when pointed at (Problems, Settings' language servers),
+  so the button has 10 px of it over and 8 under. In a wash of 39 px set in from the row, its
+  foot lay on the wash's once it went down onto the row's baseline (the polish review). Its words' span, a capital's top to a tail's foot, stands in its middle,
   5 px clear of it either way, as every button's does, and it goes down with its words onto
   the baseline of the row's own words (`Grid::beside_words`, `WORDS_BASELINE`, 3 px on a row
   of 50): 12 px over it and 6 under in the row, its foot on a pointed row's wash's. A label
   in 90 per cent of the row's size rode 3 px over the words beside it (0.11.0's release check,
   R2, and the polish review: Keep, Ask Agent, Keep as Tab). Peek's header has its line at the
   row's foot, so there Keep as Tab goes down only as far as keeps 8 px from it, a pixel, and
-  its words stand 2 px over the name's; so does Install on a server's row in Settings, whose
-  wash is the row's whole height (`measures::row_button_foot_lift`). As tall
+  its words stand 2 px over the name's; so do Install and Ask Agent in their whole-row washes
+  (`measures::row_button_foot_lift`). The suggestion's row in Review (Keep and Dismiss) has no
+  wash, and its buttons stand on its baseline. As tall
   as the wash, its edges lay on the wash's and the two read as one shape with a step in it; at
   27 px, for 6 px of wash, a "p"'s tail ended on its foot (0.11.0's release review: Keep, Keep
   as Tab, Show Source, Ask Agent, Install). Its corners are 6 px where a button's are 8 (`ROW_BUTTON_RADIUS`),
