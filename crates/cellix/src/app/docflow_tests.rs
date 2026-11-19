@@ -202,16 +202,69 @@ fn inside_claude_code_a_documents_comments_start_a_turn() {
         Some(super::SEND_PROMPT)
     );
     assert!(take_threads(&mut app).contains("Why first?"));
-    // Ask Agent on a card starts one too.
+    // Ask Agent on a card starts one too, with that comment alone as its prompt: it started
+    // one with Send's prompt, and the hook handed over every comment that waited.
     comment(&mut app, "goes", "And this?");
+    comment(&mut app, "first", "Still waiting");
     app.dock.show_comments();
     let text = screen(&app).text();
     assert!(text.contains("Goes to Claude Code"), "{text}");
-    press_button(&mut app, "Ask Agent");
-    assert_eq!(
-        app.take_outgoing_prompt().as_deref(),
-        Some(super::SEND_PROMPT)
+    let id = app
+        .threads
+        .iter()
+        .find(|t| t.text == "And this?")
+        .unwrap()
+        .id;
+    app.thread_hit(super::ThreadHit::Ask(id));
+    let prompt = app.take_outgoing_prompt().expect("a turn for it");
+    assert!(prompt.contains("And this?"), "{prompt}");
+    assert!(prompt.contains("cellix reply"), "{prompt}");
+    assert!(!prompt.contains("Still waiting"), "{prompt}");
+    assert!(alone(&mut app, &prompt), "its prompt goes alone");
+    assert!(take_threads(&mut app).contains("Still waiting"));
+}
+
+/// Whether the prompt hook, asking about `prompt`, is told it goes alone.
+fn alone(app: &mut App, prompt: &str) -> bool {
+    let (reply, answer) = std::sync::mpsc::channel();
+    let key = cellix_agent::prompt_key(prompt);
+    app.serve(Request::Alone { key, reply });
+    answer.recv().unwrap()
+}
+
+/// Ask Agent on one comment's card hands the agent that comment and nothing else. It typed
+/// the comment in, and the prompt hook then handed over every other comment that waited, so
+/// the agent answered all of them. The others wait for the next ordinary prompt, or Send.
+#[test]
+fn ask_agent_on_one_card_sends_that_comment_alone() {
+    let (dir, mut app) = page("The cache goes first.\n\nThen the tests run.\n");
+    comment(&mut app, "cache", "Why first?");
+    comment(&mut app, "tests", "Which tests?");
+    stand_in(&mut app, "Claude Code", "heard.txt");
+    app.dock.show_comments();
+    let id = app
+        .threads
+        .iter()
+        .find(|t| t.text == "Which tests?")
+        .unwrap()
+        .id;
+    app.thread_hit(super::ThreadHit::Ask(id));
+    let said = heard(&mut app, &dir.path().join("heard.txt"), "Which tests?");
+    assert!(!said.contains("Why first?"), "{said}");
+    // The hook, asking about the prompt the agent got, is told it goes alone, and only once.
+    let prompt = said.trim_end_matches(['\r', '\n']);
+    assert!(alone(&mut app, prompt), "{prompt}");
+    assert!(
+        !alone(&mut app, prompt),
+        "a second prompt with its words is ordinary"
     );
+    assert!(!alone(&mut app, "carry on"));
+    // The other waits for the next ordinary prompt, and goes then.
+    let waiting = app.threads.iter().find(|t| t.text == "Why first?").unwrap();
+    assert!(waiting.waiting(), "{waiting:?}");
+    let taken = take_threads(&mut app);
+    assert!(taken.contains("Why first?"), "{taken}");
+    assert!(!taken.contains("Which tests?"), "{taken}");
 }
 
 /// An agent's suggestion on a document, kept, is the person's comment, and goes to the

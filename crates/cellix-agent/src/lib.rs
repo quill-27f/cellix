@@ -118,6 +118,13 @@ pub enum Request {
     /// Wants everything no agent has had yet, as JSON comments, and takes nothing: the
     /// review's comments on code and the comments on documents, which are threads.
     Waiting(Sender<String>),
+    /// Asks whether the prompt with this key (`prompt_key`) is one Cellix typed in to go on
+    /// its own, as Ask Agent on one comment's card does, so the prompt hook hands it nothing
+    /// else. Answered once: a second prompt with the same words is an ordinary one.
+    Alone {
+        key: u64,
+        reply: Sender<bool>,
+    },
     /// A plan is waiting. The connection stays open until `reply` is answered or dropped.
     Plan {
         path: PathBuf,
@@ -135,6 +142,12 @@ fn fnv(text: &str) -> u64 {
     text.bytes().fold(0xcbf29ce484222325, |hash, byte| {
         (hash ^ byte as u64).wrapping_mul(0x100000001b3)
     })
+}
+
+/// What tells a prompt Cellix typed in from any other: its words, however an agent spaced
+/// them on the way to its hook.
+pub fn prompt_key(prompt: &str) -> u64 {
+    fnv(&prompt.split_whitespace().collect::<Vec<_>>().join(" "))
 }
 
 /// How agents reach a Cellix.
@@ -299,6 +312,18 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             Ok(threads
                 .recv_timeout(ANSWER_TIME)
                 .unwrap_or_else(|_| "[]".to_string()))
+        }
+        // Whether a prompt goes on its own: "yes" once for one Cellix typed in that way.
+        (Some("alone"), Some(key)) => {
+            let Ok(key) = u64::from_str_radix(key.trim(), 16) else {
+                return Ok("error: alone needs a prompt's key".into());
+            };
+            let (reply, alone) = channel();
+            ask(requests, Request::Alone { key, reply });
+            Ok(match alone.recv_timeout(ANSWER_TIME) {
+                Ok(true) => "yes".to_string(),
+                _ => "no".to_string(),
+            })
         }
         (Some("reply"), Some(rest)) => {
             let Some((head, text)) = rest.split_once('\t') else {

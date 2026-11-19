@@ -7082,5 +7082,12 @@
     "title": "A background answer that comes after its wait still sets Cellix's colours",
     "test": "pty_a_late_answer_about_the_colour_still_counts",
     "passes": true
+  },
+  {
+    "id": "ask-one-comment-alone",
+    "milestone": 15,
+    "title": "Ask Agent on one comment's card hands the agent that comment alone",
+    "test": "ask_agent_on_one_card_sends_that_comment_alone",
+    "passes": true
   }
 ]

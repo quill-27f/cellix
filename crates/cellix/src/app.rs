@@ -1639,6 +1639,9 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// The prompts typed in to go on their own, by `cellix_agent::prompt_key`: one comment
+    /// asked about from its card. The prompt hook asks, and hands that prompt nothing else.
+    alone: Vec<u64>,
     /// A `Z` typed in Neovim's normal mode, waiting to see if it's `ZZ` or `ZQ`.
     neovim_z: bool,
     /// A review check waiting for an agent to be started.
@@ -1787,6 +1790,7 @@ impl App {
             task_shown: false,
             clipboard_image: clipboard_image_command(),
             pending_ask: None,
+            alone: Vec::new(),
             pending_review: None,
             neovim_z: false,
             outgoing_prompt: None,
@@ -12538,6 +12542,16 @@ impl App {
     }
 
     /// Says these threads have been told to an agent, as they are now.
+    /// Notes a prompt typed in to go on its own, for the prompt hook to ask about. A handful
+    /// at most: one never submitted shouldn't make a later one with its words go alone.
+    fn go_alone(&mut self, prompt: &str) {
+        const KEPT: usize = 8;
+        self.alone.push(cellix_agent::prompt_key(prompt));
+        if self.alone.len() > KEPT {
+            self.alone.remove(0);
+        }
+    }
+
     fn mark_told(&mut self, ids: &[u32]) {
         for thread in self.threads.iter_mut().filter(|t| ids.contains(&t.id)) {
             thread.told = Some(thread.replies.len());
@@ -13025,19 +13039,21 @@ impl App {
                     .iter()
                     .find(|t| t.id == id)
                     .map(Thread::message);
+                // What's typed in goes alone: the prompt hook asks whether it was sent this
+                // way and hands it nothing else, so the other comments wait for the next
+                // ordinary prompt or Send. It handed over every one that waited.
                 match (message, self.dock.agent_mut()) {
-                    // Inside Claude Code the mod starts a turn now, and the prompt hook hands
-                    // it over, with whatever else waits.
-                    (Some(_), None) if self.in_pane => {
-                        self.outgoing_prompt = Some(SEND_PROMPT.to_string());
+                    // Inside Claude Code the mod starts a turn with it now.
+                    (Some(message), None) if self.in_pane => {
+                        self.go_alone(&message);
+                        self.outgoing_prompt = Some(message);
+                        self.mark_told(&[id]);
                         self.say("Sending it to Claude Code. Its answer lands here");
                     }
                     (Some(message), Some(session)) => {
                         session.send_line(&message);
-                        if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
-                            thread.told = Some(thread.replies.len());
-                        }
-                        self.save_threads();
+                        self.go_alone(&message);
+                        self.mark_told(&[id]);
                         self.say("Sent to the agent. Its answer lands here");
                     }
                     // Something's already at work on this project, outside the pane. Its
@@ -13552,6 +13568,13 @@ impl App {
                         self.say(format!("{author} answered a comment"));
                     }
                 }
+            }
+            Request::Alone { key, reply } => {
+                let found = self.alone.iter().position(|k| *k == key);
+                if let Some(at) = found {
+                    self.alone.remove(at);
+                }
+                let _ = reply.send(found.is_some());
             }
             Request::TakeThreads(reply) => {
                 let mut sent = Vec::new();

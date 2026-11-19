@@ -726,7 +726,15 @@ they can reach into the row by theirs, and a click takes them where they're pain
 that reports no pixels says a click is in its row's middle, and there their own row takes it. Comments are written in the side
 pane, with what they're about in view. Ask Agent sends the comment to the agent as soon as it's
 written, with its file, line and all of what was selected, and how to answer
-with `cellix reply`, so the answer lands under it. Inside Claude Code it puts the file and the whole
+with `cellix reply`, so the answer lands under it. It goes alone, as does Ask Agent on one
+comment's card: Cellix keeps a key of the prompt it typed in (its words, however they're spaced,
+`cellix_agent::prompt_key`), and the prompt hook asks first whether its prompt is one of those
+(`alone <key>` over the socket, answered yes once). Told so, it hands the agent nothing else, and
+the other comments wait for the next ordinary prompt or Send. Until 20 November 2026 the hook
+handed every waiting comment to every prompt, so an agent asked about one answered all of them.
+Inside Claude Code the mod starts the turn with that comment as its prompt, where it started one
+with Send's prompt for the hook to fill. A Cellix from before answers that it doesn't know the
+request, and the hook hands over everything as it did. Inside Claude Code it puts the file and the whole
 selection in Claude Code's prompt instead, a passage set out as a quote. A comment is typed as any
 text box is, with a caret that moves by letter and word and the Mac's word deletes. Resolving one
 stops marking its words at once; the pane can show resolved comments again, to reopen them. A picture's comment names its file, so the agent can open it. All of

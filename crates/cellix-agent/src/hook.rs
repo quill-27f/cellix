@@ -384,6 +384,14 @@ fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
     if !takes_context(&agent_of(input)) {
         return None;
     }
+    // One comment asked about on its own, from its card, goes alone: the others wait for the
+    // next ordinary prompt or Send. A Cellix from before this answers that it doesn't know the
+    // request, and hands over everything as it did.
+    let prompt = input["prompt"].as_str().unwrap_or("");
+    let key = crate::prompt_key(prompt);
+    if ask(roots, &format!("alone {key:016x}")).as_deref() == Some("yes") {
+        return None;
+    }
     let comments: Vec<Comment> = ask(roots, "take")
         .and_then(|reply| serde_json::from_str(&reply).ok())
         .unwrap_or_default();
@@ -1020,6 +1028,49 @@ mod tests {
         assert!(context.contains("a.rs line 3: why?"), "{context}");
         assert!(shared.lock().unwrap().is_empty(), "delivered once");
         assert_eq!(handle("prompt", &hook), None);
+    }
+
+    /// Ask Agent on one comment's card types that comment in, and its prompt goes alone: the
+    /// hook asks whether the prompt is one sent that way and, told so, hands the agent nothing
+    /// else. Another prompt still carries what waits.
+    #[test]
+    fn a_comment_asked_on_its_own_goes_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let shared: SharedComments = Arc::new(std::sync::Mutex::new(vec![comment()]));
+        let server = start(&root, shared.clone()).unwrap();
+        let alone = "Comment 2 on note.md line 1, about \"ICL\": what is it?";
+        let answering = std::thread::spawn(move || {
+            let mut asked = Vec::new();
+            while let Ok(request) = server.requests.recv_timeout(Duration::from_secs(3)) {
+                match request {
+                    Request::Alone { key, reply } => {
+                        asked.push(key);
+                        let _ = reply.send(key == crate::prompt_key(alone));
+                    }
+                    Request::TakeThreads(reply) => {
+                        let _ = reply.send("[]".to_string());
+                    }
+                    _ => {}
+                }
+            }
+            asked
+        });
+        // The agent may space it differently on the way to its hook.
+        let spaced = format!("  {}\n", alone.replace(", about", ",\n about"));
+        let hook = input(&root, json!({ "prompt": spaced }));
+        assert_eq!(handle("prompt", &hook), None, "nothing else is handed over");
+        assert_eq!(
+            shared.lock().unwrap().len(),
+            1,
+            "the review's comment waits"
+        );
+        let other = input(&root, json!({"prompt": "carry on"}));
+        let output = handle("prompt", &other).expect("the next prompt carries it");
+        assert!(output.contains("a.rs line 3: why?"), "{output}");
+        assert!(shared.lock().unwrap().is_empty());
+        let asked = answering.join().unwrap();
+        assert_eq!(asked.len(), 2, "each prompt asked once: {asked:?}");
     }
 
     #[test]

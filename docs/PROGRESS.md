@@ -4077,3 +4077,13 @@ Track R, which 0.11.1 waits on. Seen in a tour scene on a loaded machine: queue.
 ## The mux test of Ctrl+Shift+P looks for a command by name (2026-11-20)
 
 - `ctrl_shift_chords_arrive_with_csi_u_keys` (`harness/x mux`, which CI doesn't run) waited for "Select All" on screen after Ctrl+Shift+P in tmux with csi-u keys. The chord arrived and the commands opened, but the list has grown past the 30-row pane, Agent commands first, so "Select All" was never on the first screen: the test was out of date, not the code. It now waits for the commands' own prompt, "Type to search" (Ctrl+P's says "Search files"), types "select all", and waits for "Edit: Select All", which Ctrl+P's files can't show. Sent plain Ctrl+P instead, it fails; with the chord, `harness/x mux` passes all 5.
+
+## Ask Agent on one comment's card sends that comment alone (2026-11-20)
+
+The first part of the user's Ask report (polish track Q): asked about one comment, the agent answered every waiting one.
+
+- Ask Agent on a card typed the comment into the agent's terminal, and the agent's prompt hook then handed over every other comment that waited, as "Review comments on your changes: …". Now Cellix keeps a key of each prompt it types in to go on its own (`cellix_agent::prompt_key`: its words, however they're spaced), and the prompt hook first asks `alone <key>` over the socket. Told yes (once), it hands that prompt nothing else, so the other comments wait for the next ordinary prompt or Send N. A Cellix from before answers "unknown request" and the hook hands over everything, as it did.
+- Inside Claude Code the mod starts the turn with that comment's own message as its prompt, where it started one with Send's prompt for the hook to fill with everything.
+- Tests: `a_comment_asked_on_its_own_goes_alone` (the hook against a real socket: a prompt Cellix says goes alone, spaced differently on the way, takes nothing and leaves the review's comment waiting; the next prompt carries it), `ask_agent_on_one_card_sends_that_comment_alone` (two comments, a stand-in agent in the pane: Ask on one, the stand-in hears only it, the hook's question about that prompt is answered yes once, and the other is still waiting and is what the next take hands over). Changed with the rule: `inside_claude_code_a_documents_comments_start_a_turn` asserted Send's prompt for Ask on a card; it asserts the comment's own message, which goes alone, and that the other comment still waits.
+- Unverified: a real agent's prompt hook seeing the typed message word for word (Claude Code's `prompt` field). Where an agent changes the words, the key doesn't match and the hook hands over everything, as before.
+- Next: Ask, a side question about a selection, answered in the background and never a comment.
