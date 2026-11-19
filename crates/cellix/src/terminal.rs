@@ -59,18 +59,26 @@ fn terminal_gone() -> bool {
     found > 0 && input.revents & (libc::POLLHUP | libc::POLLNVAL | libc::POLLERR) != 0
 }
 
+/// How long crossterm is given to look at what's come, where the loop means "now". Zero was
+/// never looked with on Linux: crossterm's /dev/tty source (`use-dev-tty`, Linux only) loops
+/// while time is left, so given none it read nothing from the terminal and handed over none
+/// of what it had already read. Waking on a terminal that had a key, the loop asked it,
+/// heard nothing, and went round again for ever: no key reached Cellix, and 28 of the PTY
+/// tests failed on CI's Linux. Elsewhere it's a tenth of a millisecond more to wait at most.
+const LOOK: Duration = Duration::from_micros(100);
+
 /// Waits up to `wait` for a key, or, where `woken`, for a session on screen to print
 /// (`wake.rs`). Says whether input is waiting. crossterm keeps what it has read and not yet
 /// handed over, so it's asked first; then the terminal and the pipe are waited on together.
 fn wait_for_input(wait: Duration, woken: bool) -> io::Result<bool> {
     #[cfg(unix)]
     if woken {
-        if ct::poll(Duration::ZERO)? {
+        if ct::poll(LOOK)? {
             return Ok(true);
         }
         let woke = crate::wake::wait(libc::STDIN_FILENO, wait)?;
         return if woke.input {
-            ct::poll(Duration::ZERO)
+            ct::poll(LOOK)
         } else {
             Ok(false)
         };
@@ -1441,11 +1449,7 @@ pub fn run(options: Options) -> io::Result<()> {
                     }
                     // Inside a message the rest is on its way: it's waited for, rather than
                     // drawing a frame each time the terminal's pipe runs dry.
-                    let patience = if osc.reading() {
-                        OSC_PATIENCE
-                    } else {
-                        Duration::ZERO
-                    };
+                    let patience = if osc.reading() { OSC_PATIENCE } else { LOOK };
                     let more = ct::poll(patience)?;
                     // An Alt+] with nothing after it, even after waiting, was only a key.
                     if !more {
