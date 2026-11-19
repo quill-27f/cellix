@@ -735,6 +735,88 @@ fn a_card_has_a_dialogs_air_round_it() {
     );
 }
 
+/// A card over the side pane stands 16 px from the pane's lines on both sides with its words
+/// 24 px in, its buttons ending inside its words' column, and a command's box 16 px outside
+/// that column with the command on it. The install, logout and stopped-session cards stood
+/// 24 px from the pane's left line and 33 from its right with their words 33 px in, and the
+/// logout card's box had its edge on its words' column, 12 px from its own words.
+#[test]
+fn a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.server_install = Some("exit 0".to_string());
+    app.open(&dir.path().join("Main.java")).unwrap();
+    app.run(Command::ListAgents);
+    app.servers.clear();
+    app.note_missing("Java");
+    let buttons = [app.theme.button, app.theme.quiet_button(app.theme.popup)];
+    // The card under `title`: its panel, and where its words start, in pixels.
+    let card = |app: &App, grid: &Grid, title: &str| {
+        let words = words_at(grid, title);
+        let found = grid.paint.iter().rev().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                ..
+            } if px(bounds.x) <= words && words < px(bounds.x + bounds.w) && bounds.h > UNIT => {
+                Some(*bounds)
+            }
+            _ => None,
+        });
+        let found = found.unwrap_or_else(|| panic!("{title}'s card"));
+        let (left, right) = gaps(app, found);
+        assert!(
+            (14.5..=17.5).contains(&left),
+            "{title}: {left} px from the pane's left"
+        );
+        assert!(
+            (14.5..=17.5).contains(&right),
+            "{title}: {right} px from its right"
+        );
+        let inside = words - px(found.x);
+        assert!(
+            (22.5..=26.5).contains(&inside),
+            "{title}: its words {inside} px in"
+        );
+        // Its buttons end at least as far in from its right.
+        for (bounds, fill, ..) in panels(grid) {
+            let within = bounds.x >= found.x && bounds.x + bounds.w <= found.x + found.w;
+            if within && bounds.h < UNIT && fill.is_some_and(|f| buttons.contains(&f)) {
+                let end = px(found.x + found.w) - px(bounds.x + bounds.w);
+                assert!(
+                    end >= inside - 1.5,
+                    "{title}: a button ends {end} px from its right"
+                );
+            }
+        }
+        (found, words)
+    };
+    let grid = screen(&app);
+    card(&app, &grid, "Install Java");
+    // The logout card, whose command stands in a box.
+    app.not_now.push("Java".to_string());
+    app.linger = Linger::Offered;
+    let grid = screen(&app);
+    let (_, words) = card(&app, &grid, "Agents here stop");
+    let well = panels(&grid)
+        .into_iter()
+        .find(|(_, fill, ..)| *fill == Some(app.theme.input))
+        .expect("the command's box")
+        .0;
+    let out = words - px(well.x);
+    assert!(
+        (14.5..=17.5).contains(&out),
+        "the box {out} px outside the words"
+    );
+    let command = words_at(&grid, "loginctl");
+    assert!(
+        (command - words).abs() <= 1.5,
+        "the command on the words' column"
+    );
+}
+
 /// The table picker's squares stand as far from its top as from its sides: on its first row
 /// they were 7 px from its top and 20 from its sides.
 #[test]

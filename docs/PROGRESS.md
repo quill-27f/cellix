@@ -3727,3 +3727,24 @@ Release track B, from the release review of 0.11.0's B3 (wrong words) and B7.
 - The exported review wrote "Claude agrees:" where every card says the verdict first, on its chip, then who: it writes "Agrees · Claude:".
 - Not done from B7: the table picker's label (48), the submenu's overlap and shadow (57-dock-menu-format) and the reviewer note's tint (69 to 71).
 - Tests: `the_status_counts_one_word_as_a_word`, `a_cards_edit_and_delete_are_quiet_in_both_themes`, `the_picked_emoji_for_a_name_starts_on_the_boxs_column`; `the_review_is_markdown_a_file_and_a_kind_at_a_time` reads the new wording.
+
+## Accept Rewrite is the rewrite card's filled button, and its buttons flow (2026-11-19)
+
+Release track B, from the release review of 0.11.0's B5.
+
+- Accept Rewrite is the card's one primary, filled, and Apply as Suggestion and Not This are quiet. Yesterday all three were quiet, so Accept Rewrite stood grey beside a blue Check My Review and read as one choice among equals (71-sample-rewrite, -dark, -narrow).
+- On a narrow card the three flow left to right, as many on a row as fit: Accept Rewrite stood alone on the first row with 400 px free beside it, the other two under it.
+- Tests changed with it, as the review asked: `a_rewrite_stands_in_a_box_with_room_round_it` asked for three quiet buttons and none filled on the card; it asks for Accept Rewrite filled and the other two quiet. `a_rewrites_buttons_wrap_with_the_quiet_ones_together` asked for the two quiet ones kept together; it's `a_rewrites_buttons_flow_left_to_right` now, and the ledger's `rewrite-buttons-wrap` names it. `a_narrow_cards_buttons_stay_inside_it_with_edit_and_delete_behind_more` finds Accept Rewrite's chip by the filled colour. `a_comment_on_words_over_a_line_break_is_about_all_of_them` pressed Apply as Suggestion on the row that said Not This; it presses it beside Accept Rewrite, where the flow puts it.
+- Looked at: 71-sample-rewrite-narrow (light), Accept Rewrite filled and Apply as Suggestion beside it, Not This under them; 71-sample-rewrite and -dark, the three on one row.
+- Not done: the line over "Claude suggests a rewrite" is still 12 px under the comment and 10 px over the answer, where the review asks 16 and 16. Rows are 50 px and the answer, the rewrite's box and its buttons are already lifted to keep 16 px round the box; 32 px of air round the line needs part of a row more, which moves the whole card's foot.
+
+## A card over the pane stands 16 px from its sides with its words 24 px in (2026-11-19)
+
+Release track B, from the release review of 0.11.0's B6.
+
+- One rule for a card over the side pane, the asking card's (`card_lead`): a column in from each of the pane's sides however wide the pane is, its panel starting half a column into that column, so it stands about 16 px from the pane's lines with its words 24 px in from its edge and as much air over its title and under its buttons. The install card in the pane, the logout card and the stopped session's card stood 24 px from the pane's left line and 33 from its right, two columns in and capped at their width, with their words 33 px in (102, 104, 108-install-card-pane).
+- The stopped card's buttons wrap two columns short of its edge, so they end inside its words' column.
+- The logout card's command box stands 16 px outside its words' column on either side with the command on that column: its edge was on the column, 12 px from its own words (104).
+- Measured in the tour (2x): 104-logout-card 15 px from the pane's left line and 16 from its right, its title 25 px in, the box from 9 px inside the card's edge to 9 px short of its right with the command on the title's column, 23 px of air between the box and the buttons and under the buttons; 108-install-card-pane 15 and 16 px, its title 26 px in; 102-stopped-card 15 and 16 px.
+- Unverified in a test: the stopped card, which needs a stopped session's record to build; it has the same frame and was looked at in 102.
+- Test: `a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in` (the install and logout cards: 14.5 to 17.5 px from the pane's lines, words 22.5 to 26.5 px in, buttons ending inside, the box 16 px outside the words with the command on them).

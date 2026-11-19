@@ -377,7 +377,8 @@ fn a_comment_on_words_over_a_line_break_is_about_all_of_them() {
         text: "Rewrite: every later read is warm".into(),
         found,
     });
-    press_beside(&mut app, "Apply", "Not This");
+    // Beside Accept Rewrite, as the three flow on a card this narrow.
+    press_beside(&mut app, "Apply", "Accept Rewrite");
     assert_eq!(
         app.active_text().unwrap(),
         "# Plan\n\nThe cache goes first so that {~~every read\nafter the start is warm~>every later read is warm~~} and fast.\n"

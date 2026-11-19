@@ -1098,9 +1098,10 @@ fn an_answer_stands_on_the_cards_column_under_a_line() {
 }
 
 /// An agent's rewrite stands in a box 16 px round its words, the box on the card's columns and
-/// 16 px over its buttons, which are one row of three quiet ones: the box's words were 10 px
-/// from its edge, it stood 10 px over its buttons, the two rows of buttons were 23 px apart and
-/// Accept Rewrite was filled beside Check My Review.
+/// 16 px over its buttons, which are one row: Accept Rewrite filled, the card's one primary, and
+/// two quiet ones. The box's words were 10 px from its edge, it stood 10 px over its buttons,
+/// and the two rows of buttons were 23 px apart. Accept Rewrite was quiet for a night, grey
+/// beside a blue Check My Review, and read as one choice among equals.
 #[test]
 fn a_rewrite_stands_in_a_box_with_room_round_it() {
     let padding = crate::measures::BOX_PADDING;
@@ -1133,24 +1134,25 @@ fn a_rewrite_stands_in_a_box_with_room_round_it() {
     let (caps, tails) = small_at_row(words_y);
     near(caps - box_top, padding, "its words' capitals under its top");
     near(box_foot - tails, padding, "its foot under their tails");
-    let (_, accept_y, _) = run(&grid, "Accept Rewrite");
+    let (accept_x, accept_y, _) = run(&grid, "Accept Rewrite");
     let row = chips_on(&grid, accept_y, quiet);
-    assert_eq!(row.len(), 3, "three quiet buttons: {row:?}");
-    let top = row.iter().map(|c| c.2).fold(f32::MAX, f32::min);
+    assert_eq!(row.len(), 2, "two quiet buttons: {row:?}");
+    let filled = chips_on(&grid, accept_y, app.theme.button);
+    assert_eq!(filled.len(), 1, "one filled: {filled:?}");
+    assert!(
+        filled[0].0 <= accept_x && accept_x < filled[0].1,
+        "Accept Rewrite is the filled one"
+    );
+    let top = row.iter().map(|c| c.2).fold(filled[0].2, f32::min);
     near(top - box_foot, padding, "the buttons under the box");
-    // Accept Rewrite isn't filled: Check My Review is the pane's one filled button.
+    // The only filled button on the card.
     let (_, _, card_top, card_foot) = card_round(&app, &grid, words_y);
     let filled = grid.paint.iter().filter(|p| {
         matches!(p, Paint::Panel { fill: Some(f), bounds, .. }
             if *f == app.theme.button && bounds.h < UNIT && bounds.w > UNIT
                 && py(bounds.y) >= card_top && py(bounds.y) < card_foot)
     });
-    assert_eq!(filled.count(), 0, "no filled button on the card");
-    let checked = grid.paint.iter().any(|p| {
-        matches!(p, Paint::Panel { fill: Some(f), bounds, .. }
-            if *f == app.theme.button && py(bounds.y) < card_top)
-    });
-    assert!(checked, "Check My Review over it is");
+    assert_eq!(filled.count(), 1, "one filled button on the card");
 }
 
 /// On a narrow card the rewrite's buttons wrap inside the card, and Edit and Delete stand
@@ -1184,7 +1186,13 @@ fn a_narrow_cards_buttons_stay_inside_it_with_edit_and_delete_behind_more() {
         "Resolve",
     ] {
         let (x, y, wide) = run(&grid, name);
-        let chip = chips_on(&grid, y, quiet)
+        // Accept Rewrite is the filled one.
+        let fill = if name == "Accept Rewrite" {
+            app.theme.button
+        } else {
+            quiet
+        };
+        let chip = chips_on(&grid, y, fill)
             .into_iter()
             .find(|c| c.0 <= x && x + wide <= c.1)
             .unwrap_or_else(|| panic!("{name}'s chip"));

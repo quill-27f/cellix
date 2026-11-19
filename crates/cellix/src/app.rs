@@ -2374,7 +2374,7 @@ impl App {
         for (i, line) in self.offer_lines(&detail).iter().enumerate() {
             grid.label(area.x + 2, area.y + 2 + i as u16, line, dim, right);
         }
-        let lift = self.card_lift(measures::DialogLast::Words, 0.0);
+        let lift = self.card_lift(measures::DialogLast::Words, self.card_lead(area));
         grid.lift_since(words, lift);
         let placed: Vec<(String, u16)> = self
             .offer_buttons()
@@ -9506,14 +9506,17 @@ impl App {
 
     /// A corner card's left edge and width, `wide` at most: the window's corner, but clear
     /// of the line between the file and the side pane, inside the pane where it has room
-    /// and before it where it hasn't. The install card lay across that line.
+    /// and before it where it hasn't. The install card lay across that line. Over the pane
+    /// it's a column in from each side of it however wide it is, as every card over the pane
+    /// is (`card_lead`): two columns in and capped, the install and logout cards stood 24 px
+    /// from the pane's left and 33 from its right.
     fn corner_frame(&self, wide: u16) -> (u16, u16) {
         let width = wide.min(self.size.0.saturating_sub(4));
         let x = self.size.0.saturating_sub(width + 2);
         match self.dock_area() {
-            Some(dock) if !self.dock_under() && x < dock.x + 2 && x + width > dock.x => {
+            Some(dock) if !self.dock_under() && x + width > dock.x => {
                 if dock.w >= 40 {
-                    (dock.x + 2, dock.w.saturating_sub(4).min(width))
+                    (dock.x + 1, dock.w.saturating_sub(2))
                 } else {
                     (dock.x.saturating_sub(width + 2), width)
                 }
@@ -9557,7 +9560,21 @@ impl App {
     /// so the title and the buttons have the same air above and below them, and what's under
     /// those rows is cleared so no text shows half covered.
     fn draw_card(&self, grid: &mut Grid, area: Rect, last: measures::DialogLast) {
-        self.draw_card_led(grid, area, (0.0, last));
+        self.draw_card_led(grid, area, (self.card_lead(area), last));
+    }
+
+    /// How far into its first column a card's panel starts: over the side pane, where it
+    /// stands a column in from each of the pane's sides, `pane_card_lead`, so its panel is
+    /// 16 px from the pane's lines and its words 24 px in from it; nothing elsewhere.
+    fn card_lead(&self, area: Rect) -> f32 {
+        let pane = self
+            .dock_area()
+            .filter(|pane| pane.contains(area.x, area.y));
+        if pane.is_some() {
+            self.pane_card_lead()
+        } else {
+            0.0
+        }
     }
 
     /// A card whose panel starts `lead` columns into its first column where there are
@@ -9766,10 +9783,15 @@ impl App {
             } else {
                 (0.1, 1.2)
             };
+            // 16 px outside the card's words on either side, its command on their column:
+            // its edge stood on that column, 12 px from its own words. The words end as far
+            // from the panel's right as they start from its left, `lead` short of two columns.
+            let lead = self.card_lead(area);
+            let out = measures::columns(measures::BOX_PADDING, &*self.measure).unwrap_or(0.0);
             let bounds = Bounds::cells(
-                f32::from(area.x) + 2.0,
+                f32::from(area.x) + 2.0 - out,
                 f32::from(row) - over,
-                f32::from(area.w.saturating_sub(4)),
+                f32::from(area.w.saturating_sub(4)) + lead + out * 2.0,
                 tall,
             );
             grid.panel(bounds, 17, Some(theme.input), None);
@@ -9777,7 +9799,7 @@ impl App {
                 mono: true,
                 ..Font::default()
             };
-            let text = (f32::from(area.x) + 2.7, f32::from(row));
+            let text = (f32::from(area.x) + 2.0, f32::from(row));
             grid.text_run(
                 text,
                 f32::from(right),
@@ -9787,7 +9809,7 @@ impl App {
             );
         }
         // The words and the box over the buttons, `DIALOG_GAP` from them, as a dialog's.
-        let lift = self.card_lift(measures::DialogLast::Control, 0.0);
+        let lift = self.card_lift(measures::DialogLast::Control, self.card_lead(area));
         grid.lift_since(words, lift);
         let y = self.linger_button_row();
         self.draw_card_buttons(grid, y, &self.linger_buttons(), (&LINGER_BUTTONS, true));
@@ -9841,17 +9863,20 @@ impl App {
             return None;
         }
         let screen = self.dock_screen()?;
-        let width = screen.w.saturating_sub(3);
+        // A column in from each side of the pane, as every card over it stands (`card_lead`):
+        // a column into its screen, it stood 24 px from the pane's left and 33 from its right.
+        let pane = self.dock_area()?;
+        let (x, width) = (pane.x + 1, pane.w.saturating_sub(2));
         let (_, detail, buttons) = self.stopped_offer()?;
         let lines = self.stopped_detail(&detail, width).len() as u16;
         // Buttons that don't fit beside each other take another row.
-        let wide = Rect::new(screen.x + 1, 0, width, 0);
+        let wide = Rect::new(x, 0, width, 0);
         let rows = self.stopped_button_rows(wide, &buttons);
         // Without the gap where a row has room: see `card_gap`.
         let fixed = STOPPED_CARD_ROWS - 1 + self.card_gap();
         let height = (fixed + lines + rows - 1).min(screen.h);
         Some(Rect::new(
-            screen.x + 1,
+            x,
             screen.bottom().saturating_sub(height + 1),
             width,
             height,
@@ -9948,7 +9973,8 @@ impl App {
         for (label, choice) in buttons {
             let cells = measures::button_cells(label, &*self.measure);
             let width = cells.chars().count() as u16;
-            if x > start && x + width > card.right().saturating_sub(1) {
+            // They end inside the card's words, two columns short of its edge.
+            if x > start && x + width > card.right().saturating_sub(2) {
                 (x, row) = (start, row + 1);
             }
             placed.push((cells, x, row, *choice));
@@ -10023,7 +10049,8 @@ impl App {
         for (i, line) in self.stopped_detail(&detail, card.w).iter().enumerate() {
             grid.label(card.x + 2, card.y + 2 + i as u16, line, dim, right);
         }
-        grid.lift_since(words, self.card_lift(measures::DialogLast::Words, 0.0));
+        let lead = self.card_lead(card);
+        grid.lift_since(words, self.card_lift(measures::DialogLast::Words, lead));
         let placed = self.stopped_buttons(card, &buttons);
         let mut rows: Vec<u16> = placed.iter().map(|(_, _, y, _)| *y).collect();
         rows.dedup();

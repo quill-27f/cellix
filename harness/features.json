@@ -6365,8 +6365,8 @@
   {
     "id": "rewrite-buttons-wrap",
     "milestone": 15,
-    "title": "A rewrite's two quiet buttons stay together under Accept Rewrite on a narrow card",
-    "test": "a_rewrites_buttons_wrap_with_the_quiet_ones_together",
+    "title": "A rewrite's buttons flow left to right on a narrow card, as many on a row as fit, Accept Rewrite first",
+    "test": "a_rewrites_buttons_flow_left_to_right",
     "passes": true
   },
   {
@@ -6668,6 +6668,13 @@
     "milestone": 15,
     "title": "The picked emoji offered for a name starts its ground on the column the box over it keeps",
     "test": "the_picked_emoji_for_a_name_starts_on_the_boxs_column",
+    "passes": true
+  },
+  {
+    "id": "pane-card-insets",
+    "milestone": 15,
+    "title": "A card over the side pane stands 16 px from the pane's lines with its words 24 px in and a command's box 16 px outside them",
+    "test": "a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in",
     "passes": true
   }
 ]

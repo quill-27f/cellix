@@ -798,10 +798,11 @@ Suggestion and Not This. Accept Rewrite puts it in place of the words as one edi
 resolves the comment, as committing a suggestion on GitHub resolves its conversation; Apply as
 Suggestion puts it in as a suggestion to settle on the page, which was the only way until 18
 November 2026. Both replace all of the commented words as they read now, found as a comment's
-words are (below). Where the three don't fit a card's row, Accept Rewrite stands alone and the
-two that don't take the rewrite stay together under it. The rewrite stands in a box on the card's
-columns, 16 px round its words and 16 px over its three buttons, which are quiet: Check My Review
-is the pane's one filled button (Accept Rewrite was filled beside it, as Keep had been). Its box
+words are (below). Where the three don't fit a card's row they flow left to right, as many on
+a row as fit: Accept Rewrite kept alone on a narrow card's first row had 400 px free beside it.
+The rewrite stands in a box on the card's columns, 16 px round its words and 16 px over its three
+buttons. Accept Rewrite is the card's one primary, filled, the other two quiet: quiet beside a
+blue Check My Review, it read as one choice among equals (0.11.0's release review). Its box
 had its words 10 px from its edge and stood 10 px over its buttons, and the two rows of buttons
 under it were 23 px apart where a card's are 11. A paper's suggestion whose words run onto another
 line shows on its page as one, as a Markdown one does (`Spanning`), where a line's own command left
@@ -1376,7 +1377,13 @@ title's capitals and its buttons' foot have the air its sides have, 24 to 32 px
 (`measures::card_parts`); they had 21 over and under and 17 or 11 over the buttons. On the
 terminal's line a row stands between its words and its buttons. Its words wrap inside it, and
 it stands inside one sheet, never across the line between the file and the pane
-(`App::corner_frame`). The rows its round ends are on
+(`App::corner_frame`). Over the side pane every card is the asking card's: a column in from
+each of the pane's sides however wide it is, its panel half a column into that column
+(`App::card_lead`), so it stands about 16 px from the pane's lines with its words 24 px in, its
+buttons ending inside its words' column, and a command's box 16 px outside that column with
+the command on it. Two columns in and capped at its width, the install, logout and stopped
+cards stood 24 px from the pane's left and 33 from its right with their words 33 px in
+(0.11.0's release review). The rows its round ends are on
 keep the colour of whatever each cell lies on, since the corner can be over the file, the side
 pane and the line between them, and that colour is painted over them, so a page's words under
 the card don't show their tops over it. Its panel's top and bottom are moved to the nearest whole

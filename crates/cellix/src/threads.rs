@@ -2100,26 +2100,27 @@ fn resolved_button(area: Rect, count: usize, shown: bool, measure: &dyn Measure)
     control(area, &labels, Chevron::Unfolds(shown), measure)
 }
 
-/// The buttons under a rewrite, a row at a time: all three on one where they fit a card
-/// `width` wide, else Accept Rewrite on its own and the two quiet ones together under it, so
-/// what takes the rewrite stands apart from what doesn't; each alone where even two don't fit.
+/// The buttons under a rewrite, a row at a time, flowing left to right: as many on a row
+/// as fit a card `width` wide, the rest on the next. Accept Rewrite, the filled one, stands
+/// first. Kept alone on a narrow card's first row, it had 400 px free beside it.
 fn rewrite_rows(width: f32, measure: &dyn Measure) -> Vec<Vec<&'static str>> {
-    let fits = |labels: &[&str]| {
-        let cells: usize = labels
-            .iter()
-            .map(|label| button_cells(label, measure).chars().count())
-            .sum();
-        let gaps = labels.len().saturating_sub(1) * usize::from(BUTTON_GAP);
-        (cells + gaps) as f32 <= width + 1.0
-    };
-    let [take, apply, decline] = REWRITE;
-    if fits(&REWRITE) {
-        vec![REWRITE.to_vec()]
-    } else if fits(&[apply, decline]) {
-        vec![vec![take], vec![apply, decline]]
-    } else {
-        REWRITE.iter().map(|label| vec![*label]).collect()
+    let mut rows: Vec<Vec<&'static str>> = Vec::new();
+    let mut used = 0.0;
+    for label in REWRITE {
+        let wide = button_cells(label, measure).chars().count() as f32;
+        let gap = f32::from(BUTTON_GAP);
+        match rows.last_mut() {
+            Some(row) if used + gap + wide <= width + 1.0 => {
+                row.push(label);
+                used += gap + wide;
+            }
+            _ => {
+                rows.push(vec![label]);
+                used = wide;
+            }
+        }
     }
+    rows
 }
 
 /// Each button as (label, padded cells, start column): Edit and Delete with the others when
@@ -3329,13 +3330,22 @@ pub fn draw(
                 for (label, cells, x) in row_of(area, &labels.unwrap_or_default(), measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                    // Three choices, none of them the pane's main action, which is Check My
-                    // Review: Accept Rewrite was filled too, two filled buttons at once, as Keep
-                    // had been beside Dismiss.
-                    let fill = theme.secondary(card, on_it);
+                    // Accept Rewrite is the card's one primary, filled, as the answer a dialog
+                    // offers first is; the other two are quiet. All three quiet, Accept Rewrite
+                    // read as one choice among equals under a filled Check My Review.
+                    let (fill, fg) = if label == ACCEPT_REWRITE {
+                        let filled = if on_it {
+                            theme.quiet_button(theme.button)
+                        } else {
+                            theme.button
+                        };
+                        (filled, theme.button_text)
+                    } else {
+                        (theme.secondary(card, on_it), inner.fg)
+                    };
                     let style = Style {
                         bg: fill,
-                        fg: inner.fg,
+                        fg,
                         ..inner
                     };
                     grid.button(x, y, &cells, label, fill, style);
@@ -3501,23 +3511,37 @@ mod tests {
     use super::*;
     use cellix_render::CellMeasure;
 
-    /// A rewrite's three buttons share a row where they fit; on a narrower card Accept Rewrite
-    /// stands alone and the two that don't take it stay together under it, where Not This was
-    /// left on a row of its own.
+    /// A rewrite's three buttons share a row where they fit; on a narrower card they flow
+    /// left to right, as many on a row as fit, Accept Rewrite first: it stood alone on a
+    /// narrow card's first row with 400 px free beside it.
     #[test]
-    fn a_rewrites_buttons_wrap_with_the_quiet_ones_together() {
+    fn a_rewrites_buttons_flow_left_to_right() {
         let pixels = cellix_render::FontMeasure::new(17, 37);
         let measures: [&dyn Measure; 2] = [&pixels, &CellMeasure];
         for measure in measures {
             assert_eq!(rewrite_rows(200.0, measure), vec![REWRITE.to_vec()]);
-            let narrow = (10..200)
-                .map(|width| rewrite_rows(width as f32, measure))
-                .find(|rows| rows.len() == 2)
-                .expect("a width that breaks them");
+            let one = |label: &str| button_cells(label, measure).chars().count() as f32;
+            let gap = f32::from(BUTTON_GAP);
+            // Where Accept Rewrite and Apply as Suggestion fit together, they share the first
+            // row, which kept Accept Rewrite alone before.
+            let two = one(ACCEPT_REWRITE) + gap + one(APPLY_REWRITE);
             assert_eq!(
-                narrow,
-                vec![vec![ACCEPT_REWRITE], vec![APPLY_REWRITE, "Not This"]]
+                rewrite_rows(two, measure),
+                vec![vec![ACCEPT_REWRITE, APPLY_REWRITE], vec!["Not This"]]
             );
+            // At every width, in order, and each row takes the next button where it fits.
+            for width in 10..200 {
+                let rows = rewrite_rows(width as f32, measure);
+                assert_eq!(rows.concat(), REWRITE.to_vec(), "{width}: in order");
+                for pair in rows.windows(2) {
+                    let used: f32 = pair[0].iter().map(|l| one(l) + gap).sum::<f32>() - gap;
+                    assert!(
+                        used + gap + one(pair[1][0]) > width as f32 + 1.0,
+                        "{width}: {} would have fit on the row before",
+                        pair[1][0]
+                    );
+                }
+            }
         }
     }
 
