@@ -754,7 +754,7 @@ impl Source {
                 };
                 grid.spinner(spin_at, y, spin, theme.accent, label);
                 let at = start + SPIN_ROOM;
-                grid.centred_text(
+                grid.button_label(
                     at + words / 2.0,
                     y as f32,
                     &name,

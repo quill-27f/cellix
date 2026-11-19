@@ -18,10 +18,12 @@ const LARGE_BUTTON_HEIGHT: f32 = BUTTON_HEIGHT;
 const ROW_BUTTON_RADIUS: u8 = 17;
 /// The one picture `Grid::exact_fill` scales: a single pixel, all ink.
 const EXACT_FILL: u64 = u64::MAX - 1;
-/// How far a button's words are raised in its chip, in rows: a pixel. Words stand with their
-/// capitals in the row's middle, which left the tail of a "g" 2 px over the chip's foot and
-/// 7 px over a capital; a pixel up, it's 4 and 6.
-const BUTTON_WORDS: f32 = 0.03;
+/// How far a button inside a row's wash stands under the row's middle, with its words, where
+/// a row has room: a paint unit, about a pixel of a row of 50. Words of 13 pt beside it stand on a baseline a
+/// pixel under a button's 90 per cent, and a label whose tails stand in its button's middle
+/// is higher again: "Keep" rode 3 px over the "Say what a caller s…" beside it. Lower than
+/// this, the button of peek's header stood within 8 px of the line under it.
+const ROW_BUTTON_DROP: f32 = 0.02;
 /// Rows tall an icon beside a name is: 16 pt where a row is 18.5 pt, VS Code's size.
 pub const GLYPH: f32 = 0.86;
 /// Rows tall an icon inside a text box or a chip is, where one of `GLYPH` would stand against
@@ -144,7 +146,7 @@ pub struct Grid {
     pub edge: Option<Rgb>,
     /// Whether a row here is tall enough for a control to stand in it with its words in its
     /// middle: rows of Cellix's own, well taller than the terminal's line. What draws into
-    /// the grid says so. Where it's not, a button's words are raised a pixel for their tails.
+    /// the grid says so. Where it is, a button on a row's wash stands inside the wash.
     pub roomy: bool,
     /// How many rows at the grid's foot are bars under the sheets: one, unless what draws
     /// says there are two, as where the workspaces have a row of their own under the status
@@ -435,6 +437,7 @@ impl Grid {
                 align_right: false,
                 centred: false,
                 underline: false,
+                ink_centred: false,
             });
         }
         end
@@ -459,6 +462,7 @@ impl Grid {
             align_right: false,
             centred: false,
             underline,
+            ink_centred: false,
         });
     }
 
@@ -498,6 +502,7 @@ impl Grid {
             align_right: true,
             centred: false,
             underline: false,
+            ink_centred: false,
         });
     }
 
@@ -524,9 +529,11 @@ impl Grid {
     /// between lines. Where a row has room, it's the height it has on the terminal's line,
     /// 32 px, 9 px clear of a row of 50 and inside a pointed row's wash: as tall as the wash,
     /// the two read as one shape with a step in it, and taller, as a button too big for its
-    /// row. Its words are raised a step, so their ink, tails and all, stands in its middle:
-    /// at 27 px a "p"'s tail ended on its foot. On the terminal's line a button and the wash
-    /// have the row between them and nothing to spare, and it's a button like any other.
+    /// row. Its words' ink, tails and all, stands in its middle as every button's does: at
+    /// 27 px a "p"'s tail ended on its foot. It stands a pixel under the row's middle with
+    /// them (`ROW_BUTTON_DROP`), so its words are near the baseline of the words beside it.
+    /// On the terminal's line a button and the wash have the row between them and nothing to
+    /// spare, and it's a button like any other.
     pub fn row_button(
         &mut self,
         (x, y): (u16, u16),
@@ -541,14 +548,21 @@ impl Grid {
         }
         // Its corners a little tighter with its height: a button's 8 px beside the wash's 4
         // read as two kinds of shape once there was wash to see round it.
+        let drop = units(ROW_BUTTON_DROP);
         let chips = self.paint.iter_mut().rev();
         for paint in chips.take(2) {
             match paint {
-                Paint::Panel { inset, radius, .. } => {
+                Paint::Panel {
+                    bounds,
+                    inset,
+                    radius,
+                    ..
+                } => {
                     *inset = true;
                     *radius = ROW_BUTTON_RADIUS;
+                    bounds.y += drop;
                 }
-                Paint::Text { y, .. } => *y -= units(BUTTON_WORDS),
+                Paint::Text { y, .. } => *y += drop,
                 _ => {}
             }
         }
@@ -646,15 +660,33 @@ impl Grid {
         let bounds = Bounds::cells(left, top, right - left, bottom - top);
         self.panel(bounds, 22, Some(fill), None);
         let middle = x as f32 + width as f32 / 2.0;
-        let raised = if self.roomy { 0.0 } else { BUTTON_WORDS };
-        self.centred_text(middle, y as f32 + drop - raised, label, style.fg, 90);
+        self.button_label(middle, y as f32 + drop, label, style.fg, 90);
     }
 
-    /// A button's words by themselves, centred on `middle` in row `y` and raised in it as a
-    /// button's are, for a control that paints its own chip.
+    /// A button's words by themselves, centred on `middle` in row `y` and standing in it as a
+    /// button's do, for a control that paints its own chip.
     pub fn button_words(&mut self, middle: f32, y: u16, label: &str, color: Rgb) {
-        let raised = if self.roomy { 0.0 } else { BUTTON_WORDS };
-        self.centred_text(middle, y as f32 - raised, label, color, 90);
+        self.button_label(middle, y as f32, label, color, 90);
+    }
+
+    /// Words centred on `x` whose ink stands in the middle of the row starting at `y`, as a
+    /// button's do: a capital's top as far from the button's top as a tail's foot, or where
+    /// there's none the baseline, is from its foot. The font's line in the row's middle put
+    /// "Show Source" 5 px under its button's top and 10 over its foot, and the tails of "Accept
+    /// Rewrite" 6 px over its foot with its capitals 9 under its top.
+    pub fn button_label(&mut self, x: f32, y: f32, text: &str, color: Rgb, size: u8) {
+        self.centred_text(x, y, text, color, size);
+        self.centre_ink_since(self.paint.len() - 1);
+    }
+
+    /// Has the words painted since `from` stand by their ink in their rows, as a button's
+    /// words do (`button_label`), for a button that places its own words.
+    pub fn centre_ink_since(&mut self, from: usize) {
+        for paint in self.paint.iter_mut().skip(from) {
+            if let Paint::Text { ink_centred, .. } = paint {
+                *ink_centred = true;
+            }
+        }
     }
 
     /// Moves what was painted last down by part of a row.
@@ -681,6 +713,7 @@ impl Grid {
             align_right: false,
             centred: true,
             underline: false,
+            ink_centred: false,
         });
     }
 
@@ -821,6 +854,22 @@ impl Grid {
                 from < bottom && to > top && !kept_off(*index)
             })
             .map(|(_, paint)| paint)
+    }
+
+    /// The bands of row `y`, as (first column, column past the last), each a tile of its own:
+    /// `bands`, or `row_bands` on its own row. The last row is the status bar, which nothing
+    /// scrolls in, and is one.
+    pub fn spans(&self, y: u16) -> Vec<(u16, u16)> {
+        let width = self.width;
+        let own = self.row_bands.as_ref().filter(|(row, _)| *row == y);
+        let bands = match own {
+            Some((_, bands)) => bands,
+            None if y + 1 == self.height => return vec![(0, width)],
+            None => &self.bands,
+        };
+        let inside = bands.iter().copied().filter(|x| *x > 0 && *x < width);
+        let edges: Vec<u16> = [0].into_iter().chain(inside).chain([width]).collect();
+        edges.windows(2).map(|edge| (edge[0], edge[1])).collect()
     }
 
     pub fn width(&self) -> u16 {
@@ -992,10 +1041,11 @@ pub fn air_under_button(row: f32, line: f32) -> f32 {
 
 /// Where a button inside a row's wash (`Grid::row_button`) stands in its row where a row has
 /// room, its top and its foot in pixels from the row's top, on rows `row` px tall with words
-/// sized for a line `line` px tall.
+/// sized for a line `line` px tall. It's `ROW_BUTTON_DROP` under the row's middle.
 pub fn row_button_in_row(row: f32, line: f32) -> (f32, f32) {
     let (_, top, _, bottom) = button_span((BUTTON_HEIGHT, 0.0), (0, 0), 1);
-    let (top, tall) = crate::raster::inset(units(top), units(bottom - top), row, line);
+    let (top, tall) =
+        crate::raster::inset(units(top + ROW_BUTTON_DROP), units(bottom - top), row, line);
     (top, top + tall)
 }
 

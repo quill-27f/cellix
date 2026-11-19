@@ -305,6 +305,7 @@ fn draw_face(grid: &mut Grid, face: Face, cell: Rect, color: Rgb, style: Style) 
                 align_right: false,
                 centred: true,
                 underline: false,
+                ink_centred: false,
             });
             let mut buffer = shown;
             buffer.painted = true;

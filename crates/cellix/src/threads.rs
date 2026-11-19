@@ -1690,6 +1690,7 @@ fn draw_control(
     });
     let words = left + parts.words;
     let label = labels.first().copied().unwrap_or_default();
+    let painted = grid.painted_so_far();
     grid.label_at(
         words,
         words.floor() as u16,
@@ -1699,6 +1700,7 @@ fn draw_control(
         end,
         BUTTON_TEXT,
     );
+    grid.centre_ink_since(painted);
     grid.lift_since(from, -drop);
 }
 
@@ -3178,6 +3180,7 @@ pub fn draw(
                         painted: true,
                         ..style
                     };
+                    let painted = grid.painted_so_far();
                     grid.label_at(
                         at,
                         at.floor() as u16,
@@ -3187,6 +3190,7 @@ pub fn draw(
                         x + whole as u16,
                         BUTTON_TEXT,
                     );
+                    grid.centre_ink_since(painted);
                 }
                 // Ending on the cards' right edge.
                 grid.nudge_since(from, head_end(area, view).1);

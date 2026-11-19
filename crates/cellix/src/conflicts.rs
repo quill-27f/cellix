@@ -150,14 +150,8 @@ fn chip(
             inset: true,
         });
     }
-    // A pixel over the chip's middle, as a button's words are.
-    grid.centred_text(
-        x as f32 + width as f32 / 2.0,
-        y as f32 - 0.03,
-        label,
-        fg,
-        90,
-    );
+    // Their ink in the chip's middle, as a button's words are.
+    grid.button_label(x as f32 + width as f32 / 2.0, y as f32, label, fg, 90);
 }
 
 /// The first screen row a line is drawn on, if it's in view.

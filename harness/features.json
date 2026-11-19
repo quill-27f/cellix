@@ -6809,5 +6809,12 @@
     "title": "The buttons by a selection stand in the gap next to its block, never past what comes after it",
     "test": "the_selection_bar_stays_in_the_gap_next_to_its_block",
     "passes": true
+  },
+  {
+    "id": "button-words-by-ink",
+    "milestone": 15,
+    "title": "A button's words stand by their ink in its middle, with tails or without, and buttons side by side keep one baseline",
+    "test": "a_buttons_words_stand_by_their_ink_in_its_middle",
+    "passes": true
   }
 ]

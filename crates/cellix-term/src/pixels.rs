@@ -474,16 +474,7 @@ impl<R: Rasterizer> PixelBackend<R> {
     /// The bands of a row, as (first column, column past the last). The last row is the
     /// status bar, which nothing scrolls in, and its tile can reach below the text area.
     fn spans(&self, grid: &Grid, y: u16) -> Vec<(u16, u16)> {
-        let width = grid.width();
-        let own = grid.row_bands.as_ref().filter(|(row, _)| *row == y);
-        let bands = match own {
-            Some((_, bands)) => bands,
-            None if y + 1 == grid.height() => return vec![(0, width)],
-            None => &grid.bands,
-        };
-        let inside = bands.iter().copied().filter(|x| *x > 0 && *x < width);
-        let edges: Vec<u16> = [0].into_iter().chain(inside).chain([width]).collect();
-        edges.windows(2).map(|edge| (edge[0], edge[1])).collect()
+        grid.spans(y)
     }
 
     /// The tile for each band of a row, rasterizing the row once if any of them is new.
@@ -1365,6 +1356,7 @@ mod tests {
             align_right: false,
             centred: false,
             underline: false,
+            ink_centred: false,
         };
         let mut grid = Grid::new(20, 8, Style::default());
         grid.paint.extend([text(1), text(4)]);
