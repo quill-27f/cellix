@@ -779,7 +779,8 @@ which Next keeps it off. They keep to the page's reading column, and lean a litt
 suggestion in the row's air. They're the chips a selection's Comment and Ask Agent are, and give
 way to them while anything is selected; edged and filled, with no shadow, since the shadows of two
 side by side met in the gap between them as a band of grey and stood out past them with a hard
-top edge. The one under the pointer comes first, and stays while the
+top edge. A selection's Comment and Ask Agent, and the pair over a terminal's output, are the same
+since 0.11.0's release review: theirs made the same band, #dadada on white, 10 px past Comment. The one under the pointer comes first, and stays while the
 pointer goes up to its chips across the row's other words. A press settles it as one edit to undo
 and says how many are left. Until 18 November 2026 Accept and Reject were only in the right-click
 menu and the palette, where they still are, with no key: the user asked for them at the change.
@@ -1078,10 +1079,13 @@ from the same room:
 - A button at the end of a pointed row paints its chip on the row's wash and leaves its cells
   the row's own ground. Given the wash's colour, they were a whole row of it behind a button
   that's 0.78 of one.
-- That button stands inside the wash (`Grid::row_button`, `raster::inset`): it's three
-  quarters of the terminal's line, 27 px, and the wash, a control of 39 px, shows 6 px over
-  and under it. As tall as the wash, its edges lay on the wash's and the two read as one shape
-  with a step in it; at a button's 32 px the wash showed 4 px either side. Its corners are 6 px where a button's are 8 (`ROW_BUTTON_RADIUS`),
+- That button stands inside the wash (`Grid::row_button`, `raster::inset`): it's the
+  height it has on the terminal's line, 32 px, 9 px clear of a row of 50, and the wash, a
+  control of 39 px, shows 4 px over and under it. Its words are raised a step so their ink,
+  a capital's top to a tail's foot, stands in its middle, 5 px clear of it either way. As tall
+  as the wash, its edges lay on the wash's and the two read as one shape with a step in it; at
+  27 px, for 6 px of wash, a "p"'s tail ended on its foot (0.11.0's release review: Keep, Keep
+  as Tab, Show Source, Ask Agent, Install). Its corners are 6 px where a button's are 8 (`ROW_BUTTON_RADIUS`),
   nearer the wash's 4. Ask Agent on a problem's row and Install on a language server's are
   the two. Only on Airy rows: on Comfortable ones the wash is under 2 px taller than the
   button, which would be a rim of less than a pixel, and they stay the same height.

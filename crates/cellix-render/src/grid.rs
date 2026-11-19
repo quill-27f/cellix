@@ -14,12 +14,8 @@ use crate::paint::{Bounds, Paint, UNIT, units};
 const BUTTON_HEIGHT: f32 = 0.88;
 const LARGE_BUTTON_HEIGHT: f32 = BUTTON_HEIGHT;
 /// The corners of a button that stands inside a row's wash, as a percentage of the line:
-/// 6 px where a button's are 8, in keeping with its 27 px against a control's 39.
+/// 6 px where a button's are 8, in keeping with its 32 px against a control's 39.
 const ROW_BUTTON_RADIUS: u8 = 17;
-/// How tall a button inside a row's wash is where a row has room, of the line words are
-/// sized for: 27 px of 36, which leaves 6 px of a 39 px wash over and under it. At a
-/// button's 32 px the wash showed 4 px either side, too little to read as air.
-const ROW_BUTTON_HEIGHT: f32 = 0.75;
 /// The one picture `Grid::exact_fill` scales: a single pixel, all ink.
 const EXACT_FILL: u64 = u64::MAX - 1;
 /// How far a button's words are raised in its chip, in rows: a pixel. Words stand with their
@@ -524,11 +520,13 @@ impl Grid {
         self.button_of((BUTTON_HEIGHT, 0.0), (x, y), cells, label, fill, style);
     }
 
-    /// A button at the end of a row that's washed under the pointer. Where a row has room,
-    /// it's shorter than the wash, which shows over and under it: as tall as the wash, the
-    /// two read as one shape with a step in it, and taller, as a button too big for its
-    /// row. On the terminal's line a button and the wash have the row between them and
-    /// nothing to spare, and it's a button like any other.
+    /// A button at the end of a row that's washed under the pointer, or in a row of its own
+    /// between lines. Where a row has room, it's the height it has on the terminal's line,
+    /// 32 px, 9 px clear of a row of 50 and inside a pointed row's wash: as tall as the wash,
+    /// the two read as one shape with a step in it, and taller, as a button too big for its
+    /// row. Its words are raised a step, so their ink, tails and all, stands in its middle:
+    /// at 27 px a "p"'s tail ended on its foot. On the terminal's line a button and the wash
+    /// have the row between them and nothing to spare, and it's a button like any other.
     pub fn row_button(
         &mut self,
         (x, y): (u16, u16),
@@ -541,23 +539,17 @@ impl Grid {
         if !self.roomy {
             return;
         }
-        // Shorter than a button, about its middle, and its corners a little tighter with its
-        // height: a button's 8 px beside the wash's 4 read as two kinds of shape once there
-        // was wash to see round it.
-        let short = units(ROW_BUTTON_HEIGHT);
+        // Its corners a little tighter with its height: a button's 8 px beside the wash's 4
+        // read as two kinds of shape once there was wash to see round it.
         let chips = self.paint.iter_mut().rev();
         for paint in chips.take(2) {
-            if let Paint::Panel {
-                bounds,
-                inset,
-                radius,
-                ..
-            } = paint
-            {
-                bounds.y += (bounds.h - short) / 2;
-                bounds.h = short;
-                *inset = true;
-                *radius = ROW_BUTTON_RADIUS;
+            match paint {
+                Paint::Panel { inset, radius, .. } => {
+                    *inset = true;
+                    *radius = ROW_BUTTON_RADIUS;
+                }
+                Paint::Text { y, .. } => *y -= units(BUTTON_WORDS),
+                _ => {}
             }
         }
     }
@@ -1003,9 +995,7 @@ pub fn air_under_button(row: f32, line: f32) -> f32 {
 /// sized for a line `line` px tall.
 pub fn row_button_in_row(row: f32, line: f32) -> (f32, f32) {
     let (_, top, _, bottom) = button_span((BUTTON_HEIGHT, 0.0), (0, 0), 1);
-    let (y, h) = (units(top), units(bottom - top));
-    let short = units(ROW_BUTTON_HEIGHT);
-    let (top, tall) = crate::raster::inset(y + (h - short) / 2, short, row, line);
+    let (top, tall) = crate::raster::inset(units(top), units(bottom - top), row, line);
     (top, top + tall)
 }
 

@@ -6634,5 +6634,19 @@
     "title": "A pane's tab's tip stands from the tab's start inside the pane, cut with an ellipsis where it's longer",
     "test": "a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start",
     "passes": true
+  },
+  {
+    "id": "row-button-words-centred",
+    "milestone": 15,
+    "title": "A button in a row between lines is 32 px, 9 px clear of a row of 50, with its words' ink in its middle and 4 px or more under a tail",
+    "test": "a_row_buttons_words_stand_in_its_middle_tails_and_all",
+    "passes": true
+  },
+  {
+    "id": "selection-bar-no-shadow",
+    "milestone": 15,
+    "title": "A selection's Comment and Ask Agent are edged with no shadow, the page's ground between them",
+    "test": "a_selections_buttons_have_no_shadow_between_them",
+    "passes": true
   }
 ]

@@ -375,6 +375,83 @@ fn reject_and_accept_by_a_suggestion_have_no_shadow_between_them() {
     }
 }
 
+/// A selection's Comment and Ask Agent are edged with no shadow, as Reject and Accept are,
+/// the page's ground between them, and stand 8 px or more clear of the selection: their
+/// shadows met in the 8 px between them, a band of #dadada on white with a hard edge 7 px
+/// under their tops, stood out 10 px left of Comment and ended 1 px over the selection.
+#[test]
+fn a_selections_buttons_have_no_shadow_between_them() {
+    for light in [false, true] {
+        let (_dir, mut app) = page("# Notes\n\nThe cache goes first, then the rest of it.\n");
+        if light {
+            app.theme = Theme::named(Some("light"));
+        }
+        let grid = screen(&app);
+        let (x, y) = on_page(&app, &grid, "cache");
+        let (end, _) = on_page(&app, &grid, "first");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Drag, end + 5, y));
+        app.handle(mouse(MouseKind::Up, end + 5, y));
+        let grid = painted(&mut app);
+        let (comment, ask) = app.selection_labels();
+        let chip = |name: &str| {
+            let (x, y) = grid
+                .paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Text { x, y, text, .. } if *text == name => Some((*x, *y)),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{name} painted"));
+            grid.paint
+                .iter()
+                .find_map(|p| match p {
+                    Paint::Panel {
+                        bounds,
+                        border,
+                        shadow,
+                        fill: Some(_),
+                        ..
+                    } if bounds.x <= x
+                        && x < bounds.x + bounds.w
+                        && bounds.y <= y + UNIT / 2
+                        && y + UNIT / 2 < bounds.y + bounds.h
+                        && bounds.h < UNIT =>
+                    {
+                        Some((*bounds, *border, *shadow))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("a chip under {name}"))
+        };
+        let (left, left_edge, left_shadow) = chip(&comment);
+        let (right, right_edge, right_shadow) = chip(&ask);
+        assert!(!left_shadow && !right_shadow, "light {light}: no shadow");
+        assert_eq!(left_edge, Some(app.theme.popup_border), "edged");
+        assert_eq!(right_edge, Some(app.theme.popup_border), "edged");
+        // Nothing painted between or round them but the page.
+        let (top, foot) = (left.y.min(right.y), left.y.max(right.y) + left.h);
+        let round = (left.x - UNIT, right.x + right.w + UNIT);
+        let others = grid.paint.iter().filter(|p| match p {
+            Paint::Panel { bounds, shadow, .. } => {
+                *bounds != left
+                    && *bounds != right
+                    && bounds.x < round.1
+                    && bounds.x + bounds.w > round.0
+                    && bounds.y < foot
+                    && bounds.y + bounds.h > top
+                    && (*shadow || bounds.h < UNIT)
+            }
+            _ => false,
+        });
+        assert_eq!(
+            others.count(),
+            0,
+            "light {light}: nothing between or round them"
+        );
+    }
+}
+
 /// An agent answers a comment with `text`, as `cellix reply` sends it.
 fn answer(app: &mut App, id: u32, text: &str) {
     let (found, _) = std::sync::mpsc::channel();

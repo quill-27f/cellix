@@ -5892,16 +5892,19 @@ impl App {
         if let Some((chip, _)) = self.run_button() {
             self.draw_chip(grid, chip, "Run");
         }
+        // Two side by side, as Reject and Accept are, so edged with no shadow: theirs met in
+        // the 8 px between them, a band of grey on white with a hard edge 7 px under their
+        // tops, and stood out 10 px left of Comment.
         if let Some((comment, ask, lift)) = self.output_bar_at() {
             let lift = (lift, SELECTION_CHIP.1);
-            self.draw_chip_lifted(grid, comment, "Comment", lift);
-            self.draw_chip_lifted(grid, ask, "Ask Agent", lift);
+            self.draw_chip_as(grid, comment, "Comment", lift, (false, false));
+            self.draw_chip_as(grid, ask, "Ask Agent", lift, (false, false));
         }
         if let Some((comment, ask, lift)) = self.selection_bar_at() {
             let (comment_says, ask_says) = self.selection_labels();
             let lift = (lift, SELECTION_CHIP.1);
-            self.draw_chip_lifted(grid, comment, &comment_says, lift);
-            self.draw_chip_lifted(grid, ask, &ask_says, lift);
+            self.draw_chip_as(grid, comment, &comment_says, lift, (false, false));
+            self.draw_chip_as(grid, ask, &ask_says, lift, (false, false));
         } else if let Some((chip, _)) = self.picture_comment() {
             self.draw_chip(grid, chip, "Comment");
         } else if let Some((_, reject, accept, (first, _))) = self.change_chips() {
@@ -31344,10 +31347,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(painted);
     }
 
-    /// Where a row has room, the button on a pointed row is shorter than the wash behind it,
-    /// which shows 6 px over and under it. Both were a control's height, 39 px in a row of
-    /// 50: the button's edges lay on the wash's, and the two read as one shape with a step in
-    /// it; then at a button's 32 px the wash showed 4 px either side.
+    /// Where a row has room, the button on a pointed row is shorter than the wash behind it:
+    /// the height it has on the terminal's line, 32 px, which shows the wash 4 px over and
+    /// under it. Both were a control's height, 39 px in a row of 50: the button's edges lay on
+    /// the wash's, and the two read as one shape with a step in it. At 27 px, for 6 px of
+    /// wash, a "g"'s tail ended a pixel off its foot.
     #[test]
     fn a_button_on_a_pointed_row_stands_inside_the_wash() {
         let (dir, mut app) = project();
@@ -31402,12 +31406,12 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!((wash - 39.0).abs() < 0.5, "the wash is a control: {wash}");
         let (over, under) = (top - wash_top, wash_top + wash - top - button);
         assert!(
-            over >= 5.9 && (over - under).abs() < 0.1,
+            over >= 3.5 && (over - under).abs() < 0.1,
             "{over} px of the wash over the button and {under} under it"
         );
         assert!(
-            (button - 0.75 * 36.0).abs() < 0.5,
-            "three quarters of the line: {button}"
+            (button - 0.88 * 36.0).abs() < 0.5,
+            "its height on the terminal's line: {button}"
         );
         // On the terminal's own line there's no room for that: a button like any other.
         let ((wash_top, wash), (top, button)) = shapes(&mut app, 36);

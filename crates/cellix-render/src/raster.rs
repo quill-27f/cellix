@@ -1509,18 +1509,18 @@ mod tests {
         };
         // Down the button's middle, eight cells along: wash, button, wash.
         let (button, round) = (rows(136, true), rows(136, false));
-        // 27 px, three quarters of the line, where a button is 31.7: shorter, so the wash
-        // has 6 px over it and under it, five of them whole and one blended with the button's
-        // edge. With a button's height it had 4, too little to read.
+        // 31.7 px, the height it has on the terminal's line, thirty rows of it whole and a
+        // blended one at each edge, so the wash has 4 px over it and under it. At 27 px, three
+        // quarters of the line, its words' tails touched its foot.
         assert!(
-            (26..=28).contains(&button.len()),
+            (30..=33).contains(&button.len()),
             "{} px of button",
             button.len()
         );
         let over = round.iter().filter(|y| **y < button[0]).count();
         let under = round.len() - over;
         assert!(
-            (5..=7).contains(&over) && over.abs_diff(under) <= 1,
+            (3..=5).contains(&over) && over.abs_diff(under) <= 1,
             "{over} px of wash over the button, {under} under"
         );
         // Its corners are tighter than a button's, with its height.
@@ -1547,6 +1547,49 @@ mod tests {
             .iter()
             .any(|p| matches!(p, Paint::Panel { inset: true, .. }));
         assert!(!plain, "not inset where a row has no room");
+    }
+
+    /// A button in a row between lines (`Grid::row_button`) is 32 px on a row of 50, 9 px
+    /// clear of the row, and its words' ink, a capital's top to a "p"'s tail, stands in its
+    /// middle with 4 px or more under the tail: at 27 px the tail of Keep's "p" ended on its
+    /// foot.
+    #[test]
+    fn a_row_buttons_words_stand_in_its_middle_tails_and_all() {
+        let Some(r) = SoftwareRasterizer::new(17, 50) else {
+            return;
+        };
+        let mut r = r.with_type_row(36);
+        let mut grid = Grid::new(16, 1, style());
+        grid.roomy = true;
+        grid.row_button((2, 0), "            ", "Keep", Rgb(255, 0, 0), style());
+        let image = r.row(&grid, 0);
+        let at = |x: usize, y: usize| {
+            let i = (y * image.width + x) * 3;
+            (image.rgb[i], image.rgb[i + 1])
+        };
+        // The button, down a column inside it and clear of its words.
+        let button: Vec<usize> = (0..image.height).filter(|y| at(45, *y).0 > 200).collect();
+        assert!(
+            (30..=33).contains(&button.len()),
+            "{} px of button",
+            button.len()
+        );
+        let (top, foot) = (button[0], *button.last().unwrap());
+        assert!(
+            top >= 8 && image.height - 1 - foot >= 8,
+            "{top} px over it, {} under",
+            image.height - 1 - foot
+        );
+        // Its words, white on its red: from the capital's top to the tail's foot.
+        let ink: Vec<usize> = (0..image.height)
+            .filter(|y| (100..170).any(|x| at(x, *y).1 > 90))
+            .collect();
+        let (caps, tail) = (ink[0], *ink.last().unwrap());
+        let (over, under) = (caps - top, foot - tail);
+        assert!(
+            under >= 4 && over.abs_diff(under) <= 1,
+            "{over} px over its capitals, {under} under its tails"
+        );
     }
 
     /// An emoji in a line of painted text keeps its own colours, where the machine has a

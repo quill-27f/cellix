@@ -519,13 +519,19 @@ fn air_round(grid: &Grid, buttons: (Rect, Rect)) -> f32 {
                 && (y - f32::from(b.y)).abs() < 1.0
         })
     };
-    // The buttons' box, as the painter stands it in its row.
-    let mut boxes = (grid.paint.iter()).filter_map(|paint| match paint {
+    // The buttons' box, as the painter stands it in its row: edged, with no shadow, since
+    // 0.11.0's release review (B4).
+    let edge = crate::theme::Theme::default().popup_border;
+    let chip = |paint: &Paint| match paint {
         Paint::Panel {
             bounds,
-            shadow: true,
+            border: Some(border),
             ..
-        } if on_buttons(bounds) => {
+        } => *border == edge && on_buttons(bounds),
+        _ => false,
+    };
+    let mut boxes = (grid.paint.iter()).filter_map(|paint| match paint {
+        Paint::Panel { bounds, .. } if chip(paint) => {
             let (top, tall) = cellix_render::stood(bounds.y, bounds.h, row, line);
             let left = bounds.x as f32 / unit * CELL.0 as f32;
             Some([
@@ -550,7 +556,7 @@ fn air_round(grid: &Grid, buttons: (Rect, Rect)) -> f32 {
     let mut without = grid.clone();
     let labels = ["Comment", "Ask Agent"];
     without.paint.retain(|paint| match paint {
-        Paint::Panel { bounds, shadow, .. } => !(*shadow && on_buttons(bounds)),
+        Paint::Panel { .. } => !chip(paint),
         Paint::Text { text, .. } => !labels.iter().any(|l| text.starts_with(l)),
         _ => true,
     });
