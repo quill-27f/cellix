@@ -129,7 +129,11 @@ fn ctrl_shift_chords_arrive_with_csi_u_keys() {
     let tmux = Tmux::start_with(dir.path(), "chords", options);
     tmux.wait("0", "hello from a file");
     tmux.run(&["send-keys", "-t", "0", "C-S-p"]);
-    tmux.wait("0", "Select All");
+    // The commands' own prompt: Ctrl+P's asks to "Search files". The list is longer than the
+    // pane, so a command is found by its name, which in Ctrl+P's files finds nothing.
+    tmux.wait("0", "Type to search");
+    tmux.run(&["send-keys", "-t", "0", "-l", "select all"]);
+    tmux.wait("0", "Edit: Select All");
 }
 
 #[test]
