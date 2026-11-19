@@ -452,6 +452,68 @@ fn a_selections_buttons_have_no_shadow_between_them() {
     }
 }
 
+/// The picked emoji offered for a name stands its ground on the column the box over it keeps,
+/// as the kinds' pills and the buttons under it do: it started 9 px left of the box.
+#[test]
+fn the_picked_emoji_for_a_name_starts_on_the_boxs_column() {
+    let (_dir, mut app) = page("The cache goes first.\n");
+    let grid = screen(&app);
+    let (x, y) = on_page(&app, &grid, "cache");
+    click(&mut app, x + 1, y);
+    click(&mut app, x + 1, y);
+    app.run(Command::AddComment);
+    typed(&mut app, "Fast :roc");
+    let grid = painted(&mut app);
+    let found = |fill: Rgb| {
+        grid.paint.iter().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(f),
+                ..
+            } if *f == fill => Some(*bounds),
+            _ => None,
+        })
+    };
+    let field = found(app.theme.input).expect("the box");
+    let picked = found(app.theme.pick).expect("the picked emoji's ground");
+    near(
+        px(picked.x),
+        px(field.x),
+        "the picked emoji's ground on the box's column",
+    );
+}
+
+/// A card's Edit and Delete, the least of its actions, are in the secondary words' colour in
+/// both themes: light, they were #53566f, all but the body text's #4c4f69, where dark's are
+/// quiet beside its words.
+#[test]
+fn a_cards_edit_and_delete_are_quiet_in_both_themes() {
+    for light in [false, true] {
+        let (_dir, mut app) = page("The cache goes first.\n");
+        if light {
+            app.theme = Theme::named(Some("light"));
+        }
+        comment(&mut app, "cache", "Why first?");
+        app.lit_thread = None;
+        let grid = painted(&mut app);
+        let theme = &app.theme;
+        for name in ["Edit", "Delete"] {
+            let colour = painted_in(&grid, name);
+            if light {
+                assert_eq!(colour, theme.secondary_words(), "{name}: Latte's subtext0");
+            }
+            let card = theme.popup;
+            let read = crate::theme::contrast(colour, card);
+            assert!(read >= 4.5, "light {light}: {name} {read} to 1 on the card");
+            let apart = crate::theme::contrast(colour, theme.text.fg);
+            assert!(
+                apart >= 1.4,
+                "light {light}: {name} {apart} to 1 from the words"
+            );
+        }
+    }
+}
+
 /// An agent answers a comment with `text`, as `cellix reply` sends it.
 fn answer(app: &mut App, id: u32, text: &str) {
     let (found, _) = std::sync::mpsc::channel();

@@ -361,10 +361,17 @@ impl Theme {
     }
 
     /// What can't be done here but has to be read, as an agent that isn't installed and the
-    /// note that says so. Dark, the quiet words' colour, herdr's muted. Light, Latte's subtext0,
-    /// #6c6f85, 4.9 to 1 on white: the light theme's quiet words are all but its text's colour
-    /// (1.1 to 1), and a row in them read as one that can be picked.
+    /// note that says so: the secondary words' colour (`secondary_words`). A row in the light
+    /// theme's quiet words read as one that can be picked.
     pub fn unavailable(&self) -> Rgb {
+        self.secondary_words()
+    }
+
+    /// Words that are read but are the least of what's there, as a card's Edit and Delete.
+    /// Dark, the quiet words' colour, herdr's muted. Light, Latte's subtext0, #6c6f85, 4.9 to
+    /// 1 on white: the light theme's quiet words are all but its text's colour (1.1 to 1), and
+    /// Edit and Delete in them (#53566f) read as body text where dark's read as quiet.
+    pub fn secondary_words(&self) -> Rgb {
         if self.is_light() {
             Rgb(0x6c, 0x6f, 0x85)
         } else {

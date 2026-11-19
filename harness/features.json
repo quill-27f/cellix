@@ -6648,5 +6648,26 @@
     "title": "A selection's Comment and Ask Agent are edged with no shadow, the page's ground between them",
     "test": "a_selections_buttons_have_no_shadow_between_them",
     "passes": true
+  },
+  {
+    "id": "status-one-word",
+    "milestone": 15,
+    "title": "The status bar counts one word as 1 word, and 1 of 1 word",
+    "test": "the_status_counts_one_word_as_a_word",
+    "passes": true
+  },
+  {
+    "id": "card-edit-delete-quiet",
+    "milestone": 15,
+    "title": "A card's Edit and Delete are in the secondary words' colour in both themes",
+    "test": "a_cards_edit_and_delete_are_quiet_in_both_themes",
+    "passes": true
+  },
+  {
+    "id": "emoji-pick-on-box-column",
+    "milestone": 15,
+    "title": "The picked emoji offered for a name starts its ground on the column the box over it keeps",
+    "test": "the_picked_emoji_for_a_name_starts_on_the_boxs_column",
+    "passes": true
   }
 ]

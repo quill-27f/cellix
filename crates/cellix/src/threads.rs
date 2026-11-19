@@ -1359,6 +1359,9 @@ fn suggest_emoji(emoji: &str, measure: &dyn Measure) -> f32 {
 
 /// Columns between one offered emoji's name and the next emoji.
 const SUGGEST_GAP: f32 = 2.0;
+/// Columns the first offered emoji stands in from the card's column: its chip's lead, so the
+/// picked one's ground starts on the column the box over it keeps. It started 9 px left of it.
+const SUGGEST_LEAD: f32 = 0.5;
 /// Columns kept at the end of that row for the key's name, and the gap before it.
 const SUGGEST_KEY: f32 = SUGGEST_GAP + 3.0;
 
@@ -2488,7 +2491,7 @@ pub fn hit(
         }
         Line::Suggest(found) => {
             let at = f32::from(x) + 0.5;
-            suggest_spots((a.text, a.end), found, measure)
+            suggest_spots((a.text + SUGGEST_LEAD, a.end), found, measure)
                 .into_iter()
                 .position(|(from, wide)| at >= from && at < from + wide)
                 .map(Hit::Suggested)
@@ -2904,7 +2907,7 @@ pub fn draw(
             }
             Line::Suggest(found) => {
                 // The first is the one Tab takes, so its name is the plain one.
-                let spots = suggest_spots((a.text, a.end), found, measure);
+                let spots = suggest_spots((a.text + SUGGEST_LEAD, a.end), found, measure);
                 // And Tab is named at the row's end, where there's room for it.
                 let end = spots.last().map_or(0.0, |(x, wide)| x + wide);
                 if end + SUGGEST_KEY <= a.end {
@@ -2924,7 +2927,12 @@ pub fn draw(
                         } else {
                             theme.popup_hover
                         };
-                        let chip = Bounds::cells(x - 0.5, f32::from(y) + 0.08, wide + 1.0, 0.84);
+                        let chip = Bounds::cells(
+                            x - SUGGEST_LEAD,
+                            f32::from(y) + 0.08,
+                            wide + SUGGEST_LEAD * 2.0,
+                            0.84,
+                        );
                         grid.panel(chip, 18, Some(fill), None);
                     }
                     let cell = x.floor() as u16;
@@ -3389,7 +3397,7 @@ pub fn draw(
                     let style = Style {
                         bg: fill,
                         fg: if plain && !on_it {
-                            theme.popup_dim
+                            theme.secondary_words()
                         } else {
                             inner.fg
                         },
@@ -3534,7 +3542,7 @@ mod tests {
                 let area = Rect::new(0, 0, width, 10);
                 let a = across(area, View::default(), measure);
                 let right = a.end;
-                let spots = suggest_spots((a.text, a.end), &found, measure);
+                let spots = suggest_spots((a.text + SUGGEST_LEAD, a.end), &found, measure);
                 assert!(!spots.is_empty(), "the first is always offered");
                 let (x, wide) = spots[spots.len() - 1];
                 if spots.len() > 1 {
@@ -3549,7 +3557,7 @@ mod tests {
             }
             assert!(fewer, "some width holds a few of them and the key");
             let wide = across(Rect::new(0, 0, 110, 10), View::default(), measure);
-            let all = suggest_spots((wide.text, wide.end), &found, measure);
+            let all = suggest_spots((wide.text + SUGGEST_LEAD, wide.end), &found, measure);
             assert_eq!(all.len(), found.len(), "a wide pane holds them all");
         }
     }

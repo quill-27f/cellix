@@ -691,7 +691,7 @@ impl SettingsPage {
                     missing,
                     Tone::Quiet,
                     "Install it first, then come back here.",
-                    Some(("Copy install", false, Control::CopyInstall(install))),
+                    Some(("Copy Install Command", false, Control::CopyInstall(install))),
                 ),
             };
             Block {
@@ -2160,7 +2160,7 @@ fn draw_button(
     let style = Style { fg, ..theme.text };
     let (x, wide) = button_place(rect, label, measure);
     // As many of its letters as its width has cells: more would widen the chip past it,
-    // which stood Copy install on its card's edge.
+    // which stood Copy Install Command on its card's edge.
     let held: String = label.chars().take(wide as usize).collect();
     let cells = format!("{held:^width$}", width = wide as usize);
     grid.large_button_between(x, rect.y, &cells, label, fill, style);

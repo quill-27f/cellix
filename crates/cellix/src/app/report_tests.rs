@@ -94,7 +94,7 @@ Say what's new here.
 
 Robust to what?
 
-**Claude agrees:** The checks should be named.
+**Agrees · Claude:** The checks should be named.
 
 **You:** Done in the next draft.
 
@@ -114,7 +114,7 @@ Add a limitations paragraph.
 
 Over which baseline?
 
-**Claude pushes back:** Table 2 names the baseline.
+**Pushes back · Claude:** Table 2 names the baseline.
 
 ### Structure
 

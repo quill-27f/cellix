@@ -3715,3 +3715,15 @@ Release track B, from the release review of 0.11.0's B2 (a regression) and B4.
 - Tests: those two, `a_row_buttons_words_stand_in_its_middle_tails_and_all` (rasterized: 32 px, 8 px or more clear of the row, the ink's air over and under within a pixel, 4 px or more under the tail), `a_selections_buttons_have_no_shadow_between_them` (both themes).
 - Measured in the tour (2x): 176-review-suggested's Keep 433 to 464 in a row of 424 to 474, its ink 438 to 459 (5 px over the capital, 5 under the "p"); 173-peek's Keep as Tab 133 to 164 between the card's edge at 124 and the header's line at 174, ink 5 and 5; 132-task-problem-hover's and 109-problem-ask's Ask Agent 183 to 214 in a wash of 179 to 218, ink 188 to 209; 42-hover-install's Install 1133 to 1164 in its wash; 65-transcript-page's Show Source 91 to 122, 15 px under the tab line; s1-page-shift-select's Comment and Ask Agent edged, 8 px of white between them, their foot 12 px over the selection.
 - Unverified: words with no tails (Show Source, Install) have 5 px over their capitals and 10 under their baseline: the raise is one for every button, placed by the font's capital-to-tail box, not by each word's own ink.
+
+## "1 word", and the small ones (2026-11-19)
+
+Release track B, from the release review of 0.11.0's B3 (wrong words) and B7.
+
+- The status bar said "1 words" (14-worktree-menu) and "1 of 1 words": one is a word now. The CI-only `tex` job reads no word count.
+- "Copy install" in Settings' Integrations is "Copy Install Command", in Title Case like its neighbours.
+- A card's Edit and Delete were #53566f in the light theme, all but the body text's #4c4f69, where dark's are quiet. They're in the secondary words' colour (`Theme::secondary_words`): dark the quiet words' as before, light Latte's subtext0, #6c6f85, 4.9 to 1 on white, which is what Agents' rows that can't be picked already used.
+- The picked emoji offered for a name started its ground 9 px left of the column the box over it keeps (50-comment-emoji); it starts on that column (`SUGGEST_LEAD`).
+- The exported review wrote "Claude agrees:" where every card says the verdict first, on its chip, then who: it writes "Agrees · Claude:".
+- Not done from B7: the table picker's label (48), the submenu's overlap and shadow (57-dock-menu-format) and the reviewer note's tint (69 to 71).
+- Tests: `the_status_counts_one_word_as_a_word`, `a_cards_edit_and_delete_are_quiet_in_both_themes`, `the_picked_emoji_for_a_name_starts_on_the_boxs_column`; `the_review_is_markdown_a_file_and_a_kind_at_a_time` reads the new wording.

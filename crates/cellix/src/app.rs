@@ -19770,9 +19770,11 @@ impl App {
                     let (all, selected, paper) = editor.word_count(&others);
                     // A paper over several files counts whole, and says so.
                     let whole = if paper { " in the paper" } else { "" };
+                    // One is a word: the bar said "1 words".
+                    let noun = if all == 1 { "word" } else { "words" };
                     let words = match selected {
-                        Some(selected) => format!("{selected} of {all} words{whole}"),
-                        None => format!("{all} words{whole}"),
+                        Some(selected) => format!("{selected} of {all} {noun}{whole}"),
+                        None => format!("{all} {noun}{whole}"),
                     };
                     if editor.tracking {
                         format!("Tracking changes  {words}")
@@ -28894,6 +28896,28 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         select_word(&mut app, "cache");
         let text = screen(&app).text();
         assert!(text.contains("1 of 7 words"), "{text}");
+    }
+
+    /// A page of one word says "1 word", and so does a selection out of it: the status bar
+    /// said "1 words".
+    #[test]
+    fn the_status_counts_one_word_as_a_word() {
+        let (_dir, mut app) = page_app("Hello\n");
+        let text = screen(&app).text();
+        assert!(
+            text.contains("1 word") && !text.contains("1 words"),
+            "{text}"
+        );
+        select_word(&mut app, "Hello");
+        let text = screen(&app).text();
+        assert!(
+            text.contains("1 of 1 word") && !text.contains("1 of 1 words"),
+            "{text}"
+        );
+        // Any other count is words.
+        let (_dir, app) = page_app("Hello there\n");
+        let text = screen(&app).text();
+        assert!(text.contains("2 words"), "{text}");
     }
 
     #[test]

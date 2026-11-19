@@ -166,8 +166,10 @@ fn entry(thread: &Thread) -> String {
     }
     for reply in &thread.replies {
         let (verdict, who, words) = threads::reply_parts(reply);
+        // The verdict first and then who gave it, as the cards say it ("Agrees" on a chip,
+        // then "Claude"): the review said "Claude agrees" where every card said that.
         let who = match verdict {
-            Some(verdict) => format!("{who} {}", verdict.to_lowercase()),
+            Some(verdict) => format!("{verdict} · {who}"),
             None => who,
         };
         let words = words.trim_end();

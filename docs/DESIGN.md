@@ -475,8 +475,8 @@ scrollbar or a checkbox while the caret is already there. A pane that's shut sta
 the pane holds what was opened and a press in the text isn't a press on the pane. So with the pane
 shut, resting the pointer on commented words shows their comment on a card, made as a menu is
 (raised, half a row of air over its first words and under its last, two columns in): who made it
-and its kind, quietly; its words, three rows at most; the last answer, its author and verdict in
-bold ("Claude agrees:"), two rows at most; and under a rule, how many answers and "Open in
+and its kind, quietly; its words, three rows at most; the last answer, its verdict on a chip and
+its author in bold, as the pane's card has them, two rows at most; and under a rule, how many answers and "Open in
 Comments" in the accent. A press on the card opens the pane on that comment as a click on its card
 in the pane does: its words selected, its card lit and in view, the keyboard in the file. The card
 stands on whole rows of its own under the words, its words starting where theirs do, or over them
@@ -530,7 +530,7 @@ An agent's suggestion goes in once it's kept, which makes it the reviewer's; one
 yet decided doesn't. A short head says how many comments, on how many files, how many resolved,
 and how many of each kind. Each comment is headed by its line and whether it's open or resolved, quotes
 its words (the whole selection) as a block quote, and has the reviewer's words and every answer
-under them, named, an agent's verdict as "Claude agrees" or "Claude pushes back". Its heading
+under them, named, an agent's verdict first as its card puts it, "Agrees · Claude". Its heading
 ends with when it was made, as a date and time in UTC ("Line 4 · Open · 2025-11-18 13:00 UTC"),
 since a review is read anywhere; one kept from before comments said when says nothing of it.
 
