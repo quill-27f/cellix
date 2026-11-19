@@ -20427,6 +20427,8 @@ mod agent_tab_tests;
 #[cfg(test)]
 mod agents_list_tests;
 #[cfg(test)]
+mod cards_tests;
+#[cfg(test)]
 mod changes_tests;
 #[cfg(test)]
 mod docflow_tests;

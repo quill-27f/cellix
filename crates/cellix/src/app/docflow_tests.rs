@@ -663,7 +663,7 @@ fn an_agent_says_it_addressed_a_comment_and_the_reviewer_settles_it() {
 }
 
 /// A press on "Changed since your comment" shows on the card what changed, a word at a
-/// time: what went struck through in the attention colour, what came in green. Another press
+/// time: what went struck through in the removed colour, what came in green. Another press
 /// hides it.
 #[test]
 fn a_cards_pill_shows_what_changed_since_the_comment() {
@@ -704,11 +704,7 @@ fn a_cards_pill_shows_what_changed_since_the_comment() {
     let pane = app.dock_area().map_or(0, |pane| pane.x);
     let text = in_pane(&app, &grid, row);
     let at = |word: &str| pane + text[..text.find(word).unwrap()].chars().count() as u16;
-    assert_eq!(
-        grid.cell(at("fast"), row).style.fg,
-        app.theme.attention,
-        "went"
-    );
+    assert_eq!(grid.cell(at("fast"), row).style.fg, app.theme.error, "went");
     assert_eq!(
         grid.cell(at("quick"), row).style.fg,
         app.theme.git_added,

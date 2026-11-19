@@ -538,7 +538,12 @@ A comment and each answer say how long ago they were written, after who wrote th
 5 min", "Claude · 2 h" (`at`, seconds since 1970, kept with each; a comment's number had been the
 only record of when, and one kept from before says nothing). A suggestion has Reply between Keep
 and Dismiss, so the agent can be asked about it without its being kept; it's waited on as the
-reviewer's own comment is, and the agent hears it's its own suggestion. A press on a kind's pill
+reviewer's own comment is, and the agent hears it's its own suggestion. A suggestion's card stands
+on the ground every card has, with a dashed edge in a quiet grey until it's kept: the accent's
+tint and edge are the lit card's alone (a suggestion was a shade of the accent, which under a lit
+card read as the same card). Words a comment was made on that are gone, "Words gone" and "Removed
+in version 2", are in the removed colour, as a diff's removed lines are, not the colour of what
+needs you. A press on a kind's pill
 lists only that kind's comments, the pill in the accent's colours, and another press lists them
 all; with none of that kind the pane says so and how to list them all. The pills count the
 reviewer's own comments: a suggestion not yet kept covers nothing, and was counted. With no
@@ -555,7 +560,7 @@ agent, say so.
 
 The pill on a comment whose words were reworded since, "Changed since your comment ›", opens
 what changed in the quote's place, on its bar: the words commented on and the words there now as
-one run, a word at a time, what went in the attention colour and struck through, what came in
+one run, a word at a time, what went in the removed colour and struck through, what came in
 green, what stayed as the quote's words are (`threads::word_changes`, from `similar`'s word
 diff), and the pill's chevron turns down. Another press on the pill closes it. (It opened as a row
 under the quote, which said most of the quote's words again.) A plan's "Changed in version N ›" goes on opening the plan's versions

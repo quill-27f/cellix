@@ -354,13 +354,14 @@ fn diff_rows(
 pub const CHANGED_SINCE: &str = "Changed since your comment";
 pub const WORDS_GONE: &str = "Words gone";
 
-/// A pill's colour: the warning colour for words that are gone, a quiet one for words
-/// only reworded.
+/// A pill's colour: the removed colour for words that are gone, as a diff's removed lines
+/// are, a quiet one for words only reworded. Gone words were in the colour of what needs you,
+/// which said something else.
 fn pill_tone(words: Words, theme: &Theme) -> cellix_render::Rgb {
     match words {
         Words::Changed => theme.gutter.fg,
         Words::Addressed => theme.git_added,
-        _ => theme.attention,
+        Words::Removed | Words::Here => theme.error,
     }
 }
 
@@ -2282,21 +2283,13 @@ pub fn draw(
         ..theme.sidebar
     };
     let body = theme.sidebar;
-    // Each card is drawn whole before what's on it, so text sits on top. A suggestion's is a
-    // shade of the accent until it's kept, so it reads as offered rather than chosen.
-    // A card is raised over the pane, as a menu is over the page.
+    // Each card is drawn whole before what's on it, so text sits on top. A card is raised
+    // over the pane, as a menu is over the page. A suggestion's is the same ground, with a
+    // dashed edge until it's kept, so it reads as offered rather than chosen: the accent's
+    // tint and edge are the lit card's alone. Tinted too, a suggestion under a lit card was
+    // a shade from it (#2a2f38 beside #2d3440), and told apart by its dashes only.
     let card = theme.popup;
-    let suggested_card = mix(theme.accent, card, 0.06);
-    let card_of = |id: u32| {
-        if threads
-            .iter()
-            .any(|t| t.id == id && !t.suggested_by.is_empty())
-        {
-            suggested_card
-        } else {
-            card
-        }
-    };
+    let offered_edge = mix(theme.gutter.fg, card, 0.5);
     let row_y = |index: usize| area.y as f32 + index as f32 - top as f32;
     let shown = |y: f32, height: f32| y + height > area.y as f32 && y < area.bottom() as f32;
     // Each card's rows, so a short card shows its buttons while the pointer is on it.
@@ -2341,7 +2334,7 @@ pub fn draw(
                         // The one whose words were pressed in the document.
                         (mix(theme.accent, card, 0.1), theme.accent)
                     } else if matches!(line, Line::Choices(_)) {
-                        (suggested_card, mix(theme.accent, card, 0.5))
+                        (card, offered_edge)
                     } else {
                         (card, theme.border)
                     };
@@ -2380,7 +2373,7 @@ pub fn draw(
     // An agent's answer is set in, on a shade of its card, so who said what is plain.
     let mut index = 0;
     while index < all.len() {
-        if let Line::Answer(id, ..) = all[index] {
+        if let Line::Answer(..) = all[index] {
             let rows = 1 + all[index + 1..]
                 .iter()
                 .take_while(|l| matches!(l, Line::Reply(..) | Line::Picture { inset: true, .. }))
@@ -2393,7 +2386,7 @@ pub fn draw(
                     right as f32 - 0.8 - text_x as f32,
                     height - 0.26,
                 );
-                let fill = theme.quiet_button(card_of(id));
+                let fill = theme.quiet_button(card);
                 grid.panel(bounds, 22, Some(fill), None);
             }
             index += rows;
@@ -2416,7 +2409,7 @@ pub fn draw(
         if view.lit == Some(id) {
             mix(theme.accent, card, 0.1)
         } else {
-            card_of(id)
+            card
         }
     };
     let pointed = hover
@@ -2690,14 +2683,14 @@ pub fn draw(
             }
             Line::Diff(_, row) => {
                 // On the quote's quiet bar, as words no longer as said are. What went in the
-                // attention colour, struck through; what came in green; what stayed as the
-                // quote's words are.
+                // removed colour, struck through; what came in the added colour; what stayed
+                // as the quote's words are.
                 let bar = Bounds::cells(text_x as f32, y as f32 + 0.16, 0.22, 0.68);
                 grid.panel(bar, 10, Some(mix(theme.gutter.fg, inner.bg, 0.55)), None);
                 let mut x = text_x as f32 + QUOTE_IN;
                 for (kind, piece) in row {
                     let fg = match kind {
-                        -1 => theme.attention,
+                        -1 => theme.error,
                         1 => theme.git_added,
                         _ => theme.gutter.fg,
                     };
@@ -2706,7 +2699,7 @@ pub fn draw(
                     let wide = measure.width(piece, small());
                     if *kind == -1 && !piece.trim().is_empty() {
                         let through = Bounds::cells(x, y as f32 + 0.5, wide, 0.0);
-                        grid.hairline(through, theme.attention);
+                        grid.hairline(through, theme.error);
                     }
                     x += wide;
                 }
@@ -2715,8 +2708,8 @@ pub fn draw(
                 let place = (f32::from(text_x), text_x, y);
                 draw_linked(grid, place, text, (inner, 100, right), (measure, theme));
             }
-            Line::Answer(id, word, author) => {
-                let block = theme.quiet_button(card_of(*id));
+            Line::Answer(_, word, author) => {
+                let block = theme.quiet_button(card);
                 let muted = Style {
                     fg: raised_muted,
                     bg: block,
@@ -2748,9 +2741,9 @@ pub fn draw(
                 grid.label_at(x, at, y, author, muted, right, SMALL);
                 grid.drop_last(VERDICT_DROP);
             }
-            Line::Reply(id, text) => {
+            Line::Reply(_, text) => {
                 let style = Style {
-                    bg: theme.quiet_button(card_of(*id)),
+                    bg: theme.quiet_button(card),
                     ..inner
                 };
                 let place = (reply_x, text_x + 1, y);
@@ -3004,7 +2997,7 @@ pub fn draw(
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                     // Neither is the panel's main action, so both are the one quiet kind, with
                     // its hover: Dismiss was plain words beside a filled Keep.
-                    let fill = theme.secondary(suggested_card, on_it);
+                    let fill = theme.secondary(card, on_it);
                     let style = Style {
                         bg: fill,
                         fg: inner.fg,

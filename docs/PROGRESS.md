@@ -3586,3 +3586,12 @@ From the final review of 0.11.0 (track T, items 6, 7 and 10).
 - A path too long for its room lost its middle by letters, so the "…" fell in a different place in every row of a list and through a folder's name (103, 106, 133, 138). It keeps where it starts from, `~` or the root, and its end, and loses whole folders after the start: `~/…/parent/name`, the cut always at the left; past that the name loses its start. The palette's paths (Go to File, Open Recent, the folder finder), the welcome page's Recent and the list of workspaces running here all cut so.
 - Tests: `the_interface_font_quotes_code_as_written` (the "-" and ">" of "->" each have a width, in two of the interface's fonts), `a_long_result_line_ends_in_an_ellipsis`, `compare_with_rows_line_up_and_are_cut_clear_of_their_band`, `a_long_path_is_cut_at_its_left_by_whole_folders`; changed with the rule: the palette's test that a folder too long for its row loses its middle now has it lose its first folders.
 - Unverified: whether Inter's other contextual alternates (a colon raised between figures) were wanted anywhere; nothing in the tour showed one.
+
+## One colour for one meaning on the comment cards (2026-11-18)
+
+The fixcards track, from the final review of 0.11.0 (C2 and C7).
+
+- A suggestion's card was a shade of the accent with an accent edge, and a lit card is the accent's tint with its edge: in 50-flow-next the two were #2a2f38 and #2d3440, told apart by the dashes only. A suggestion now stands on every card's ground with its dashes in a quiet grey; the tint and the accent edge are the lit card's alone.
+- Words gone ("Words gone", "Removed in version 2") and the removed words of "Changed since your comment" were in the colour of what needs you (#f0705f). They're in the removed colour now (#dc8c95, and the light theme's own), as a diff's removed lines are.
+- Test changed with it: `a_cards_pill_shows_what_changed_since_the_comment` asked for the attention colour on what went; it asks for the removed colour.
+- Tests: `only_the_lit_card_has_the_accent_and_a_suggestion_has_the_cards_ground`, `words_that_went_are_in_the_removed_colour` (both themes, the paint read in the tour's pixels).
