@@ -1032,8 +1032,9 @@ def agent_tabs(scratch):
                                    hook("stop", "Gemini"), ["wait", 0.8]], {"size": "96x40"}),
         ("m1-agent-tabs-cells", [*start, working(), *others, asking("Codex"), working("Gemini"),
                                   hook("stop", "Gemini"), ["wait", 0.8]], {"CELLIX_TIER": "cells"}),
-        ("m1-agent-tabs-light", [*start, working(), *others, asking("Codex"), ["wait", 0.8]],
-         {"background": "eff1f5"}),
+        # The same run as the dark one: Gemini CLI done behind the others.
+        ("m1-agent-tabs-light", [*start, working(), *others, asking("Codex"), working("Gemini"),
+                                  hook("stop", "Gemini"), ["wait", 0.8]], {"background": "eff1f5"}),
     ]
     for name, steps, extra in scenes:
         cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
@@ -1326,7 +1327,9 @@ with tempfile.TemporaryDirectory() as made:
     shoot("09-commands-scrolled", [["keys", F1], ["until", PALETTE_UP], *[["keys", "\x1b[6~"]] * 12, ["wait", 0.4]],
           CODE_FILE)
     shoot("10-branches", [["wait", 1.5], ["click", *FOOT("⎇", 2)], ["wait", 0.5]], CODE_FILE)
-    shoot("11-find", [["keys", CTRL("f")], ["keys", "item"]], CODE_FILE)
+    # Once the file is read: a Ctrl+F while it said "Reading…" opened no bar.
+    shoot("11-find", [["until", "VecDeque"], ["wait", 0.3], ["keys", CTRL("f")], ["keys", "item"],
+                      ["until", "1 of"]], CODE_FILE)
     shoot("12-search", [["click", *SEARCH]], CODE_FILE)
     replacing = [["keys", CTRL("r")], ["keys", "item"], ["keys", "\t"], ["keys", "entry"]]
     shoot("11-replace", replacing, CODE_FILE)
@@ -1460,9 +1463,10 @@ with tempfile.TemporaryDirectory() as made:
                               ["move", *ON("Accept")], ["wait", 0.4]], CODE_FILE)
     shoot("37-hover-settings", [*settings, EDITOR_PAGE, ["move", *ON("After a pause")]], CODE_FILE)
     # On Don't Save by its words: a cell fixed by number fell under the dialog once its air
-    # was evened out.
+    # was evened out. The buttons stand lifted half a row over the row their words are
+    # counted on, so the middle of that row is under them: the pointer goes half a row up.
     shoot("38-hover-dialog", [["keys", "x"], ["keys", CTRL("q")], ["until", "Don't Save"],
-                              ["move", *ON("Don't Save", 2)], ["wait", 0.4]], CODE_FILE)
+                              ["move", *ON("Don't Save", 2, -0.5)], ["wait", 0.4]], CODE_FILE)
     shoot("39-hover-agents", [*LIST_AGENTS, ["wait", 0.5], ["move", *ON("Claude Code", 2)]], CODE_FILE)
     shoot("41-hover-tab-close", [["move", *ON("×", 0)]], CODE_FILE)
     # A language's Install, under the pointer and never pressed.
@@ -1833,7 +1837,10 @@ with tempfile.TemporaryDirectory() as made:
     shoot("71-sample-rewrite-narrow", rewrite_card, WRITING, size="100x44", background="eff1f5")
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         f.write(kept)
-    shoot("73-selection-bar", [["double", 60, 7], ["wait", 0.5]], WRITING, **light)
+    # A double click on "page" in the title, placed from the "Text" heading under it: the
+    # title's measured letters don't come through whole in the screen's text.
+    shoot("73-selection-bar", [["double", ["Text", 22, -9, -1]], ["wait", 0.5]], WRITING, **light,
+          expect="Ask Agent")
     # A click, and a Shift+click further down: everything between is selected, across the
     # paragraphs, the heading and the lists, with the buttons that comment on it. Then the same
     # after the wheel has taken the click out of view, in the dark. Measured type drops letters
@@ -1846,8 +1853,10 @@ with tempfile.TemporaryDirectory() as made:
                 ["wait", 0.5]]
     shoot("s1-page-shift-select-scrolled", scrolled, WRITING, size="150x44", expect="Ask Agent")
     # A drag held on the bar at the foot, under the page, which scrolls on its own and takes
-    # the selection with it until it's let go.
-    held = [["press", ["Text", 0, 3, -1]], ["hold", 90, 43], ["wait", 0.8], ["release", 90, 43],
+    # the selection with it until it's let go: once the page has brought "Tables" up. A held
+    # time alone let go before the page had moved when frames were slow under load.
+    foot = FOOT("UTF-8")
+    held = [["press", ["Text", 0, 3, -1]], ["hold", *foot], ["until", "Tables"], ["release", *foot],
             ["wait", 0.5]]
     shoot("s1-page-drag-scroll", held, WRITING, **light, expect="Ask Agent")
     shoot("74-outline", [["click", *OUTLINE], ["wait", 0.8]], WRITING, **light)

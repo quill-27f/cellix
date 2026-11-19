@@ -31,7 +31,8 @@ A place can be named by what the screen says there rather than by column and row
 still finds it when the layout moves: ["click", ["Words"]] in place of ["click", col, row].
 The list is [words, columns right, rows down, which]: the place is that far from the first
 letter of the words, one column right and no rows down unless said, on the first row that
-says them, or the last with which as -1. It waits for the words as "until" does.
+says them, or the last with which as -1. It waits for the words as "until" does. Rows down
+can be a fraction, for a control drawn lifted off the row its words are counted on.
 
 Settings come from the environment: TERM_SIZE=170x46, TERM_CELL=17x36, TERM_PADDING=10x8,
 TERM_BG=101114 (herdr's frame, which the dark theme stands on). As Ghostty does, it takes a picture as a temporary file (`t=t`) from /tmp,
@@ -262,15 +263,18 @@ def png(path, width, height, rgb):
 
 def middle(row):
     """How far down the window the middle of a row is, in pixels. The rows at Cellix's foot
-    stand below where they begin, and it says where each row is beside the screen's text."""
+    stand below where they begin, and it says where each row is beside the screen's text.
+    A fraction of a row goes that far on from the whole row's middle."""
+    whole = int(row // 1)
+    past = int((row - whole) * ROW)
     try:
         with open(os.path.splitext(TEXT)[0] + ".rows", encoding="utf8") as f:
             middles = [int(n) for n in f.read().split()]
-        if 0 <= row < len(middles):
-            return middles[row]
+        if 0 <= whole < len(middles):
+            return middles[whole] + past
     except (OSError, TypeError, ValueError):
         pass
-    return int((row + 0.5) * ROW)
+    return int((whole + 0.5) * ROW) + past
 
 
 def mouse(button, col, row, press=True):
@@ -411,12 +415,13 @@ def main():
                 print("shift click kept by the terminal: Cellix never asked for it", flush=True)
             pump(0.25)
         elif kind in ("double", "triple"):
-            for _ in range(2 if kind == "double" else 3):
-                os.write(master, mouse(0, step[1], step[2]))
-                pump(0.02)
-                os.write(master, mouse(0, step[1], step[2], False))
-                pump(0.03)
-            pump(0.25)
+            # The presses go together, as a terminal holds them for a program still drawing the
+            # frame the first one asked for. Sent apart, a slow frame under load took the second
+            # past a double click's time, and the scene had a caret where a word should be.
+            presses = b"".join(mouse(0, step[1], step[2], down)
+                               for _ in range(2 if kind == "double" else 3) for down in (True, False))
+            os.write(master, presses)
+            pump(0.3)
         elif kind == "drag":
             os.write(master, mouse(0, step[1], step[2]))
             pump(0.03)

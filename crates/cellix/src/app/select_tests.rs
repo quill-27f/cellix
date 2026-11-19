@@ -844,6 +844,57 @@ fn a_drag_held_past_the_foot_scrolls_the_page_and_the_selection_follows() {
     );
 }
 
+/// The sample page the tour opens, in the tour's window: Airy rows, 150 by 45.
+fn sample_page() -> (TempDir, App) {
+    let sample = include_str!("../../../../samples/writing.md");
+    open_airy("writing.md", sample, (150, 45))
+}
+
+/// Scene 73: a double click on a word of the sample's title, under its front matter, selects
+/// that word and brings the buttons. 0.11.0's tour once pictured a caret there instead, which
+/// was the tour's two presses arriving apart under load, not the page.
+#[test]
+fn a_double_click_selects_a_word_of_the_samples_title() {
+    let (_dir, mut app) = sample_page();
+    let word = at(&app, "# Everything a page") + "# Everything a ".len();
+    let (x, y) = spot(&app, word).expect("the title is in view");
+    for _ in 0..2 {
+        app.handle(pointer(MouseKind::Left, x + 1.0, y, false));
+        app.handle(pointer(MouseKind::Up, x + 1.0, y, false));
+    }
+    assert_eq!(selected(&app), "page");
+    let text = screen(&app).text();
+    assert!(text.contains("Ask Agent"), "{text}");
+}
+
+/// Scene s1-page-drag-scroll: a drag from the paragraph under "Text", held on the status bar's
+/// words under the page, scrolls the sample down until let go, the selection going with it.
+#[test]
+fn a_drag_held_on_the_status_bar_scrolls_the_sample_page() {
+    let (_dir, mut app) = sample_page();
+    let start = at(&app, "Plain words");
+    let (x, y) = spot(&app, start).expect("the paragraph is in view");
+    app.handle(pointer(MouseKind::Left, x + 0.1, y, false));
+    let tables = at(&app, "## Tables");
+    assert!(spot(&app, tables).is_none(), "Tables starts out of view");
+    let grid = screen(&app);
+    let foot = (0..grid.height())
+        .rev()
+        .find(|&y| grid.row_text(y).contains("UTF-8"))
+        .expect("the status bar says the encoding");
+    app.handle(pointer(MouseKind::Drag, 90.0, foot, false));
+    assert!(app.autoscroll.is_some(), "held past the page's foot");
+    hold(&mut app, |app| spot(app, tables).is_some());
+    app.handle(pointer(MouseKind::Up, 90.0, foot, false));
+    assert!(app.autoscroll.is_none(), "let go, nothing's timed");
+    let picked = selected(&app);
+    assert!(
+        picked.starts_with("Plain words") && picked.contains("Callouts"),
+        "{picked}"
+    );
+    assert!(screen(&app).text().contains("Ask Agent"));
+}
+
 #[test]
 fn turning_the_wheel_while_dragging_scrolls_and_the_selection_follows() {
     for source_view in [false, true] {

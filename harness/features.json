@@ -6606,5 +6606,19 @@
     "title": "An empty Comments list names the suggestions in the text, and a long one has a thumb with nothing cut at the pane's foot",
     "test": "a_long_list_has_a_thumb_and_nothing_cut_at_the_panes_foot",
     "passes": true
+  },
+  {
+    "id": "tour-sample-double-click",
+    "milestone": 15,
+    "title": "A double click on a word of the sample page's title selects it and brings the bar, in the tour's window",
+    "test": "a_double_click_selects_a_word_of_the_samples_title",
+    "passes": true
+  },
+  {
+    "id": "tour-sample-drag-held",
+    "milestone": 15,
+    "title": "A drag held on the status bar under the sample page scrolls it, the selection going with it, until let go",
+    "test": "a_drag_held_on_the_status_bar_scrolls_the_sample_page",
+    "passes": true
   }
 ]
