@@ -583,6 +583,290 @@ fn going_to_a_line_in_nested_scopes_shows_it_under_the_pinned_headers() {
     );
 }
 
+/// A language server for the reveals below, never a real one: answers the handshake, finds a
+/// file's `fn` lines as its symbols and the workspace's, and sends every definition to the
+/// line that declares `pause`.
+const REVEAL_SERVER: &str = r#"
+import json, re, sys
+texts = {}
+def symbols(uri, text):
+    out = []
+    for n, line in enumerate(text.split("\n")):
+        hit = re.search(r"fn (\w+)", line)
+        if hit:
+            out.append({"name": hit.group(1), "kind": 12, "containerName": "",
+                "location": {"uri": uri, "range": {
+                    "start": {"line": n, "character": hit.start(1)},
+                    "end": {"line": n, "character": hit.end(1)}}}})
+    return out
+def read():
+    n = 0
+    while True:
+        h = sys.stdin.buffer.readline()
+        if not h: sys.exit()
+        h = h.strip()
+        if not h: break
+        if h.lower().startswith(b"content-length:"): n = int(h.split(b":")[1])
+    return json.loads(sys.stdin.buffer.read(n))
+def send(m):
+    b = json.dumps(m).encode()
+    sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(b) + b)
+    sys.stdout.buffer.flush()
+while True:
+    m = read()
+    method, i = m.get("method"), m.get("id")
+    if method == "initialize":
+        send({"jsonrpc": "2.0", "id": i, "result": {"capabilities": {}}})
+    elif method == "textDocument/didOpen":
+        texts[m["params"]["textDocument"]["uri"]] = m["params"]["textDocument"]["text"]
+    elif method == "textDocument/didChange":
+        texts[m["params"]["textDocument"]["uri"]] = m["params"]["contentChanges"][-1]["text"]
+    elif method == "textDocument/documentSymbol":
+        uri = m["params"]["textDocument"]["uri"]
+        send({"jsonrpc": "2.0", "id": i, "result": symbols(uri, texts.get(uri, ""))})
+    elif method == "workspace/symbol":
+        q = m["params"]["query"].lower()
+        found = [s for u, t in texts.items() for s in symbols(u, t) if q in s["name"].lower()]
+        send({"jsonrpc": "2.0", "id": i, "result": found})
+    elif method == "textDocument/definition":
+        uri = m["params"]["textDocument"]["uri"]
+        lines = texts.get(uri, "").split("\n")
+        n = next(k for k, line in enumerate(lines) if "fn pause" in line)
+        at = lines[n].index("pause")
+        send({"jsonrpc": "2.0", "id": i, "result": {"uri": uri,
+            "range": {"start": {"line": n, "character": at}, "end": {"line": n, "character": at + 5}}}})
+    elif i is not None:
+        send({"jsonrpc": "2.0", "id": i, "result": None})
+"#;
+
+/// The scheduler with a helper declared in the arm that retries, five scopes in: `impl`,
+/// `run_due`, `while`, `match` and the arm. Line 26 declares `pause`, and line 27 is
+/// `job.due = now`, still inside them all.
+fn nested_scheduler() -> String {
+    let nested = SCHEDULER.replace(
+        "                    job.tries += 1;\n",
+        "                    fn pause(tries: u32) -> u64 { 100 * 2u64.pow(tries) }\n",
+    );
+    assert_ne!(nested, SCHEDULER);
+    nested
+}
+
+/// The nested scheduler open in a window as short as the tour's, with the stand-in language
+/// server where `served`.
+fn scheduler(served: bool) -> (TempDir, App) {
+    let dir = tempfile::tempdir().unwrap();
+    if served {
+        fs::write(dir.path().join("server.py"), REVEAL_SERVER).unwrap();
+        fs::create_dir(dir.path().join(".cellix")).unwrap();
+        let server = dir.path().join("server.py");
+        let settings = serde_json::json!({"language_servers": {"Rust": ["python3", "-I", server]}});
+        fs::write(
+            dir.path().join(".cellix/settings.json"),
+            settings.to_string(),
+        )
+        .unwrap();
+    }
+    let path = dir.path().join("code.rs");
+    fs::write(&path, nested_scheduler()).unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (120, 24));
+    app.open(&path).unwrap();
+    (dir, app)
+}
+
+/// Polls what runs in the background until `done`, for 30 seconds at most.
+fn wait(app: &mut App, done: impl Fn(&App) -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !done(app) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{}",
+            screen(app).text()
+        );
+        app.poll();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+fn go_to_line(app: &mut App, line: &str) {
+    app.run(cellix_input::Command::GoToLine);
+    for c in line.chars() {
+        plain(app, Key::Char(c));
+    }
+    plain(app, Key::Enter);
+}
+
+/// Where a jump starts from: its line come to from below, with the end of the file in view, as
+/// the tour does; or on screen but behind the headers pinned over it, line 26 at the top,
+/// where they stand over line 27.
+#[derive(Clone, Copy, Debug)]
+enum From {
+    Below,
+    Behind,
+}
+
+fn start(app: &mut App, from: From) {
+    match from {
+        From::Below => go_to_line(app, "46"),
+        From::Behind => {
+            let index = app.active();
+            app.editors[index].top = 25;
+            let area = app.focused_area();
+            let text = app.editors[index].text_area(area);
+            let first = app.editors[index].scroll_region(area).y;
+            assert!(first >= text.y + 2, "line 27 is behind the headers");
+        }
+    }
+}
+
+/// Where `words` start in `area` of the screen.
+fn find_in(grid: &Grid, area: cellix_render::Rect, words: &str) -> Option<(u16, u16)> {
+    (area.y..area.bottom()).find_map(|y| {
+        let row: String = (area.x..area.right())
+            .map(|x| grid.cell(x, y).symbol.to_string())
+            .collect();
+        let at = row.find(words)?;
+        Some((area.x + row[..at].chars().count() as u16, y))
+    })
+}
+
+/// The caret is on `line`, counted from one, and the line holding `words` is drawn under the
+/// headers pinned over the top of the file, not behind them, and when `first`, as the first line
+/// under them, as Go to Line leaves a line come to from below.
+fn under_the_headers(app: &App, (words, line): (&str, usize), first: bool, what: &str) {
+    assert_eq!(caret_line(app) + 1, line, "{what}: the caret's line");
+    let area = app.focused_area();
+    let pinned = app.editors[app.active()].scroll_region(area).y;
+    let grid = screen(app);
+    let (_, y) = find_in(&grid, area, words)
+        .unwrap_or_else(|| panic!("{what}: {words:?} isn't in view:\n{}", grid.text()));
+    assert!(
+        y >= pinned,
+        "{what}: on row {y}, under the pinned rows that end at {pinned}:\n{}",
+        grid.text()
+    );
+    if first {
+        assert_eq!(
+            y,
+            pinned,
+            "{what}: on row {y}, first under the pinned rows that end at {pinned}:\n{}",
+            grid.text()
+        );
+    }
+}
+
+/// A result of a search of the project, picked in the sidebar, shows its line under the
+/// headers pinned over it, as Go to Line does (`going_to_a_line_in_nested_scopes_...`).
+#[test]
+fn a_search_result_in_nested_scopes_shows_under_the_pinned_headers() {
+    for from in [From::Below, From::Behind] {
+        let (_dir, mut app) = scheduler(false);
+        start(&mut app, from);
+        app.run(cellix_input::Command::FindInProject);
+        for c in "due = now".chars() {
+            plain(&mut app, Key::Char(c));
+        }
+        wait(&mut app, |a| {
+            screen(a).text().contains("1 result in 1 file")
+        });
+        let sidebar = app.sidebar_area().expect("the sidebar");
+        // The result's row, not the query in the box over it.
+        let (x, y) = find_in(&screen(&app), sidebar, "job.due = now").expect("the result");
+        app.handle(mouse(cellix_input::MouseKind::Left, x, y));
+        app.handle(mouse(cellix_input::MouseKind::Up, x, y));
+        let what = format!("a search's result, from {from:?}");
+        under_the_headers(
+            &app,
+            ("job.due = now", 27),
+            matches!(from, From::Below),
+            &what,
+        );
+    }
+}
+
+/// A problem picked in the Problems list does the same.
+#[test]
+fn a_problem_in_nested_scopes_shows_under_the_pinned_headers() {
+    for from in [From::Below, From::Behind] {
+        let (dir, mut app) = scheduler(false);
+        app.diagnostics.insert(
+            dir.path().join("code.rs"),
+            vec![cellix_lang::lsp::Diagnostic {
+                line: 26,
+                column: 20,
+                message: "The pause can overflow".to_string(),
+                severity: 1,
+            }],
+        );
+        let (at, _) = app.status_problems().expect("the count of problems");
+        let foot = app.size().1 - 1;
+        app.handle(mouse(cellix_input::MouseKind::Left, at, foot));
+        app.handle(mouse(cellix_input::MouseKind::Up, at, foot));
+        // With the list open beside it, so the file is as wide as it will be.
+        start(&mut app, from);
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "The pause can overflow");
+        app.handle(mouse(cellix_input::MouseKind::Left, x, y));
+        app.handle(mouse(cellix_input::MouseKind::Up, x, y));
+        let what = format!("a problem, from {from:?}");
+        under_the_headers(
+            &app,
+            ("job.due = now", 27),
+            matches!(from, From::Below),
+            &what,
+        );
+    }
+}
+
+/// Go to Symbol, in the file and in the workspace, shows the symbol's line under the headers
+/// too: in the middle of the file where it was out of view, as VS Code does, and brought out
+/// from under the headers where it was behind them.
+#[test]
+fn a_symbol_in_nested_scopes_shows_under_the_pinned_headers() {
+    for from in [From::Below, From::Behind] {
+        let (_dir, mut app) = scheduler(true);
+        start(&mut app, from);
+        app.run(cellix_input::Command::GoToSymbol);
+        // The stand-in server answers: what it found is listed.
+        wait(&mut app, |a| screen(a).text().contains("functions (4)"));
+        for c in "pause".chars() {
+            plain(&mut app, Key::Char(c));
+        }
+        plain(&mut app, Key::Enter);
+        let what = format!("Go to Symbol in the file, from {from:?}");
+        under_the_headers(&app, ("fn pause", 26), false, &what);
+
+        let (_dir, mut app) = scheduler(true);
+        // The server knows the file once it's been asked about it.
+        app.run(cellix_input::Command::GoToSymbol);
+        wait(&mut app, |a| screen(a).text().contains("functions (4)"));
+        plain(&mut app, Key::Esc);
+        start(&mut app, from);
+        app.handle(Event::Key(KeyEvent::ctrl('t')));
+        for c in "pause".chars() {
+            plain(&mut app, Key::Char(c));
+        }
+        wait(&mut app, |a| screen(a).text().contains("1 symbol"));
+        plain(&mut app, Key::Enter);
+        let what = format!("Go to Symbol in the workspace, from {from:?}");
+        under_the_headers(&app, ("fn pause", 26), false, &what);
+    }
+}
+
+/// Go to Definition, answered by the server, shows the definition's line under the headers.
+#[test]
+fn a_definition_in_nested_scopes_shows_under_the_pinned_headers() {
+    for from in [From::Below, From::Behind] {
+        let (_dir, mut app) = scheduler(true);
+        start(&mut app, from);
+        app.run(cellix_input::Command::GoToDefinition);
+        wait(&mut app, |a| caret_line(a) == 25);
+        // Come to from below, the arm's own first line, 25, stands over it unpinned, the
+        // headers over that, as VS Code shows a line whose scope starts just over it.
+        let what = format!("Go to Definition, from {from:?}");
+        under_the_headers(&app, ("fn pause", 26), false, &what);
+    }
+}
+
 #[test]
 fn a_pinned_header_shows_its_chevron_and_folds_from_it() {
     let (_dir, mut app) = code(&long_scope());

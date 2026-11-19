@@ -7313,5 +7313,33 @@
     "title": "Branches and tags stand before a commit's message in the graph as chips in their lane's colour, sharing a narrow row with the message",
     "test": "branches_and_tags_stand_as_chips_before_their_commits_messages",
     "passes": true
+  },
+  {
+    "id": "reveal-search-under-sticky",
+    "milestone": 15,
+    "title": "A project search's result in nested scopes is shown under the pinned sticky headers, not behind them",
+    "test": "a_search_result_in_nested_scopes_shows_under_the_pinned_headers",
+    "passes": true
+  },
+  {
+    "id": "reveal-problem-under-sticky",
+    "milestone": 15,
+    "title": "A problem picked in the Problems list, in nested scopes, is shown under the pinned sticky headers",
+    "test": "a_problem_in_nested_scopes_shows_under_the_pinned_headers",
+    "passes": true
+  },
+  {
+    "id": "reveal-symbol-under-sticky",
+    "milestone": 15,
+    "title": "Go to Symbol, in the file and the workspace, shows a symbol in nested scopes under the pinned sticky headers",
+    "test": "a_symbol_in_nested_scopes_shows_under_the_pinned_headers",
+    "passes": true
+  },
+  {
+    "id": "reveal-definition-under-sticky",
+    "milestone": 15,
+    "title": "Go to Definition shows a definition in nested scopes under the pinned sticky headers",
+    "test": "a_definition_in_nested_scopes_shows_under_the_pinned_headers",
+    "passes": true
   }
 ]
