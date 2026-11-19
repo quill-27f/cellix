@@ -2398,8 +2398,8 @@ weren't counted and /cellix-send said none were waiting.
   the pane back as it was. The
   explorer lists gitignored files, as VS Code does, since agents work in them, but dims them,
   and what's dimmed is exactly what Quick Open and search leave out. The pane stands under the file when the window is too narrow to have
-  them side by side. The Agents icon opens the side pane. With nothing running, it lists what's running elsewhere,
-  what can be started and the worktrees.
+  them side by side. The Agents icon opens the side pane. With nothing running here, it says how
+  it works, and lists what can be started and the worktrees.
 
 The Agents list orders agents by how much they want the person: Needs you, Done, Working,
 Idle, each a section headed in small capitals with how many are in it, and a section with
@@ -2414,10 +2414,20 @@ one column down the list (it moved six columns left on the row that needs you). 
 what can be started is listed as the + menu lists it: Terminal first, a rule, then the agents,
 one row each with its mark and what it runs at the row's end, where each had a + and "Starts
 here, working on this project" under it. Done is an agent that finished a turn nobody has looked at: it stays Done
-until its tab is in front, or for one with no tab here, until its row is pressed; a press on a
-row with a tab brings the tab forward. A row can stand under another, a step in with a line
+until its tab is in front. A row can stand under another, a step in with a line
 bent round from its parent's mark, while the two are in one state (`agents::ordered`, by each
 row's `parent`); in another, it's in its own section and says who started it.
+
+Every row does something when pressed: it brings its tab forward, or opens peek for a helper
+with no tab of its own; a part of what a program in a tab said (OSC 7501's `id`) brings that
+program's tab forward. So the list shows only agents with a tab here and their helpers. An agent
+running outside Cellix, in another terminal, isn't listed, whether its hooks report or a look at
+the folder (`lsof`) found it, idle, working or asking alike (the user's choice, 19 November 2026,
+after "There are idle agents session list in the agents tab but they are not actionable. Seeing
+that list is not useful"). Nor is it counted where the list's agents are: the status bar's "An
+agent needs you", the Agents icon's dot, the workspace's tile, and the bell and the
+notifications it gives, which its news doesn't reach. It still hears about comments, as the agent
+working on this project outside the pane (`Agents::outside`).
 
 - Rebuilding an agent's interface: the side pane shows the real program, so its features arrive with its updates.
 

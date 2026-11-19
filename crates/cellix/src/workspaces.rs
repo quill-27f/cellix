@@ -1487,8 +1487,10 @@ mod tests {
         for letter in ['○', '✓', '■'] {
             assert!(!row.contains(letter), "{row}");
         }
-        // Behind, a finished turn: the green dot a tab has, still.
+        // Behind, a finished turn: the green dot a tab has, still. Its agent has a tab there:
+        // one outside Cellix isn't counted.
         let behind = 1 - spaces.active;
+        spaces.list[behind].app.tab_for("Claude Code", "s1");
         spaces.list[behind]
             .app
             .serve(event(AgentState::Working, "Working"));
@@ -2094,6 +2096,7 @@ mod tests {
         spaces.open(first);
         spaces.open(second);
         // The workspace behind still hears from its agents, and its tile says so.
+        spaces.list[1].app.tab_for("Claude Code", "s1");
         spaces.list[1]
             .app
             .serve(event(AgentState::Working, "Working"));
@@ -2146,6 +2149,9 @@ mod tests {
         };
         let theme = *spaces.theme();
         let (front, behind) = (spaces.active, 1 - spaces.active);
+        for index in [front, behind] {
+            spaces.list[index].app.tab_for("Claude Code", "s1");
+        }
         // Behind, working: the accent's spinner; asking: the needs-you dot.
         spaces.list[behind]
             .app
@@ -2222,6 +2228,7 @@ mod tests {
         spaces.open(first);
         spaces.open(second);
         // In front, the person sees it: the inbox has it, the terminal isn't told.
+        spaces.list[1].app.tab_for("Claude Code", "s1");
         spaces.list[1]
             .app
             .serve(event(AgentState::NeedsYou, "Allow sqlx migrate run?"));
@@ -2327,7 +2334,9 @@ mod tests {
         assert!(text.contains("A plan is ready for you to review"), "{text}");
         assert!(text.contains("Notification Settings"), "{text}");
 
-        // An agent asks in the workspace behind, then tests fail in this one.
+        // An agent asks in the workspace behind, from its tab there, then tests fail in this
+        // one.
+        spaces.list[1].app.tab_for("Claude Code", "s1");
         spaces.list[1]
             .app
             .serve(event(AgentState::NeedsYou, "Allow sqlx migrate run?"));
@@ -2366,10 +2375,10 @@ mod tests {
         }));
         assert!(screen(&spaces).row_text(asking).contains("Show Prompt"));
 
-        // A click goes to its workspace, and with no session in the pane, to the agents list.
+        // A click goes to its workspace, and brings its agent's tab forward.
         click(&mut spaces, MouseKind::Left, (x, asking));
         assert_eq!(spaces.active, 1);
-        assert!(spaces.app().showing_agents_for_test());
+        assert_eq!(spaces.app().front_tab_for_test(), Some(0));
         assert!(
             spaces.list[1].app.inbox.has("ask:s1"),
             "it waits until answered"

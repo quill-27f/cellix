@@ -291,3 +291,95 @@ fn the_tile_says_what_the_most_urgent_tab_says() {
     app.serve(news("s1", "Claude Code", AgentState::Working, "Working"));
     assert_eq!(app.tile_state(), TileState::Working);
 }
+
+/// The Agents list shows what a press acts on: an agent with a tab here, which a press brings
+/// forward. One running outside Cellix, idle or asking, whether its hooks report or a look at
+/// the folder found it, isn't listed, counted, rung for or noted in the bell (the user, 19
+/// November: "There are idle agents session list in the agents tab but they are not
+/// actionable"). It still hears about comments.
+#[test]
+#[cfg(unix)]
+fn the_agents_list_shows_only_agents_with_a_tab_here() {
+    use super::TileState;
+    let (dir, mut app) = project();
+    let news = |session: &str, agent: &str, state, detail: &str| {
+        Request::Agent(AgentEvent {
+            session: session.into(),
+            agent: agent.into(),
+            state,
+            detail: detail.into(),
+            folder: "/w".into(),
+            pid: None,
+            transcript: String::new(),
+            name: String::new(),
+        })
+    };
+    // In other terminals: Codex idle and Gemini CLI asking, by their hooks, and OpenCode,
+    // which a look at the folder found and which says nothing.
+    app.serve(news("outside-idle", "Codex", AgentState::Idle, "Ready"));
+    app.serve(news(
+        "outside-asking",
+        "Gemini CLI",
+        AgentState::NeedsYou,
+        "Allow Bash?",
+    ));
+    app.agents
+        .found_by_looking(&["Codex", "Gemini CLI", "OpenCode"]);
+    assert!(app.agent_rows().is_empty(), "nothing here to act on");
+    assert_eq!(app.needing_you(), 0, "nor for the badge or the status bar");
+    assert!(app.inbox_listed().is_empty(), "nor the bell");
+    // A finished turn outside doesn't make the tile say done.
+    app.serve(news("outside-idle", "Codex", AgentState::Idle, "Finished"));
+    assert_eq!(app.tile_state(), TileState::Nothing);
+    assert!(app.inbox_listed().is_empty());
+    // Who hears about comments is unchanged: an agent working on this project outside.
+    let outside = app.agents.outside();
+    assert!(
+        matches!(outside.as_deref(), Some("Codex" | "Gemini CLI")),
+        "{outside:?}"
+    );
+    app.run(cellix_input::Command::ListAgents);
+    let text = screen(&app).text();
+    assert!(
+        text.contains("HOW IT WORKS"),
+        "an empty list says what it's for: {text}"
+    );
+
+    // Beside an agent with a tab here, whose hooks report for it.
+    let tab = start(dir.path(), &mut app, "✳ pricing page");
+    app.serve(said(AgentState::Working, "Working"));
+    let rows = app.agent_rows();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the one with a tab: {:?}",
+        rows.iter().map(|r| &r.name).collect::<Vec<_>>()
+    );
+    assert_eq!(rows[0].session, "s1");
+    assert_eq!(
+        app.tile_state(),
+        TileState::Working,
+        "not the asking one outside"
+    );
+    app.run(cellix_input::Command::ListAgents);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("WORKING"), "{text}");
+    assert!(!text.contains("NEEDS YOU"), "{text}");
+    assert!(!text.contains("IDLE"), "{text}");
+    assert!(!text.contains("HOW IT WORKS"), "{text}");
+    assert!(!text.contains("An agent needs you"), "{text}");
+    // Its row brings its tab forward.
+    let heading = (0..grid.height())
+        .find(|y| grid.row_text(*y).contains("WORKING"))
+        .unwrap();
+    let row = grid.row_text(heading + 1);
+    assert!(row.contains("pricing page"), "{row}");
+    let x = row
+        .find("pricing")
+        .map(|at| row[..at].chars().count() as u16)
+        .unwrap();
+    app.handle(mouse(MouseKind::Left, x, heading + 1));
+    assert_eq!(app.dock.active, Some(tab));
+    assert_eq!(app.dock.front, Front::Session);
+}

@@ -215,6 +215,8 @@ fn the_bar_and_the_picker_have_the_marks_tabs_have() {
     use cellix_render::{FontMeasure, Paint, UNIT};
     let (dir, mut app) = project();
     app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 36)));
+    // An agent with a tab here: one outside Cellix isn't counted.
+    app.tab_for("Claude Code", "s1");
     app.serve(cellix_agent::Request::Agent(cellix_agent::AgentEvent {
         session: "s1".into(),
         agent: "Claude Code".into(),

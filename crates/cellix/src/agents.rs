@@ -442,6 +442,9 @@ impl Agents {
         gone.into_iter().map(|a| a.session).collect()
     }
 
+    /// How many agents' news says they're asking, with a tab here or not. What's counted for
+    /// the person is `App::needing_you`, of agents with a tab here.
+    #[cfg(test)]
     pub fn needing_you(&self) -> usize {
         let waiting = |a: &&AgentEvent| a.state == AgentState::NeedsYou;
         self.running.iter().filter(waiting).count()
@@ -472,22 +475,16 @@ impl Agents {
         (self.running.len(), seen, worktrees, self.installed.len())
     }
 
-    /// Agents found running that the plugin isn't already reporting.
-    /// Agents found running that the plugin isn't reporting, as rows of the list: idle, as
-    /// far as anyone can tell, with no time since anything.
-    pub fn silent_rows(&self) -> Vec<Row> {
-        let rows = self.silent().into_iter().map(|name| Row {
-            icon: crate::dock::program_icon(&name, false, false),
-            name: name.clone(),
-            urgency: Urgency::Idle,
-            since: None,
-            detail: String::new(),
-            session: name,
-            parent: None,
-        });
-        rows.collect()
+    /// What a look at the folder found running, as a test has it.
+    #[cfg(test)]
+    pub fn found_by_looking(&self, names: &[&str]) {
+        if let Ok(mut seen) = self.seen.lock() {
+            *seen = names.iter().map(ToString::to_string).collect();
+        }
     }
 
+    /// Agents found running here that the plugin isn't reporting, by name. They hear about
+    /// comments, and aren't in the list: there's nothing of theirs here to bring forward.
     fn silent(&self) -> Vec<String> {
         let seen = self.seen.lock().map(|s| s.clone()).unwrap_or_default();
         let hooked = self.running.iter().filter(|a| !crate::program::reported(a));
@@ -1076,10 +1073,8 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
 
     #[test]
     fn starting_an_agent_stays_in_reach_beside_many_worktrees() {
-        let running = vec!["Claude Code".to_string(); 6];
         let agents = Agents {
             installed: vec![("Claude Code", "claude"), SHELL],
-            seen: Arc::new(Mutex::new(running)),
             worktrees: (0..11)
                 .map(|i| Worktree {
                     path: PathBuf::from(format!("/work/tree-{i}")),
@@ -1089,9 +1084,20 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
                 .collect(),
             ..Agents::default()
         };
-        // As tall as a side pane in a laptop's window: the worktrees don't all fit.
+        // As tall as a side pane in a laptop's window: the worktrees don't all fit. Six agents
+        // in tabs, idle.
         let area = Rect::new(0, 0, 40, 36);
-        let rows = agents.silent_rows();
+        let rows: Vec<Row> = (0..6)
+            .map(|i| Row {
+                icon: crate::dock::program_icon("Claude Code", false, false),
+                name: "Claude Code".to_string(),
+                urgency: Urgency::Idle,
+                since: None,
+                detail: String::new(),
+                session: format!("s{i}"),
+                parent: None,
+            })
+            .collect();
         let found =
             (0..area.h).find(|y| agents.hit(area, *y, 0, &rows) == Some(Hit::Start("claude")));
         assert!(found.is_some(), "Claude Code can be started");

@@ -10396,11 +10396,13 @@ impl App {
     /// How many agents here are asking: those whose news says so, and those whose tab's mark
     /// says so though no news here does, so the tile, the badge and the status bar say what
     /// the tabs say. A tab's dot once stood beside a tile that said "done", when another
-    /// agent's news had taken the asking one's place.
+    /// agent's news had taken the asking one's place. Only agents the Agents list shows count:
+    /// one asking outside Cellix has nothing here to answer it in.
     pub fn needing_you(&self) -> usize {
         use cellix_agent::AgentState;
         let asking: Vec<&str> = (self.agents.running.iter())
             .filter(|a| a.state == AgentState::NeedsYou)
+            .filter(|a| self.agent_tab(&a.session).is_some())
             .map(|a| a.session.as_str())
             .collect();
         let tabs = self.dock.sessions.iter().filter(|s| {
@@ -10409,7 +10411,7 @@ impl App {
                     .as_deref()
                     .is_none_or(|id| !asking.contains(&id))
         });
-        self.agents.needing_you() + tabs.count()
+        asking.len() + tabs.count()
     }
 
     /// What this workspace's tile in the bar says: the most urgent of what its tabs and its
@@ -10423,11 +10425,9 @@ impl App {
         if stopped > 0 {
             return TileState::Stopped(stopped);
         }
-        let working = self
-            .agents
-            .running
-            .iter()
-            .any(|a| a.state == cellix_agent::AgentState::Working);
+        let working = self.agents.running.iter().any(|a| {
+            a.state == cellix_agent::AgentState::Working && self.agent_tab(&a.session).is_some()
+        });
         // A shell running a command is working too, and any tab that turns. An agent with no
         // plugin can't say.
         let shell_busy = self.dock.sessions.iter().any(|s| s.shell && s.busy());
@@ -13363,9 +13363,24 @@ impl App {
                 for key in replaced {
                     self.inbox.drop_key(&key);
                 }
-                self.note_agent(&event);
+                // An agent outside Cellix, with no tab here, is kept for who hears about
+                // comments, and nothing else: the list doesn't show it, so the bell, its
+                // notifications and the tile don't either.
+                let here = self
+                    .tab_of(&event)
+                    .is_some_and(|i| !self.dock.sessions[i].exited);
+                if here {
+                    self.note_agent(&event);
+                } else {
+                    self.inbox.drop_key(&format!("ask:{}", event.session));
+                    self.inbox.drop_key(&format!("done:{}", event.session));
+                }
                 self.mark_tab(&event);
+                let finished = self.agents.finished;
                 self.agents.update(event);
+                if !here {
+                    self.agents.finished = finished;
+                }
             }
             Request::Test(run) => {
                 self.note_test(&run);
@@ -13443,6 +13458,13 @@ impl App {
             let key =
                 crate::program::tab_of(&event.session).filter(|_| !event.session.contains('/'))?;
             return sessions.iter().position(|s| s.tab_key() == key);
+        }
+        // A tab its earlier news has already linked to the session.
+        let linked = sessions
+            .iter()
+            .position(|s| !s.exited && s.agent_session.as_deref() == Some(event.session.as_str()));
+        if linked.is_some() {
+            return linked;
         }
         // The hooks say which session they run in, by the name Cellix gave it.
         if let Some(index) = (!event.name.is_empty())
@@ -13528,8 +13550,48 @@ impl App {
         })
     }
 
-    /// Every agent the Agents list shows, as its rows: those that report, with their tab's
-    /// name and mark where they have one, and those found running that don't.
+    /// The tab here an agent's news is from: the one its hooks report for, its program's tab
+    /// for a part of what a program in a tab said, or a helper's by its name. An agent running
+    /// outside Cellix, in another terminal, has none.
+    fn agent_tab(&self, id: &str) -> Option<usize> {
+        let sessions = &self.dock.sessions;
+        let own = sessions
+            .iter()
+            .position(|s| !s.exited && s.agent_session.as_deref() == Some(id));
+        own.or_else(|| {
+            let key =
+                crate::program::tab_of(id).filter(|_| id.starts_with(crate::program::SESSION));
+            let key = key?;
+            sessions
+                .iter()
+                .position(|s| !s.exited && s.tab_key() == key)
+        })
+        .or_else(|| {
+            let name = id.strip_prefix(team::MEMBER_ROW)?;
+            self.member_index(name)
+        })
+    }
+
+    /// A tab in the side pane for an agent's session, linked as its hooks link it: a program
+    /// that waits, named as the agent's tab is. What's listed and counted is only agents with
+    /// a tab here.
+    #[cfg(test)]
+    pub(crate) fn tab_for(&mut self, agent: &str, session: &str) -> usize {
+        self.start_stand_in(crate::agents::tab_name(agent), "sleep 60");
+        let index = self.dock.sessions.len() - 1;
+        self.dock.sessions[index].agent_session = Some(session.to_string());
+        // As if the person had moved on from the hint that says where it is.
+        self.say("");
+        index
+    }
+
+    /// Every agent the Agents list shows, as its rows: those with a tab here, with its name
+    /// and mark, and the helpers under them. Each brings its tab forward when pressed, or peek
+    /// for a helper. An agent running outside Cellix, with nothing here to bring forward, isn't
+    /// listed, whether its hooks report or a look at the folder found it (the user, 19
+    /// November: "There are idle agents session list in the agents tab but they are not
+    /// actionable"); nor is it counted, rung for or noted in the bell. It still hears about
+    /// comments (`Agents::outside`).
     fn agent_rows(&self) -> Vec<crate::agents::Row> {
         use crate::agents::{Row, Urgency};
         use cellix_agent::AgentState;
@@ -13540,6 +13602,7 @@ impl App {
                 .find(|s| s.agent_session.as_deref() == Some(id))
         };
         let mut rows: Vec<Row> = (self.agents.running.iter())
+            .filter(|event| self.agent_tab(&event.session).is_some())
             .map(|event| {
                 let tab = tab_of(&event.session);
                 let done = match tab {
@@ -13582,20 +13645,14 @@ impl App {
             })
             .collect();
         rows.extend(self.helper_rows());
-        rows.extend(self.agents.silent_rows());
         rows
     }
 
-    /// A press on an agent in the list: its tab comes to the front, or, for one with no tab
-    /// here, what it finished counts as seen.
+    /// A press on an agent in the list: its tab comes to the front, or a helper's peek opens.
     fn look_at_agent(&mut self, id: &str) {
-        let tab = (self.dock.sessions.iter())
-            .position(|s| !s.exited && s.agent_session.as_deref() == Some(id));
-        // A helper that hasn't said anything yet goes by its name.
-        let tab = tab.or_else(|| {
-            let name = id.strip_prefix(team::MEMBER_ROW)?;
-            self.member_index(name)
-        });
+        // A helper that hasn't said anything yet goes by its name, and a part of what a
+        // program said by its program's tab.
+        let tab = self.agent_tab(id);
         // A helper with no tab of its own is looked at over the pane.
         let helper = tab.filter(|i| !self.dock.sessions[*i].tabbed);
         if let Some(name) = helper.and_then(|i| self.dock.sessions[i].called()) {
@@ -13879,6 +13936,14 @@ impl App {
         self.dock.showing(Front::Agents)
     }
 
+    /// The tab in front in the side pane, when one is, for tests outside this module.
+    #[cfg(test)]
+    pub fn front_tab_for_test(&self) -> Option<usize> {
+        self.dock
+            .active
+            .filter(|_| self.dock.showing(Front::Session))
+    }
+
     /// The inbox's rows, newest first: every workspace's when they're shared, else this one's.
     pub fn inbox_listed(&self) -> Vec<Listed> {
         if let Some(shared) = &self.inbox_shared {
@@ -13967,7 +14032,7 @@ impl App {
                         self.dock.front = Front::Session;
                         self.dock.focused = true;
                     }
-                    // Running outside the pane: the list says where.
+                    // Its tab has gone since: the list, and what can be started.
                     None => {
                         self.dock.open = true;
                         self.refresh_agents();
@@ -25919,9 +25984,11 @@ mod tests {
     fn agents_panel_shows_who_needs_you() {
         use cellix_agent::AgentState::{Ended, NeedsYou, Working};
         let (_dir, mut app) = project();
+        // With a tab here: one outside Cellix isn't listed.
+        app.tab_for("Claude Code", "s1");
         app.serve(Request::Agent(agent(NeedsYou, "Allow Bash?")));
         assert!(screen(&app).text().contains("An agent needs you"));
-        app.run(Command::ShowAgents);
+        app.run(Command::ListAgents);
         let text = screen(&app).text();
         assert!(
             text.contains("Claude Code") && text.contains("needs you"),
@@ -27118,6 +27185,9 @@ mod tests {
     fn an_agent_whose_process_is_gone_stops_needing_you() {
         use cellix_agent::AgentState::{NeedsYou, Working};
         let (_dir, mut app) = project();
+        // Each in a tab here: one outside Cellix isn't counted or noted.
+        let killed_tab = app.tab_for("Claude Code", "s1");
+        app.tab_for("Claude Code", "s2");
         // One agent was killed without a word; its process is gone.
         let mut gone = std::process::Command::new("true").spawn().unwrap();
         gone.wait().unwrap();
@@ -27133,7 +27203,20 @@ mod tests {
         app.handle(Event::Tick);
         assert_eq!(app.agents.needing_you(), 1, "the killed one lets go");
         assert!(!app.inbox.has("ask:s1") && app.inbox.has("ask:s2"));
-        // The living one starts a new session, as /clear does: the old one is over.
+        // Its tab ended with it.
+        app.dock.sessions[killed_tab].stop();
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while !app.dock.sessions.get(killed_tab).is_none_or(|s| s.exited) {
+            assert!(std::time::Instant::now() < deadline, "its tab never ended");
+            app.poll();
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // The living one starts a new session, as /clear does: the old one is over. Its hooks
+        // leave the new session's id beside its tab.
+        let living_tab = (app.dock.sessions.iter())
+            .position(|s| s.agent_session.as_deref() == Some("s2"))
+            .expect("the living one's tab");
+        app.dock.sessions[living_tab].agent_session = Some("s3".into());
         let mut fresh = agent(Working, "Working");
         fresh.session = "s3".into();
         fresh.pid = living.pid;
@@ -27315,8 +27398,10 @@ mod tests {
         app.serve(run(true));
         assert!(kinds(&app).is_empty());
 
-        // Asking, then finishing, then working again.
+        // Asking, then finishing, then working again, from an agent with a tab here: one
+        // outside Cellix isn't noted.
         use cellix_agent::AgentState::{Idle, NeedsYou, Working};
+        app.tab_for("Claude Code", "s1");
         app.serve(Request::Agent(agent(NeedsYou, "Needs your attention")));
         assert_eq!(app.inbox.items[0].title, "Claude Code needs you");
         app.serve(Request::Agent(agent(Idle, "Finished")));

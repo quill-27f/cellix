@@ -54,12 +54,21 @@ fn the_agents_list_puts_who_needs_you_first() {
             name: String::new(),
         })
     };
+    // Each with a tab here: the list shows no agent running outside Cellix.
+    for (agent, session) in [
+        ("Claude Code", "a"),
+        ("Codex", "b"),
+        ("Gemini", "c"),
+        ("Codex", "d"),
+    ] {
+        app.tab_for(agent, session);
+    }
     app.serve(event("a", "Claude Code", AgentState::Working, "Working"));
     app.serve(event("b", "Codex", AgentState::Working, "Working"));
     app.serve(event("b", "Codex", AgentState::Idle, "Finished"));
     app.serve(event("c", "Gemini", AgentState::NeedsYou, "Allow Bash?"));
     app.serve(event("d", "Codex", AgentState::Idle, "Ready"));
-    app.run(cellix_input::Command::ShowAgents);
+    app.run(cellix_input::Command::ListAgents);
     let grid = screen(&app);
     let text = grid.text();
     let lines: Vec<&str> = text.lines().collect();
@@ -92,7 +101,7 @@ fn the_agents_list_puts_who_needs_you_first() {
         !text.contains("NEEDS YOU") && text.contains("WORKING 2"),
         "{text}"
     );
-    // Done stays done until the agent is looked at: a press on its row, for one with no tab.
+    // Done stays done until the agent is looked at: a press on its row brings its tab forward.
     let grid = screen(&app);
     let y = (0..grid.height())
         .find(|y| grid.row_text(*y).contains("⬡ Codex") && grid.row_text(*y).contains('●'));
@@ -100,6 +109,8 @@ fn the_agents_list_puts_who_needs_you_first() {
     let row = grid.row_text(y);
     let x = row[..row.find("Codex").unwrap()].chars().count() as u16;
     app.handle(mouse(MouseKind::Left, x, y));
+    assert_eq!(app.dock.active, Some(1), "its tab, in front");
+    app.run(cellix_input::Command::ListAgents);
     let text = screen(&app).text();
     assert!(!text.contains("DONE") && text.contains("IDLE 2"), "{text}");
 }
@@ -122,11 +133,19 @@ fn the_agents_lists_times_stand_in_one_column() {
             name: String::new(),
         })
     };
+    for (agent, session) in [
+        ("Claude Code", "a"),
+        ("Codex", "b"),
+        ("Gemini", "c"),
+        ("Codex", "d"),
+    ] {
+        app.tab_for(agent, session);
+    }
     app.serve(event("a", "Claude Code", AgentState::Working, "Working"));
     app.serve(event("b", "Codex", AgentState::Idle, "Finished"));
     app.serve(event("c", "Gemini", AgentState::NeedsYou, "Allow Bash?"));
     app.serve(event("d", "Codex", AgentState::Idle, "Ready"));
-    app.run(cellix_input::Command::ShowAgents);
+    app.run(cellix_input::Command::ListAgents);
     // On cells: where each row's "<1m" ends.
     let grid = screen(&app);
     let ends: Vec<usize> = (0..grid.height())
@@ -233,6 +252,7 @@ fn the_needs_you_chip_has_room_for_its_words_tails() {
     let (_dir, mut app) = project();
     let (row, line) = (50.0, 36.0);
     app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+    app.tab_for("Gemini", "c");
     app.serve(Request::Agent(AgentEvent {
         session: "c".into(),
         agent: "Gemini".into(),
@@ -243,7 +263,7 @@ fn the_needs_you_chip_has_room_for_its_words_tails() {
         transcript: String::new(),
         name: String::new(),
     }));
-    app.run(cellix_input::Command::ShowAgents);
+    app.run(cellix_input::Command::ListAgents);
     let grid = screen(&app);
     let y = (0..grid.height())
         .find(|y| grid.row_text(*y).contains("needs you") && grid.row_text(*y).contains("Gemini"))

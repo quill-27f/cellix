@@ -6816,5 +6816,12 @@
     "title": "A button's words stand by their ink in its middle, with tails or without, and buttons side by side keep one baseline",
     "test": "a_buttons_words_stand_by_their_ink_in_its_middle",
     "passes": true
+  },
+  {
+    "id": "L2-agents-list-only-tabs-here",
+    "milestone": 15,
+    "title": "The Agents list shows only agents with a tab here, and nothing counts one running outside Cellix",
+    "test": "the_agents_list_shows_only_agents_with_a_tab_here",
+    "passes": true
   }
 ]

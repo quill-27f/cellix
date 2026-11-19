@@ -1894,12 +1894,27 @@ fn hook(dir: &Path, cache: &Path, kind: &str, input: &str) {
 #[test]
 #[cfg(unix)]
 fn an_agent_asking_while_cellix_is_behind_becomes_a_terminal_notification() {
+    use std::os::unix::fs::PermissionsExt;
     let dir = project();
     let cache = tempfile::Builder::new()
         .prefix("cxn")
         .tempdir_in("/tmp")
         .unwrap();
     let root = dir.path().canonicalize().unwrap();
+    // The agent has a tab here: one running outside Cellix, with nothing here to answer it
+    // in, isn't listed, counted or rung for. A stand-in for Claude Code that waits.
+    let bin = tempfile::tempdir().unwrap();
+    let claude = bin.path().join("claude");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\necho 'stand-in claude'\nexec sleep 60\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let cellix = Path::new(env!("CARGO_BIN_EXE_cellix")).parent().unwrap();
+    let path = std::env::join_paths([bin.path(), cellix, Path::new("/usr/bin"), Path::new("/bin")])
+        .unwrap();
+    let path = std::path::PathBuf::from(path);
     let mut screen = Screen::start_with(
         dir.path(),
         &["hello.txt"],
@@ -1907,9 +1922,17 @@ fn an_agent_asking_while_cellix_is_behind_becomes_a_terminal_notification() {
             ("XDG_CACHE_HOME", cache.path()),
             ("TERM_PROGRAM", Path::new("ghostty")),
             ("TMUX", Path::new("")),
+            ("PATH", path.as_path()),
         ],
     );
     screen.wait_for("hello from a file");
+    screen.send(b"\x1b[112;6u");
+    screen.wait_for("Type to search");
+    screen.send(b"Open Claude Code");
+    screen.wait_for("Agent: Open Claude Code");
+    std::thread::sleep(Duration::from_millis(200));
+    screen.send(b"\r");
+    screen.wait_for("stand-in claude");
     let asking = format!(
         r#"{{"message":"Claude needs your permission to use Bash","cwd":{:?},"session_id":"s1"}}"#,
         root.to_str().unwrap()
@@ -1945,7 +1968,21 @@ fn an_agent_asking_while_cellix_is_behind_becomes_a_terminal_notification() {
         1,
         "one per event"
     );
+    // Quit from the file, stopping the agent's stand-in.
+    let press = |screen: &mut Screen, words: &str| {
+        let contents = screen.contents();
+        let (row, column) = contents
+            .lines()
+            .enumerate()
+            .find_map(|(row, line)| Some((row, line[..line.find(words)?].chars().count())))
+            .unwrap_or_else(|| panic!("no {words}: {contents}"));
+        let (x, y) = (column + 2, row + 1);
+        screen.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
+    };
+    press(&mut screen, "hello from a file");
     screen.send(b"\x11");
+    screen.wait_for("Stop and Quit");
+    press(&mut screen, "Stop and Quit");
     screen.wait_exit();
 }
 

@@ -1159,12 +1159,35 @@ def reviewer_scenes(scratch):
 
 
 def agents_by_urgency(scratch):
-    """The Agents list by urgency, from agents that report through Cellix's real hook from
-    outside the pane: one asking, one done and not yet looked at, one working, one idle."""
-    cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+    """The Agents list by urgency, from agents in the side pane that report through Cellix's
+    real hook: one asking, one done and not yet looked at, one working, one idle. The list
+    shows only agents with a tab here, so each is a stand-in in a tab of its own that names
+    itself in its title and gives its hook its session as it starts, from inside its tab, as
+    Claude Code's plugin does. What each does next comes through the hook from outside."""
+    tools = f"{scratch}/urgency-bin"
+    os.makedirs(tools)
+    # The first Claude Code started works and the second stays idle, counted in the scene's
+    # own cache.
+    for program, named, runs in (
+        ("claude", "", [("s-work", "pricing page"), ("s-idle", "release notes")]),
+        ("gemini", "--agent Gemini ", [("s-done", "docs nav")]),
+        ("codex", "--agent Codex ", [("s-ask", "og tags")]),
+    ):
+        cases = "".join(f"  {n}) sid={sid}; title='{title}';;\n"
+                        for n, (sid, title) in enumerate(runs, 1))
+        said = '{"session_id":"%s","cwd":"' + ROOT + '"}'
+        with open(f"{tools}/{program}", "w") as f:
+            f.write("#!/bin/sh\n"
+                    f"count=\"$XDG_CACHE_HOME/{program}-count\"\n"
+                    "n=$(cat \"$count\" 2>/dev/null || echo 0); n=$((n + 1)); echo $n > \"$count\"\n"
+                    f"case $n in\n{cases}esac\n"
+                    "printf '\\033]0;%s\\007' \"$title\"\n"
+                    f"printf '{said}' \"$sid\" | '{binary}' hook {named}session-start\n"
+                    "exec sleep 300\n")
+        os.chmod(f"{tools}/{program}", 0o755)
 
-    # Each agent its own process, which stays: a hook's news is the latest of its process,
-    # and one whose process has gone is let go.
+    # What each does next, each hook its own process, which stays: a hook's news is the latest
+    # of its process, and one whose process has gone is let go.
     made = [0]
 
     def hook(kind, session, agent="Claude Code", **fields):
@@ -1179,22 +1202,33 @@ def agents_by_urgency(scratch):
 
     told = [
         ["wait", 1.0],
+        *command("Open Claude Code", F1), ["until", "pricing"],
+        *command("Open Claude Code", F1), ["until", "release"],
+        *command("Open Gemini CLI", F1), ["until", "docs nav"],
+        *command("Open Codex", F1), ["until", "og tags"], ["wait", 0.4],
         hook("tool-done", "s-work", tool_input={"command": "ls"}),
         hook("tool-done", "s-done", "Gemini", tool_input={"command": "ls"}),
         hook("stop", "s-done", "Gemini"),
         hook("notify", "s-ask", "Codex", notification_type="permission_prompt",
              message="Codex needs your permission to run cargo publish"),
-        hook("session-start", "s-idle"),
-        *LIST_AGENTS, ["wait", 0.8],
+        *LIST_AGENTS, ["until", "NEEDS YOU"], ["wait", 0.8],
     ]
-    env = {"XDG_CACHE_HOME": cache}
-    shoot("m2-agents-urgency", told, CODE_FILE, size="150x44", env=env)
-    shoot("m2-agents-urgency-hover", [*told, ["move", *ON("Gemini CLI")], ["wait", 0.4]], CODE_FILE,
-          size="150x44", env=env)
-    shoot("m2-agents-urgency-light", told, CODE_FILE, size="150x44", env=env, background="eff1f5")
-    shoot("m2-agents-urgency-cells", told, CODE_FILE, size="150x44", env={**env, "CELLIX_TIER": "cells"})
-    subprocess.run(["pkill", "-9", "-f", cache])
-    shutil.rmtree(cache, ignore_errors=True)
+    # Gemini CLI's row, the last place its tab's name is said.
+    scenes = [
+        ("m2-agents-urgency", told, {}),
+        ("m2-agents-urgency-hover", [*told, ["move", *ON("docs nav", 1, 0, -1)], ["wait", 0.4]], {}),
+        ("m2-agents-urgency-light", told, {"background": "eff1f5"}),
+        ("m2-agents-urgency-cells", told, {"CELLIX_TIER": "cells"}),
+    ]
+    # Each scene has sessions of its own, so none finds the last one's.
+    for name, steps, extra in scenes:
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        background = extra.pop("background", DARK)
+        env.update(extra)
+        shoot(name, steps, CODE_FILE, size="150x44", env=env, background=background)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
 
 
 def waits(scratch):
