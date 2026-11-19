@@ -348,6 +348,9 @@ pub struct Session {
     pub doing: Doing,
     /// Its agent finished a turn while its tab wasn't in front: a dot until it's looked at.
     pub done_unseen: bool,
+    /// A card asks the person on its behalf, Allow or Deny another agent's start, and it
+    /// waits on the answer: its tab says it needs them, whatever its hooks last said.
+    pub card: bool,
     /// How it stands among the agents here: the name they reach it by, and who started it.
     /// None for a shell or a browser.
     pub member: Option<crate::hold::Member>,
@@ -662,6 +665,7 @@ impl Session {
             reported: None,
             doing: Doing::Idle,
             done_unseen: false,
+            card: false,
             member: None,
             typed: Typed::default(),
             prompted: None,
@@ -693,6 +697,11 @@ impl Session {
     pub fn mark(&self) -> Option<TabMark> {
         if self.exited {
             return None;
+        }
+        // Its start of another waits on the person's Allow or Deny: it turned, and the tile
+        // said "working", while the card asked (0.11.0's release review, 170).
+        if self.card {
+            return Some(TabMark::NeedsYou);
         }
         // A task turns until it ends, as VS Code's terminal tab does.
         if self.task() {

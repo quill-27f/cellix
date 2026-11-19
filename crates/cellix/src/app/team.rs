@@ -52,6 +52,20 @@ pub(crate) enum Doing {
     Running,
 }
 
+/// What a helper is doing, as its row in the Agents list says it, and so peek's header: a turn
+/// it finished is done, a dot at its row's end, as one with a tab has it until that's in front;
+/// one ready for a turn it hasn't had is done too. Its row stood with no mark under a heading
+/// that counted it (172).
+pub(crate) fn urgency(doing: &Doing) -> crate::agents::Urgency {
+    use crate::agents::Urgency;
+    match doing {
+        Doing::Asking(_) => Urgency::NeedsYou,
+        Doing::Done(_) => Urgency::Done,
+        doing if doing.working() => Urgency::Working,
+        _ => Urgency::Idle,
+    }
+}
+
 impl Doing {
     pub(crate) fn word(&self) -> &'static str {
         match self {
@@ -446,7 +460,7 @@ impl App {
     /// command doesn't, and for agents with helpers that haven't: they stand where they
     /// belong all the same, doing what Cellix knows.
     pub(super) fn helper_rows(&self) -> Vec<crate::agents::Row> {
-        use crate::agents::{Row, Urgency};
+        use crate::agents::Row;
         let has_helpers = |s: &Session| {
             let called = s.called();
             let mut members = self.dock.sessions.iter().filter_map(|c| c.member.as_ref());
@@ -459,15 +473,11 @@ impl App {
         helpers
             .filter_map(|(index, session)| {
                 let doing = self.doing(index);
-                // As an agent's hooks say it: a turn it finished is done, a dot at its row's
-                // end, as one with a tab has it until that's in front. One ready for a turn
-                // it hasn't had is done too, as peek's header says: its row stood with no
-                // mark under a heading that counted it (172).
-                let urgency = match &doing {
-                    Doing::Asking(_) => Urgency::NeedsYou,
-                    Doing::Done(_) => Urgency::Done,
-                    doing if doing.working() => Urgency::Working,
-                    _ => Urgency::Idle,
+                // Waiting on the person's answer to the card that asks for it, it asks.
+                let urgency = if session.card {
+                    crate::agents::Urgency::NeedsYou
+                } else {
+                    urgency(&doing)
                 };
                 Some(Row {
                     icon: session.icon(),
@@ -705,6 +715,7 @@ impl App {
                     self.team
                         .asking
                         .push_back(pending(Step::Consent(start), until));
+                    self.mark_cards();
                     return;
                 }
                 let mut started = pending(Step::Consent(start), Instant::now());
@@ -1255,6 +1266,19 @@ impl App {
             || untold
     }
 
+    /// Each tab says it needs the person while a card asks them on its behalf, Allow or Deny
+    /// another agent's start, which its agent waits on: it turned, and its workspace's chip
+    /// said "working", while the card asked (0.11.0's release review, 170).
+    pub(super) fn mark_cards(&mut self) {
+        let asking: Vec<String> = (self.team.asking.iter())
+            .filter_map(|p| p.caller.clone())
+            .collect();
+        for session in &mut self.dock.sessions {
+            let waits = (session.called()).is_some_and(|name| asking.iter().any(|a| a == name));
+            session.card = waits;
+        }
+    }
+
     /// Moves every call under way on, and answers those that are done. Returns whether the
     /// screen may have changed.
     pub(super) fn poll_team(&mut self) -> bool {
@@ -1301,6 +1325,7 @@ impl App {
             answer(&late.reply, Answer::fail(code::DENIED, error));
             changed = true;
         }
+        self.mark_cards();
         if self.team.pending.is_empty() {
             return changed;
         }
@@ -1621,6 +1646,7 @@ impl App {
         let Some(mut asked) = self.team.asking.pop_front() else {
             return;
         };
+        self.mark_cards();
         let Step::Consent(start) = &asked.step else {
             return;
         };
@@ -2039,37 +2065,39 @@ mod tests {
         assert_eq!(helper, agent + 1, "{}", grid.text());
         let row = grid.row_text(helper);
         assert!(row.contains('└') && row.contains("helper"), "{row}");
-        // Once it reports, it's the same row. Asking the person, it goes to the top, in the
-        // section its own mark says, and says who started it: under "WORKING" it showed the
-        // chip that asks, and a finished one stood there with a green dot (0.11.0's final
-        // review, 172). The heading counts only the rows in it.
+        // Once it reports, it's the same row, and it stays under its agent whatever it does:
+        // standing in a section of its own, it read as one more agent (0.11.0's release
+        // review, 172). Asking the person, it brings its agent up to "NEEDS YOU", its own row
+        // with the chip that asks; the heading counts the agent, not its helper.
         says(&mut app, "reviewer", AgentState::Idle, "Ready");
         assert_eq!(answered(&mut app, &started).code, code::OK);
         says(&mut app, "reviewer", AgentState::NeedsYou, "Allow Bash?");
         app.poll();
         let grid = screen(&app);
+        let agent = row_after(&grid, "NEEDS YOU 1", "Claude Code");
         let helper = row_after(&grid, "NEEDS YOU 1", "reviewer");
-        let agent = row_after(&grid, "WORKING 1", "Claude Code");
-        assert!(helper < agent, "{}", grid.text());
+        assert_eq!(helper, agent + 1, "{}", grid.text());
         let row = grid.row_text(helper);
         assert!(
-            row.contains("from Claude Code") && !row.contains('└'),
+            row.contains('└') && row.contains("helper") && row.contains("needs you"),
             "{row}"
         );
-        // Working again, it's back under its agent.
+        assert!(!grid.text().contains("WORKING"), "{}", grid.text());
+        // Working again, it's under its agent in "WORKING 1".
         says(&mut app, "reviewer", AgentState::Working, "Working");
         let grid = screen(&app);
-        let agent = row_after(&grid, "WORKING 2", "Claude Code");
-        let helper = row_after(&grid, "WORKING 2", "reviewer");
+        let agent = row_after(&grid, "WORKING 1", "Claude Code");
+        let helper = row_after(&grid, "WORKING 1", "reviewer");
         assert_eq!(helper, agent + 1, "{}", grid.text());
         assert!(!grid.text().contains("NEEDS YOU"), "{}", grid.text());
     }
 
-    /// A helper's row, its mark, its section and peek's header say one state: finished, its
-    /// row has the done dot peek shows, its name bright and bold, under "DONE" with who
-    /// started it, where it stood under its working agent in "WORKING 2" with a green dot
-    /// (0.11.0's final review, 172). The line bent round to one under its agent is one that
-    /// can be seen, and starts clear of the mark over it.
+    /// A helper's row and peek's header say one state, and the section counts agents: ready,
+    /// its row under its working agent has the done dot peek shows, its name bright and bold,
+    /// under "WORKING 1", where it stood in "IDLE 1" with no mark by its hook's word while peek
+    /// said "● done", and before that under "WORKING 2" (0.11.0's release review, 172, 173).
+    /// The line bent round to one under its agent is one that can be seen, and starts clear
+    /// of the mark over it.
     #[test]
     #[cfg(unix)]
     fn a_helpers_row_mark_section_and_peek_say_one_state() {
@@ -2083,13 +2111,13 @@ mod tests {
         assert_eq!(answered(&mut app, &started).code, code::OK);
         app.run(Command::ListAgents);
         let grid = screen(&app);
-        let helper = row_after(&grid, "DONE 1", "reviewer");
-        assert!(
-            grid.row_text(helper).contains("from Claude Code"),
-            "{}",
-            grid.text()
-        );
-        assert!(grid.text().contains("WORKING 1"), "{}", grid.text());
+        let agent = row_after(&grid, "WORKING 1", "Claude Code");
+        let helper = row_after(&grid, "WORKING 1", "reviewer");
+        assert_eq!(helper, agent + 1, "{}", grid.text());
+        let row = grid.row_text(helper);
+        assert!(row.contains('└') && row.contains("helper"), "{row}");
+        assert!(!grid.text().contains("DONE"), "{}", grid.text());
+        assert!(!grid.text().contains("IDLE"), "{}", grid.text());
         let x = grid.row_text(helper).find("reviewer").unwrap();
         let x = grid.row_text(helper)[..x].chars().count() as u16;
         let name = grid.cell(x, helper).style;
@@ -2114,18 +2142,19 @@ mod tests {
         // Closed, and the list in front again: peek opened over its agent's tab.
         click(&mut app, (2, 20));
         app.run(Command::ListAgents);
-        // Its turn over, it has its own done dot, in the section that says so.
+        // Its turn over, it has its own done dot, still under its agent.
         says(&mut app, "reviewer", AgentState::Working, "Working");
         says(&mut app, "reviewer", AgentState::Idle, "Finished");
         let grid = screen(&app);
-        let helper = row_after(&grid, "DONE", "reviewer");
+        let helper = row_after(&grid, "WORKING 1", "reviewer");
         assert!(grid.row_text(helper).contains('●'), "{}", grid.text());
+        assert!(grid.row_text(helper).contains('└'), "{}", grid.text());
         // Working, under its agent: with pictures, the line to it is stronger than a hairline
         // and starts under the agent's mark, not on it.
         says(&mut app, "reviewer", AgentState::Working, "Working");
         app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
         let grid = screen(&app);
-        let helper = row_after(&grid, "WORKING 2", "reviewer");
+        let helper = row_after(&grid, "WORKING 1", "reviewer");
         let name = grid.row_text(helper).find("reviewer").unwrap();
         let name = grid.row_text(helper)[..name].chars().count() as u16;
         assert!(
@@ -2151,6 +2180,42 @@ mod tests {
             down.y >= i32::from(helper) * 64 - 4,
             "under the mark: {down:?}"
         );
+    }
+
+    /// While the card asks whether an agent may start another, the agent waits on the answer,
+    /// and its tab and its workspace's chip say it needs the person: its tab turned and the
+    /// chip said "working" while the card asked (0.11.0's release review, 170). Answered,
+    /// it's back to what its hooks say.
+    #[test]
+    #[cfg(unix)]
+    fn an_agent_waiting_on_the_card_needs_the_person() {
+        use crate::dock::TabMark;
+        let (dir, mut app, fake) = project();
+        let lead = lead(&mut app, &fake);
+        says(&mut app, "claude-1", AgentState::Working, "Working");
+        app.dock.sessions[0].doing = crate::dock::Doing::Working;
+        assert_eq!(app.dock.sessions[0].mark(), Some(TabMark::Working));
+        let started = call(&mut app, &lead, run(dir.path(), "reviewer", "codex", None));
+        let grid = screen(&app);
+        assert!(grid.text().contains("wants to start"), "{}", grid.text());
+        assert_eq!(app.dock.sessions[0].mark(), Some(TabMark::NeedsYou));
+        assert_eq!(app.tile_state(), super::super::TileState::NeedsYou);
+        // On its tab, the dot in the colour of what needs the person, where the spinner was.
+        let y = app.dock_area().unwrap().y;
+        let dot = (0..grid.width()).find(|x| grid.cell(*x, y).symbol == "●");
+        let dot = dot.unwrap_or_else(|| panic!("a dot: {}", grid.row_text(y)));
+        assert_eq!(grid.cell(dot, y).style.fg, app.theme.attention);
+        // And its row in the Agents list.
+        let rows = app.agent_rows();
+        let row = rows.iter().find(|r| r.name == "Claude Code");
+        let row = row.unwrap_or_else(|| panic!("its row: {rows:?}"));
+        assert_eq!(row.urgency, crate::agents::Urgency::NeedsYou, "{rows:?}");
+        // Answered, it's working again: its tab turns.
+        let at = find(&screen(&app), "[Allow]");
+        click(&mut app, at);
+        assert_eq!(app.dock.sessions[0].mark(), Some(TabMark::Working));
+        assert_ne!(app.tile_state(), super::super::TileState::NeedsYou);
+        drop(started);
     }
 
     /// The panels painted on the grid, as (bounds, fill, border).

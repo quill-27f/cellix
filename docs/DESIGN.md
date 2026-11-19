@@ -969,9 +969,10 @@ has the brighter name.
 A workspace's tile shows what its agents are doing with the marks their tabs have: the spinner
 while one works, and a dot in the colour of what needs the person (#f0705f) while one asks, at
 the size of a spinner beside the status bar's words, standing in the room a word's mark has.
-On the tile in front, which is the accent, they're in its ink, but for the dot of what needs
-the person, which keeps its colour, plain as a tab's is: it stood in a ring of the ink, which
-no other dot has (0.11.0's final review). Until 0.11.0's review the tile said "working" after
+On the tile in front, which is the accent, the spinner is in its ink, and every dot keeps its
+own colour in a ring of the ink 2 px wide: plain, the needs-you dot stood on the accent at
+1.23:1 (1.09:1 light), and the green and dimmed dots were the ink's, telling nothing apart
+(0.11.0's release review). Until 0.11.0's review the tile said "working" after
 a still dot, and "needs you" in the chip's ink with nothing of its colour. It has those marks
 and only those: a green dot for a finished turn, where it had a check, a dot dimmed as an ended
 tab's mark is once it stopped (it had none beside chips that each had one), and no mark where
@@ -1876,7 +1877,10 @@ own hooks; a program with none is working until it ends.
   column here, from the sheet's edge on both sides, the rule for every card. Its buttons end as
   far in from its right edge as its words start from its left, its panel's half column painted
   past their cells (they ended 33 px in where the words start 24 in). Always is kept in the
-  folder's `state.json`. `run` waits 90 s for an answer and says what happened.
+  folder's `state.json`. `run` waits 90 s for an answer and says what happened. While the card
+  waits, the asking agent waits on the person, and its tab says so with the needs-you dot, as
+  its row in the Agents list, its workspace's chip and the bell do: it turned, and the chip
+  said "working" (0.11.0's release review, 170).
 - `send` pastes, bracketed where the program asked for that, and enters 200 ms later. It waits
   while the person types in that agent: 3 s after their last key, and with a prompt they've
   begun, until they send or clear it, at most 60 s after their last key. It refuses, typing
@@ -1903,12 +1907,15 @@ closed, unless started with `--outlive-parent`, which then go on as agents of th
 
 In the Agents list a helper stands under the agent that started it, a step in, with a line bent
 round from its agent's mark, by the name it was given and the quiet word "helper" after it,
-while it's doing what its agent does (the reference board's panel 4). Doing something else, it
-stands in the section its own state puts it in, as a row of its own that says "from" its agent
-where "helper" stood: a row's mark, its section and peek's header are one state. It stood in its
-agent's section whatever it was doing, and a finished helper had a green dot and peek's "done"
-under "WORKING 2" (0.11.0's final review, 172). Its mark at its row's end is its own: the
-spinner while it works, a dot once it has finished a turn, the chip while it asks. The line
+whatever it's doing (the reference board's panel 4). A section counts the agents in it, not
+their helpers: "WORKING 1" over an agent at work and the finished helper under it, where it
+said "WORKING 2". A helper that asks the person brings its agent, and the agent's other
+helpers, up to "NEEDS YOU", so what asks never stands under a quieter heading. For a while a
+helper doing something else than its agent stood in a section of its own as "from" its agent,
+and read as one more agent (0.11.0's release review, 172 to 174). Its mark at its row's end is
+its own, and is what peek's header says of it, both read from one place: the spinner while it
+works, a dot once it has finished a turn or is ready for one, the chip while it asks (its row
+said "IDLE" by its hook's word while peek said "● done"). The line
 bent round to it is a fifth of the way from the sheet to the words (#45474a on the dark sheet;
 the sheet's hairline, 1.3 to 1, could hardly be seen), and starts 8 px under its agent's mark.
 Before its hooks have said anything it's there all the same, doing what Cellix knows of it.

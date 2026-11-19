@@ -167,8 +167,10 @@ fn how_long_ago_is_said_in_a_few_letters() {
     assert_eq!(ago(now - Duration::from_secs(3 * 86_400)), "3d");
 }
 
-/// A helper an agent started stands under it, a step in, while it's doing what its agent does;
-/// doing something else, it stands in its own section, so a row's section is its own state.
+/// A helper an agent started always stands under it, a step in, whatever it's doing: in a
+/// section of its own it read as one more agent (0.11.0's release review, 172). One asking the
+/// person brings its agent and the agent's other helpers up to "NEEDS YOU", where agents come
+/// in the order they came.
 #[test]
 fn a_helper_stands_under_the_agent_that_started_it() {
     use crate::agents::{Row, Urgency, ordered};
@@ -195,9 +197,26 @@ fn a_helper_stands_under_the_agent_that_started_it() {
     assert_eq!(
         order,
         [
-            ("helper", 0),
+            ("lead", 0),
+            ("helper", 1),
+            ("worker", 1),
+            ("asking", 0),
+            ("idle", 0)
+        ]
+    );
+    // Answered, the lead stands with the working, its helpers under it whatever they do.
+    let mut rows = rows;
+    rows[1].urgency = Urgency::Done;
+    let order: Vec<(&str, u8)> = ordered(&rows)
+        .into_iter()
+        .map(|(r, d)| (r.name.as_str(), d))
+        .collect();
+    assert_eq!(
+        order,
+        [
             ("asking", 0),
             ("lead", 0),
+            ("helper", 1),
             ("worker", 1),
             ("idle", 0)
         ]

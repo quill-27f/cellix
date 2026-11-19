@@ -231,20 +231,39 @@ pub fn parent_of<'a>(row: &Row, rows: &'a [Row]) -> Option<&'a Row> {
     rows.iter().find(|other| other.session == parent)
 }
 
-/// Whether a helper stands under the agent that started it: while the two are doing the same,
-/// so a row's section, its mark and what peek says of it are one state. A helper that finished
-/// under an agent still working stood in "WORKING 2" with a green dot (0.11.0's final review,
-/// 172); doing something else, it stands in its own section, saying who started it.
+/// Whether a helper stands under the agent that started it: always, where that one is in the
+/// list too, with its own state's mark at its row's end, as peek's header says it. Stood in a
+/// section of its own whenever it was doing something else than its agent, a helper read as
+/// one more agent, and the list no longer showed what started it (0.11.0's release review,
+/// 172 to 174).
 fn nested(row: &Row, rows: &[Row]) -> bool {
-    parent_of(row, rows).is_some_and(|parent| parent.urgency == row.urgency)
+    parent_of(row, rows).is_some()
+}
+
+/// The section an agent and its helpers stand in: its own state's, or where a helper of it
+/// needs the person, "NEEDS YOU", so what asks is never under a quieter heading.
+fn family_urgency(row: &Row, rows: &[Row], depth: u8) -> Urgency {
+    let children = rows
+        .iter()
+        .filter(|c| c.parent.as_deref() == Some(&row.session) && nested(c, rows));
+    let asking = depth < 8
+        && children
+            .into_iter()
+            .any(|c| family_urgency(c, rows, depth + 1) == Urgency::NeedsYou);
+    if asking {
+        Urgency::NeedsYou
+    } else {
+        row.urgency
+    }
 }
 
 /// The rows in the list's order: by urgency, the most first, and in the order they came
-/// within that; each row's helpers doing what it does straight under it, deeper by one, in the
-/// same order. Returns each row with how deep it stands.
+/// within that; each row's helpers straight under it, deeper by one, in the same order, so a
+/// section holds agents and their helpers stand with them. Returns each row with how deep it
+/// stands.
 pub fn ordered(rows: &[Row]) -> Vec<(&Row, u8)> {
     let mut tops: Vec<&Row> = rows.iter().filter(|row| !nested(row, rows)).collect();
-    tops.sort_by_key(|row| row.urgency);
+    tops.sort_by_key(|row| family_urgency(row, rows, 0));
     let mut out = Vec::new();
     fn under<'a>(row: &'a Row, depth: u8, rows: &'a [Row], out: &mut Vec<(&'a Row, u8)>) {
         out.push((row, depth));
@@ -486,14 +505,16 @@ impl Agents {
             lines.push(Line::Section("HOW IT WORKS"));
             lines.extend((0..STEPS.len()).map(Line::Step));
         }
-        // Who wants the person most comes first, a section each with how many are in it, and
-        // a section with nobody in it isn't there. A helper stands in its agent's section.
+        // Who wants the person most comes first, a section each with how many agents are in
+        // it, and a section with nobody in it isn't there. A helper stands under its agent, in
+        // that one's section, and isn't counted in it: "WORKING 2" over one agent and the
+        // helper under it read as two agents at work.
         let order = ordered(rows);
         let mut sections = Vec::with_capacity(order.len());
         let mut current = Urgency::Idle;
         for (row, depth) in &order {
             if *depth == 0 {
-                current = row.urgency;
+                current = family_urgency(row, rows, 0);
             }
             sections.push(current);
         }
@@ -507,7 +528,8 @@ impl Agents {
             if lines.len() > 1 {
                 lines.push(Line::Gap);
             }
-            lines.push(Line::Group(urgency, section.len()));
+            let agents = section.iter().filter(|at| order[**at].1 == 0).count();
+            lines.push(Line::Group(urgency, agents));
             lines.extend(section.into_iter().map(Line::Agent));
         }
         // Starting one comes before the worktrees, which can be a long list to scroll past.

@@ -888,12 +888,12 @@ impl Workspaces {
             }
             let (mark, word, color) = self.word(&workspace.app);
             let mut x = span.start + self.room(PAD);
-            // On the accent the marks are in the chip's ink, but for what needs the person,
-            // whose dot keeps its own colour, plain as a tab's is: it stood in a ring of the
-            // ink, which no other dot has (0.11.0's final review).
+            // On the accent the spinner is in the chip's ink, and every dot keeps its own
+            // colour in a ring of the ink 2 px wide, so it reads as what it says: plain, the
+            // needs-you dot stood on the accent at 1.23:1 (1.09:1 light), and the others were
+            // the ink's, telling nothing apart (0.11.0's release review).
             let shown = match (ink, mark) {
-                (Some(_), Mark::Dot(color)) if color == theme.attention => mark,
-                (Some(ink), Mark::Dot(_)) => Mark::Dot(ink),
+                (Some(ink), Mark::Dot(color)) => Mark::Ringed(color, ink),
                 (Some(ink), Mark::Spin(_)) => Mark::Spin(ink),
                 (_, mark) => mark,
             };
@@ -1320,8 +1320,14 @@ impl Workspaces {
 enum Mark {
     Dot(Rgb),
     Spin(Rgb),
+    /// A dot standing in a ring of the second colour: any dot on a filled chip.
+    Ringed(Rgb, Rgb),
     None,
 }
+
+/// How much bigger the ring round a dot on a filled chip is than the dot, across: 2 px either
+/// side of a dot of about 11 at the tour's size.
+const RING: f32 = 1.37;
 
 impl Workspaces {
     /// A tile's mark at `x`: the spinner and dots at the size a spinner beside the status bar's
@@ -1330,9 +1336,19 @@ impl Workspaces {
     fn draw_mark(&self, grid: &mut Grid, (x, y): (f32, u16), mark: Mark, base: Style) {
         let size = crate::measures::WAIT_SPIN;
         let at = x - MARK_LEAD;
+        // How wide a mark `size` rows tall is, in columns.
+        let measure = self.measure();
+        let across = |size: f32| {
+            size * crate::measures::rows_to_columns(measure.as_ref()) / measure.row_air()
+        };
         match mark {
             Mark::Spin(color) => grid.spinner(at, y, size, color, base),
             Mark::Dot(color) => grid.dot(at, y, size, color, base),
+            Mark::Ringed(color, ring) => {
+                let wider = (across(size * RING) - across(size)) / 2.0;
+                grid.dot(at - wider, y, size * RING, ring, base);
+                grid.dot(at, y, size, color, base);
+            }
             Mark::None => {}
         }
     }
@@ -2160,8 +2176,8 @@ mod tests {
         spaces.list[front]
             .app
             .serve(event(AgentState::NeedsYou, "Allow cargo publish?"));
-        // Its dot keeps its colour, plain as a tab's: it stood in a ring of the ink, which no
-        // other dot has (0.11.0's final review). Both tiles' dots are one size.
+        // Its dot keeps its colour in a ring of the ink about 2 px wide: plain, it stood on the
+        // accent at 1.23:1 (0.11.0's release review). Both tiles' dots are one size.
         let shown = marks(&spaces);
         let dots: Vec<_> = shown
             .iter()
@@ -2170,10 +2186,33 @@ mod tests {
         // Both tiles ask, and the status bar's words say so after the same dot.
         assert!(dots.len() >= 2, "both tiles ask: {shown:?}");
         assert!(dots.iter().all(|d| d.3 == dots[0].3), "one size: {shown:?}");
-        assert!(
-            !shown.iter().any(|m| m.0 == ink && !m.1),
-            "no ring in the ink: {shown:?}"
-        );
+        let ringed = |colour: Rgb, shown: &[(Rgb, bool, i32, i32)]| {
+            // The ring's middle is the dot's, and it stands about 2 px out from it: a dot's
+            // ink is half its square, which is as tall as its bounds, at 36 px a row.
+            let middle = |m: &(Rgb, bool, i32, i32)| m.2 * 2 + m.3 * 36 / 17;
+            let rings = shown.iter().filter(|r| r.0 == ink && !r.1);
+            let pair = rings.into_iter().find_map(|ring| {
+                let dot = shown.iter().find(|m| {
+                    m.0 == colour && !m.1 && m.3 < ring.3 && (middle(ring) - middle(m)).abs() <= 2
+                });
+                dot.map(|dot| (ring, dot))
+            });
+            let (ring, dot) =
+                pair.unwrap_or_else(|| panic!("{colour:?} ringed in the ink: {shown:?}"));
+            let px = |h: i32| h as f32 / UNIT as f32 * 36.0 / 2.0;
+            let width = (px(ring.3) - px(dot.3)) / 2.0;
+            assert!((1.5..=2.5).contains(&width), "a ring {width} px wide");
+        };
+        ringed(theme.attention, &shown);
+        // So is every other dot on the chip in front: a finished turn's keeps its green.
+        spaces.list[front]
+            .app
+            .serve(event(AgentState::Working, "Working"));
+        spaces.list[front]
+            .app
+            .serve(event(AgentState::Idle, "Finished"));
+        let shown = marks(&spaces);
+        ringed(theme.git_added, &shown);
     }
 
     #[test]

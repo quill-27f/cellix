@@ -13280,18 +13280,20 @@ impl App {
                     None => self.agents.unseen.contains(&event.session),
                 };
                 let parent = tab.and_then(|s| self.parent_row(s));
-                // A helper whose turn is over, or which is ready for its first, has the done
-                // dot peek's header shows for it: its row had no mark under a heading that
-                // counted it.
-                let helper_done = parent.is_some()
-                    && (self.dock.sessions.iter())
-                        .position(|s| tab.is_some_and(|t| std::ptr::eq(s, t)))
-                        .is_some_and(|index| matches!(self.doing(index), team::Doing::Done(_)));
-                let urgency = match event.state {
-                    AgentState::NeedsYou => Urgency::NeedsYou,
-                    AgentState::Working => Urgency::Working,
-                    _ if done || helper_done => Urgency::Done,
-                    _ => Urgency::Idle,
+                // A helper's row says what peek's header says of it, from the one place both
+                // read: its row stood in "IDLE" by its hook's word while peek said "● done"
+                // (0.11.0's release review, 172 and 173).
+                let helper = (self.dock.sessions.iter())
+                    .position(|s| tab.is_some_and(|t| std::ptr::eq(s, t)))
+                    .filter(|_| parent.is_some());
+                let urgency = match (helper.map(|index| self.doing(index)), event.state) {
+                    // Waiting on the person's answer to the card that asks for it.
+                    _ if tab.is_some_and(|s| s.card) => Urgency::NeedsYou,
+                    (Some(doing), _) => team::urgency(&doing),
+                    (None, AgentState::NeedsYou) => Urgency::NeedsYou,
+                    (None, AgentState::Working) => Urgency::Working,
+                    (None, _) if done => Urgency::Done,
+                    (None, _) => Urgency::Idle,
                 };
                 let icon = crate::dock::program_icon(&event.agent, false, false);
                 // An agent goes by its tab's name; what runs in a shell, by its own; a helper
