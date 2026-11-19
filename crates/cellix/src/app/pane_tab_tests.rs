@@ -390,6 +390,74 @@ fn tabs_are_cut_to_their_marks_before_the_plus_gives_way() {
     );
     assert!(longest_first, "the longest name gives way first");
     assert!(marks_only, "some width cuts a tab to its mark");
+    three_agents_in_the_tours_narrow_window();
+}
+
+/// Three agents in the tour's narrow window (m1-agent-tabs-narrow, 96 columns): Codex in
+/// front asking, Claude Code behind it working and Gemini CLI done. Each behind is cut to its
+/// mark and what it's doing, and the + stays 20 px after the last; the button that maximizes
+/// the pane gives way first. Once a tab's anatomy made the one in front two columns wider, the
+/// row showed it alone with its chevron, with 154 px empty and the others' marks gone.
+#[cfg(unix)]
+fn three_agents_in_the_tours_narrow_window() {
+    use crate::dock::Doing;
+    let (dir, mut app) = project((96, 40));
+    app.agent_program = Some(stand_in(dir.path(), "agent"));
+    let agents = [
+        ("claude", "pricing page"),
+        ("gemini", "docs nav"),
+        ("codex", "og tags"),
+    ];
+    for (agent, name) in agents {
+        app.open_agent(agent);
+        let last = app.dock.sessions.len() - 1;
+        app.dock.sessions[last].renamed = Some(name.to_string());
+    }
+    app.dock.sessions[0].doing = Doing::Working;
+    app.dock.sessions[1].done_unseen = true;
+    app.dock.sessions[2].doing = Doing::NeedsYou;
+    app.dock.active = Some(2);
+    app.dock.front = Front::Session;
+    let grid = screen(&app);
+    let row = title(&app);
+    let text = grid.row_text(row.y);
+    let room = format!(
+        "{text} (pane {:?}, row {:?})",
+        app.dock_area(),
+        app.dock.tabs_end.get()
+    );
+    assert_eq!(app.dock.fit(row), Fit::Cut, "{room}");
+    assert!(plus_drawn(&app, &grid, row), "the + stays: {room}");
+    for icon in [Icon::AgentClaude, Icon::AgentGemini, Icon::AgentCodex] {
+        let mark = icons(&grid, row.y, icon);
+        assert_eq!(mark.len(), 1, "{icon:?}'s mark: {room}");
+    }
+    assert_eq!(states(&grid, row.y).len(), 3, "what each is doing: {room}");
+    // Behind, each is its mark and its state, no letters.
+    let names = words(&grid, row.y);
+    for name in ["pri", "doc"] {
+        assert!(
+            !names.iter().any(|w| w.0.starts_with(name)),
+            "{name}: {names:?}"
+        );
+    }
+    // The + stands about 20 px after the last tab.
+    let (_, end) = tab_span(&app, row, 2);
+    let plus = names.iter().find(|w| w.0 == "+").expect("the +");
+    let ink = (plus.1 - f32::from(end)) * 17.0;
+    assert!((14.0..=26.0).contains(&ink), "{ink} px to the +: {room}");
+    // No tab reaches into it, and it reaches no icon after it: its last column of air may be
+    // the one kept clear before them.
+    let plus_x = app.dock.plus_x(row);
+    for x in plus_x..plus_x + 3 {
+        assert_eq!(app.dock.hit(row, x), Some(TabHit::New), "at {x}: {room}");
+    }
+    let icons = app.dock.tabs_end.get() + app.dock.icons_air.get();
+    assert!(plus_x + 3 <= icons, "{room}");
+    assert!(!app.dock.maximize_shows(row), "the button gave way first");
+    // A press on it opens what starts things.
+    mouse(&mut app, MouseKind::Left, plus_x + 1, row.y);
+    assert!(matches!(app.overlay, Overlay::Menu(_)), "a menu");
 }
 
 /// A tab is as wide as what it paints: its name whole, with no letter cut and no "…" while

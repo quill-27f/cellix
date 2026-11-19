@@ -3640,3 +3640,12 @@ The fixcards track, from the final review's C4.
 - Not done: the thumb shows where the list is; it isn't dragged, as the file's is. The wheel scrolls the list.
 - Test changed with it: `with_no_file_in_view_comments_stand_under_a_heading_for_each_file` reads a file's count at its heading's end before the thumb, which stands in the pane's last column on cells.
 - Tests: `an_empty_list_names_the_suggestions_in_the_text`, `a_long_list_has_a_thumb_and_nothing_cut_at_the_panes_foot`.
+
+## Three agents in a narrow pane keep their marks and the + (2026-11-19)
+
+From the release review of 0.11.0 (track A, A1, a blocker).
+
+- What was wrong: in m1-agent-tabs-narrow (a window of 96 columns, a pane of 44) the row showed only the tab in front, "og tags ● ⌄ ×", with 154 px empty and no +; Claude Code's spinner and Gemini CLI's done dot were gone. The tabs behind, each cut to its mark and state (five columns each), the tab in front (thirteen) and the + (three) needed 26 columns, and the row had 25 before the column kept clear ahead of the icons at the top right. Yesterday's rule that the + stays while any tab is cut sent the row to the chevron list for want of that one column.
+- Now in a short row with the button that maximizes the pane gone, the +'s own last column of air may be the column kept clear before the icons (`Dock::icons_air`, set where the icons are placed): both are air, and one column of it is enough. The + still stands about 20 px after the last tab (19 px measured), and 35 px from the first icon's ink, more than the icons' own 30 between them.
+- Test: `tabs_are_cut_to_their_marks_before_the_plus_gives_way` now also covers the scene: three agents, Codex in front asking, Claude Code working and Gemini CLI done behind it, in a 96-column window at the tour's cells. The row is cut, not listed; each agent's mark and state is drawn and no letters of the two behind; the + is drawn 14 to 26 px after the last tab, takes its clicks and opens what starts things, and reaches no icon; the button gave way first.
+- Looked at: `m1-agent-tabs-narrow` (✳ ◌ | ✦ ● | og tags ● × +, the + 19 px after the tab in front, the cut tabs 15.5/17.5 and 19.5/21 px either side of their ink), `m1-agent-tabs`, `131-task-failed`, `132-task-problem-hover`, `165-pane-tabs-cut`, `166-pane-tabs-cut-hover`, `173-peek-narrow`, unchanged where the row wasn't one column short.

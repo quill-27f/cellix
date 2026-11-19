@@ -11007,6 +11007,8 @@ impl App {
             x - ACTION_MARGIN
         });
         self.dock.tabs_end.set(end);
+        let air = if held.is_some() { ACTION_MARGIN } else { 0 };
+        self.dock.icons_air.set(air);
         self.dock.inbox_count.set(self.inbox_listed().len());
         self.dock.tabs_flush.set(self.dock_under());
         let maximized = self.maximized == Some(Maximized::Pane);

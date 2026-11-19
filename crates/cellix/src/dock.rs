@@ -2048,6 +2048,10 @@ pub struct Dock {
     pub inbox_count: Cell<usize>,
     /// The column tabs stop at, for what stands past them.
     pub tabs_end: Cell<u16>,
+    /// The columns of air kept clear after `tabs_end`, before the icons at the top right. In
+    /// a short row with no button after it, the + after the tabs may stand its own last column
+    /// of air in them: both are air, and one column of it is enough.
+    pub icons_air: Cell<u16>,
     /// Whether the tabs start flush, under the file's, with no line beside them.
     pub tabs_flush: Cell<bool>,
     /// Rows the pane was dragged to, standing under the file.
@@ -2708,12 +2712,10 @@ impl Dock {
     /// The columns tabs cut short have between them: the row up to the button that maximizes
     /// the pane, or where they fit only without it, up to the icons, less the + after them.
     fn cut_room(&self, area: Rect) -> u16 {
-        let button = if self.cut_keeps_the_button(area) {
-            MAXIMIZE_SHORT
-        } else {
-            0
-        };
-        self.row_room(area).saturating_sub(button + NEW_WIDTH)
+        if self.cut_keeps_the_button(area) {
+            return (self.row_room(area)).saturating_sub(MAXIMIZE_SHORT + NEW_WIDTH);
+        }
+        (self.row_room(area) + self.icons_air.get()).saturating_sub(NEW_WIDTH)
     }
 
     /// The columns the pane's part of the row has before the icons at the top right.
@@ -2733,9 +2735,12 @@ impl Dock {
         kept + behind.sum::<u16>()
     }
 
-    /// Whether the tabs, each cut to its mark, leave room for the + after them.
+    /// Whether the tabs, each cut to its mark, leave room for the + after them, whose last
+    /// column of air may be the one kept clear before the icons. Three agents in a pane of 44
+    /// columns were a column short of it, and showed the tab in front alone with its chevron
+    /// and 154 px empty (m1-agent-tabs-narrow).
     fn cut_fits(&self, area: Rect) -> bool {
-        self.cut_least() + NEW_WIDTH <= self.row_room(area)
+        self.cut_least() + NEW_WIDTH <= self.row_room(area) + self.icons_air.get()
     }
 
     /// Whether they leave room for the button that maximizes the pane as well.
