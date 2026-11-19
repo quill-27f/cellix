@@ -6998,5 +6998,12 @@
     "title": "A card's command box stands 12 px outside its words, as far in from the card's edge as its command is from its own",
     "test": "a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in",
     "passes": true
+  },
+  {
+    "id": "answer-line-air",
+    "milestone": 15,
+    "title": "The line over an agent's answer stands 16 px from the words over it and from the answer's own",
+    "test": "the_line_over_an_answer_has_16_px_either_side",
+    "passes": true
   }
 ]

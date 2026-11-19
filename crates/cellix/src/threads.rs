@@ -552,6 +552,78 @@ fn rewrite_lift(measure: &dyn Measure) -> f32 {
     (lift / row).max(0.0)
 }
 
+/// Pixels of air the line over an answer keeps from the words over it and from the answer's
+/// own: 16, as a box keeps round its words. Over a rewrite it stood 12 px under the comment's
+/// tails and 10 over "Claude suggests a rewrite" (0.11.0's release review, B5).
+const ANSWER_AIR: f32 = 16.0;
+/// How much higher the ink of an answer's own words stands than the interface's measures for
+/// words (`words_in_row`), scaled to their 85 per cent, put it, in lines: its tallest letters'
+/// tops and its tails' feet, 2 px and 1 px of a line of 36 in the tour's pictures.
+const SMALL_INK_RISE: (f32, f32) = (0.055, 0.03);
+
+/// How far the line over an answer and the answer's own words, its verdict and who wrote it,
+/// are lifted in their row, in rows, as (the line, the words): the words as little as keeps
+/// `LINE_AIR` and a pixel to spare between their tails and a rewrite's box under them, where
+/// `rewrite_lift` puts it (paint moves by whole units, under a pixel each), and the line
+/// `ANSWER_AIR` over their tallest letters. The words over the line go up as far again
+/// (`over_answer_lift`), which is where the room comes from: the card is whole rows. None
+/// where a row hasn't that room, on the terminal's line or on cells: there the answer's words
+/// go up with a rewrite's box, as they did.
+fn answer_lifts(measure: &dyn Measure) -> Option<(f32, f32)> {
+    let (Some((caps, _)), Some(tails), Some((_, row))) = (
+        crate::measures::words_in_row(measure),
+        small_tails(measure),
+        measure.cell_pixels(),
+    ) else {
+        return None;
+    };
+    if !crate::measures::roomy(measure) {
+        return None;
+    }
+    let row = row as f32;
+    let line = row / measure.row_air().max(1.0);
+    let middle = row / 2.0;
+    let drop = VERDICT_DROP * row;
+    let small_caps =
+        middle + (caps - middle) * f32::from(SMALL) / 100.0 + drop - SMALL_INK_RISE.0 * line;
+    let tails = tails + drop - SMALL_INK_RISE.1 * line;
+    let box_top = row + caps - crate::measures::BOX_PADDING - rewrite_lift(measure) * row;
+    let words = (crate::measures::LINE_AIR + 1.0 - (box_top - tails)).max(0.0);
+    let rule = words - (small_caps - crate::measures::line_pixels(measure) - ANSWER_AIR);
+    Some((rule / row, words / row))
+}
+
+/// How far the rows of words standing straight over an answer's line, a comment's or an
+/// earlier answer's set at `size` per cent, are lifted in their rows, in rows, so the line
+/// (`answer_lifts`) stands `ANSWER_AIR` under their tails. Nothing on cells.
+fn over_answer_lift(size: u8, measure: &dyn Measure) -> f32 {
+    let (Some((_, tails)), Some((_, row))) = (
+        crate::measures::words_in_row(measure),
+        measure.cell_pixels(),
+    ) else {
+        return 0.0;
+    };
+    let row = row as f32;
+    let middle = row / 2.0;
+    let tails = middle + (tails - middle) * f32::from(size) / 100.0;
+    let Some((line, _)) = answer_lifts(measure) else {
+        return 0.0;
+    };
+    ((line * row + ANSWER_AIR - row + tails) / row).max(0.0)
+}
+
+/// Whether the row at `index` is one of a run of a card's comment or an answer's rows that
+/// stands straight over the line of an answer to it.
+fn over_answer(all: &[Line], index: usize) -> bool {
+    let id = match &all[index] {
+        Line::Text(id, _) | Line::Reply(id, _) => *id,
+        _ => return false,
+    };
+    let same = |line: &Line| matches!(line, Line::Text(of, _) | Line::Reply(of, _) if *of == id);
+    let next = all[index..].iter().find(|line| !same(line));
+    matches!(next, Some(Line::Answer(of, ..)) if *of == id)
+}
+
 /// How far a short card's note is dropped in the row its buttons stand in while it's
 /// pointed at, in rows: its words' tails to the buttons' foot, so the card's foot is as far
 /// under either.
@@ -3063,12 +3135,22 @@ pub fn draw(
             Line::Text(_, text) => {
                 let place = (a.text, text_x, y);
                 draw_linked(grid, place, text, (inner, 100, right), (measure, theme));
+                if over_answer(&all, index) {
+                    grid.lift_since(from, over_answer_lift(100, measure));
+                }
             }
             Line::Answer(_, word, author) => {
                 // A line across the card over it, between what was said and the answer, its
                 // words on the card's column: it stood in a box whose words were 10 px from its
-                // edge where the card's are 24 from its own.
-                let rule = Bounds::cells(a.text, f32::from(y), a.end - a.text, 0.0);
+                // edge where the card's are 24 from its own. `ANSWER_AIR` from the words
+                // either side of it (`answer_lifts`).
+                // Where a row has no room, the line stays at the row's top and the words go up
+                // with a rewrite's box only.
+                let boxed = matches!(all.get(index + 1), Some(Line::Proposed(..)));
+                let (line_lift, words_lift) =
+                    answer_lifts(measure).unwrap_or((0.0, if boxed { lift } else { 0.0 }));
+                let at = f32::from(y) - line_lift;
+                let rule = Bounds::cells(a.text, at, a.end - a.text, 0.0);
                 grid.hairline(rule, theme.popup_border);
                 let lines_from = grid.painted_so_far();
                 let muted = Style {
@@ -3095,14 +3177,16 @@ pub fn draw(
                 let at = (x.ceil() as u16).max(text_x);
                 grid.label_at(x, at, y, author, muted, right, SMALL);
                 grid.drop_last(VERDICT_DROP);
-                // Over a rewrite's box, up with it.
-                if matches!(all.get(index + 1), Some(Line::Proposed(..))) {
-                    grid.lift_since(lines_from, lift);
-                }
+                // Up with the line over it, and over a rewrite's box no nearer it than
+                // `LINE_AIR`: up with the box, it stood 10 px under the line.
+                grid.lift_since(lines_from, words_lift);
             }
             Line::Reply(_, text) => {
                 let place = (a.text, text_x, y);
                 draw_linked(grid, place, text, (inner, SMALL, right), (measure, theme));
+                if over_answer(&all, index) {
+                    grid.lift_since(from, over_answer_lift(SMALL, measure));
+                }
             }
             Line::Proposed(_, text) => {
                 // In its box, its padding in from the card's column, and up with it.

@@ -679,7 +679,10 @@ button is the pane's one: what's being written is what's under way.
 The list's head, what's yours and what's suggested, Check My Review, the kinds and the order,
 stands on the cards' edges: from where a card starts to where it ends, where there are pictures
 (it stood 8 px inside them on the left and 17 on the right). An agent's answer stands on the
-card's column under a line across the card, its verdict's chip first: it stood in a box of the
+card's column under a line across the card, its verdict's chip first, the line 16 px from the
+words over it and from the answer's own (`ANSWER_AIR`: the words over it go up a few pixels
+for the room, and over a rewrite the answer's words keep 8 px from its box; it stood 12 px
+under a comment and 10 over "Claude suggests a rewrite"): it stood in a box of the
 buttons' colour whose words were 10 px from its edge. Edit and Delete stand at the end of a
 card's buttons where all five fit, and where they don't, a "⋯" there opens a menu of the two:
 on a row of their own, a narrow card had three rows of buttons.

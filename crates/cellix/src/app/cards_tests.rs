@@ -1097,6 +1097,87 @@ fn an_answer_stands_on_the_cards_column_under_a_line() {
     assert!(ruled, "a line over the answer, from the card's column");
 }
 
+/// The line over an agent's answer stands 16 px under the comment's tails and 16 px over the
+/// answer's capitals, and over a rewrite the answer's words keep 8 px or more from its box:
+/// it stood 12 px under the comment and 10 over "Claude suggests a rewrite" (0.11.0's release
+/// review, B5). Measured in the picture, as the tour's terminal draws it.
+#[test]
+fn the_line_over_an_answer_has_16_px_either_side() {
+    use cellix_render::{Rasterizer, SoftwareRasterizer};
+    let (_dir, mut app) = page("The model improves on the baseline.\n");
+    comment(&mut app, "improves", "By how much?");
+    let id = app.threads[0].id;
+    answer(&mut app, id, "Rewrite: improves by 3.6 points");
+    show_comments(&mut app);
+    app.lit_thread = None;
+    let grid = painted(&mut app);
+    let (text_x, said_y, _) = run(&grid, "By how much?");
+    let first = (said_y / UNIT) as u16;
+    let mut raster = SoftwareRasterizer::new(17, 50)
+        .expect("fonts are in the binary")
+        .with_type_row(36);
+    let mut rows: Vec<Vec<Rgb>> = Vec::new();
+    for y in first..first + 4 {
+        let image = raster.row(&grid, y);
+        for line in 0..image.height {
+            let at = |x: usize| (line * image.width + x) * 3;
+            let row = (0..image.width)
+                .map(|x| Rgb(image.rgb[at(x)], image.rgb[at(x) + 1], image.rgb[at(x) + 2]))
+                .collect();
+            rows.push(row);
+        }
+    }
+    let apart =
+        |a: Rgb, b: Rgb| a.0.abs_diff(b.0) > 24 || a.1.abs_diff(b.1) > 24 || a.2.abs_diff(b.2) > 24;
+    let (card, border) = (app.theme.popup, app.theme.popup_border);
+    let (from, to) = (text_x as usize + 2, text_x as usize + 200);
+    let inked = |l: usize| rows[l][from..to].iter().any(|p| apart(*p, card));
+    // The line is the border's colour itself, which is near the card's in the dark theme.
+    let near =
+        |a: Rgb, b: Rgb| a.0.abs_diff(b.0) <= 6 && a.1.abs_diff(b.1) <= 6 && a.2.abs_diff(b.2) <= 6;
+    let ruled = |l: usize| rows[l][from..to].iter().all(|p| near(*p, border));
+    // Under the comment's capitals: the card's own edge over it is a line too.
+    let said = (py(said_y) - f32::from(first) * ROW) as usize + 10;
+    let line = (said..rows.len())
+        .find(|l| ruled(*l))
+        .expect("the line over the answer");
+    let under = (line..rows.len())
+        .find(|l| !ruled(*l))
+        .expect("the line's foot");
+    let tails = (0..line)
+        .rev()
+        .find(|l| inked(*l))
+        .expect("the comment's tails");
+    let caps = (under..rows.len())
+        .find(|l| inked(*l))
+        .expect("the answer's capitals");
+    let (over, below) = (line - tails, caps - under);
+    assert!(
+        (15..=17).contains(&over) && (15..=17).contains(&below),
+        "{over} px under the comment's tails, {below} over the answer's capitals"
+    );
+    // The rewrite's box: the first row that's mostly its fill.
+    let fill = app.theme.quiet_button(card);
+    let boxed = (caps..rows.len())
+        .find(|l| {
+            rows[*l][from..to]
+                .iter()
+                .filter(|p| near(**p, fill))
+                .count()
+                > (to - from) / 2
+        })
+        .expect("the rewrite's box");
+    let foot = (caps..boxed)
+        .rev()
+        .find(|l| inked(*l))
+        .expect("the answer's tails");
+    assert!(
+        boxed - foot >= 8,
+        "{} px from the answer to its box",
+        boxed - foot
+    );
+}
+
 /// An agent's rewrite stands in a box 16 px round its words, the box on the card's columns and
 /// 16 px over its buttons, which are one row: Accept Rewrite filled, the card's one primary, and
 /// two quiet ones. The box's words were 10 px from its edge, it stood 10 px over its buttons,
