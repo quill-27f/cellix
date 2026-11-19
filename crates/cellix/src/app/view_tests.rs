@@ -531,6 +531,58 @@ fn a_scopes_header_stays_while_a_line_of_it_is_first_under_the_headers() {
     assert!(grid.row_text(top + 2).contains("while let Some(job)"));
 }
 
+/// Go to Line, and whatever else reveals a line, shows it under the headers pinned over the
+/// top, as VS Code does: reached from below, line 27 stood on the top row, under `impl`,
+/// `run_due`, `while` and `match`, out of sight (the tour's 112 and 115).
+#[test]
+fn going_to_a_line_in_nested_scopes_shows_it_under_the_pinned_headers() {
+    let (_dir, mut app) = code(SCHEDULER);
+    // As short as the tour's window, where line 46 in view leaves line 27 above it.
+    app.handle(Event::Resize(120, 24));
+    let go = |app: &mut App, line: &str| {
+        app.run(cellix_input::Command::GoToLine);
+        for c in line.chars() {
+            plain(app, Key::Char(c));
+        }
+        plain(app, Key::Enter);
+    };
+    // To the end first, so the line is come to from below, as the tour does.
+    go(&mut app, "46");
+    go(&mut app, "27");
+    assert_eq!(caret_line(&app), 26);
+    let area = app.focused_area();
+    let grid = screen(&app);
+    let text = app.editors[0].text_area(area);
+    let first = app.editors[0].scroll_region(area).y;
+    let (_, y) = find(&grid, "job.due = now");
+    assert!(
+        y >= first,
+        "on row {y}, under the pinned rows that end at {first}"
+    );
+    // The headers of the scopes it's in stand over it, the innermost, the arm it's in, last,
+    // and it's the first line under them.
+    assert!(first > text.y, "headers are pinned: {}", grid.text());
+    let pinned = grid.row_text(first - 1);
+    assert!(
+        pinned.contains("Err(error) if job.tries"),
+        "{}",
+        grid.text()
+    );
+    assert_eq!(y, first, "first under them: {}", grid.text());
+    // A line already on screen but behind the headers is brought out from under them too:
+    // line 28 with line 26 at the top, where four headers stand over lines 26 to 29.
+    app.editors[0].top = 25;
+    let first = app.editors[0].scroll_region(area).y;
+    assert!(first >= text.y + 4, "line 28 is behind them");
+    go(&mut app, "28");
+    let first = app.editors[0].scroll_region(area).y;
+    let (_, y) = find(&screen(&app), "self.queue.push(job);");
+    assert!(
+        y >= first,
+        "on row {y}, under the pinned rows that end at {first}"
+    );
+}
+
 #[test]
 fn a_pinned_header_shows_its_chevron_and_folds_from_it() {
     let (_dir, mut app) = code(&long_scope());

@@ -1831,7 +1831,9 @@ its body has a line below the header's own row; one whose last line would be und
 header is pinned all the same when, left out, that line would be the first under the others, so
 no line shows without the header of the scope it's in (a `match`'s last arm stood under the
 `while` with no `match`). A line of only closing brackets says nothing of a scope, so a scope
-with only its `}` left in view isn't pinned. Brackets take one of three colours by depth, gold, orchid and sky as in VS Code, toned for
+with only its `}` left in view isn't pinned. A line that's revealed, by Go to Line, a search's
+result, a problem, a symbol or a definition, stands under the pinned headers, never behind them,
+as in VS Code. Brackets take one of three colours by depth, gold, orchid and sky as in VS Code, toned for
 each theme, with a stray in the error colour and the caret's pair tinted. Pages are none of this:
 they lay themselves out.
 

@@ -7019,5 +7019,12 @@
     "title": "Sticky scroll keeps a scope's header while a line of it is first under the headers",
     "test": "a_scopes_header_stays_while_a_line_of_it_is_first_under_the_headers",
     "passes": true
+  },
+  {
+    "id": "L4-reveal-under-sticky",
+    "milestone": 15,
+    "title": "A revealed line stands under the pinned sticky headers",
+    "test": "going_to_a_line_in_nested_scopes_shows_it_under_the_pinned_headers",
+    "passes": true
   }
 ]

@@ -454,7 +454,7 @@ impl Editor {
     }
 
     /// Where text goes in `area`: all of it, less the minimap or the scrollbar.
-    fn text_area(&self, area: Rect) -> Rect {
+    pub(crate) fn text_area(&self, area: Rect) -> Rect {
         let side = if self.shows_minimap(area) {
             MINIMAP_WIDTH
         } else {
@@ -2586,6 +2586,22 @@ impl Editor {
         )
     }
 
+    /// Scrolls up, a row at a time, until `row` is under the headers pinned over the top
+    /// rather than behind them, as VS Code reveals a line: Go to Line, a search's result, a
+    /// problem or a symbol landed under `impl` and `while` with the line itself out of sight.
+    /// How many are pinned changes with where the view starts, so it's looked at each row.
+    fn clear_of_sticky(&mut self, rows: &Rows, area: Rect, row: usize) {
+        // As many rows as headers could ever be pinned, and a few more: each row up either
+        // shows the line or pins one more header over it.
+        for _ in 0..12 {
+            let pinned = self.sticky(rows, area).len();
+            if self.top == 0 || row >= self.top + pinned {
+                return;
+            }
+            self.top -= 1;
+        }
+    }
+
     /// Scrolls just enough to show the primary cursor.
     pub fn reveal(&mut self, area: Rect) {
         let area = self.text_area(area);
@@ -2627,6 +2643,7 @@ impl Editor {
         } else if line >= self.top + rows {
             self.top = line + 1 - rows;
         }
+        self.clear_of_sticky(&laid, area, line);
         if self.wrap {
             self.left = 0;
             return;
