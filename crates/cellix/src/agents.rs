@@ -617,6 +617,7 @@ impl Agents {
         grid.fill(area, theme.sidebar);
         // The band behind a pointed row, as far in from the sheet's line on both sides.
         let band = |row: Rect| crate::measures::band(row, edge, 0.055, measure);
+        let end = row_end(area, edge, measure);
         let scrolled = scrolled.min(self.last_top(area.h, agents));
         let order = ordered(agents);
         let dim = Style {
@@ -690,7 +691,7 @@ impl Agents {
                     // started it.
                     let from = parent_of(row, agents).filter(|_| depth == 0);
                     let from = from.map(|parent| parent.name.as_str());
-                    draw_row(grid, (area, y), (row, depth, from), (measure, theme));
+                    draw_row(grid, (area, y, end), (row, depth, from), (measure, theme));
                     if rows > 1 {
                         let x = side + 2 + 2 * u16::from(depth);
                         let at = x as f32;
@@ -703,7 +704,7 @@ impl Agents {
                         grid.panel(wash, 18, Some(theme.row_hover), None);
                     }
                     let row = (y, rows, hovered);
-                    self.draw_worktree(grid, area, row, index, (measure, theme));
+                    self.draw_worktree(grid, (area, end), row, index, (measure, theme));
                 }
                 Line::Start(index) => {
                     if hovered {
@@ -725,7 +726,7 @@ impl Agents {
                     let wide = measure.width(shown, font).ceil() as u16;
                     let stop = right.saturating_sub(wide + 1).max(side + 3);
                     grid.label(side + 2, y, label, theme.sidebar, stop);
-                    grid.label_right(right, y, shown, dim, DETAIL_SIZE);
+                    grid.label_right_at(end, right, y, shown, dim, DETAIL_SIZE);
                 }
                 Line::Rule => {
                     // In the middle of its own row, from where the words start to where they
@@ -744,7 +745,7 @@ impl Agents {
     fn draw_worktree(
         &self,
         grid: &mut Grid,
-        area: Rect,
+        (area, row_end): (Rect, f32),
         (y, rows, hovered): (u16, u16, bool),
         index: usize,
         (measure, theme): (&dyn Measure, &Theme),
@@ -765,14 +766,14 @@ impl Agents {
         };
         let right = area.right().saturating_sub(2);
         // Where what stands at the row's end starts, which the branch's name stops short of.
-        let mut end = right as f32;
+        let mut end = row_end;
         if worktree.changes > 0 {
             let count = format!("{} changed", worktree.changes);
             let badge = Style {
                 fg: theme.git_modified,
                 ..theme.sidebar
             };
-            grid.label_right(right, y, &count, badge, DETAIL_SIZE);
+            grid.label_right_at(row_end, right, y, &count, badge, DETAIL_SIZE);
             let font = Font {
                 size: DETAIL_SIZE,
                 ..Font::default()
@@ -858,10 +859,11 @@ impl Agents {
 /// green dot when it's done and nobody has looked, and nothing while it's idle. How long ago
 /// stands in one column down the list, before room as wide as the "needs you" chip. A helper
 /// stands two columns in for each agent over it, with a line bent round from that one's mark;
-/// one in a section of its own says who started it, `from`.
+/// one in a section of its own says who started it, `from`. What stands at its end ends at
+/// `row_end` (`row_end`).
 fn draw_row(
     grid: &mut Grid,
-    (area, y): (Rect, u16),
+    (area, y, row_end): (Rect, u16, f32),
     (row, depth, from): (&Row, u8, Option<&str>),
     (measure, theme): (&dyn Measure, &Theme),
 ) {
@@ -900,30 +902,36 @@ fn draw_row(
         crate::dock::initial_over(grid, (middle, y), (size, letter), theme.sidebar.bg);
     }
     let right = area.right().saturating_sub(2);
-    // The state at the very end, and how long ago before it.
-    let state = right as f32 - STATE_WIDTH;
+    // The state at the very end, and how long ago before it. Where there are pictures, its
+    // ink ends where the row's end is, as the "needs you" chip does: the green dot ended
+    // 11 px short of the chip, 36 px from the band under the pointer (m2).
+    let size = crate::dock::MARK_SIZE;
+    let square = size * crate::measures::rows_to_columns(measure) / measure.row_air();
+    let at = |ink: f32| {
+        if measure.in_cells() {
+            right as f32 - STATE_WIDTH + 0.3
+        } else {
+            row_end - square * ink / 24.0
+        }
+    };
     match row.urgency {
         Urgency::Working => {
-            let accent = theme.accent;
-            grid.spinner(
-                state + 0.3,
-                y,
-                crate::dock::MARK_SIZE,
-                accent,
-                theme.sidebar,
-            );
+            // The ring's ink ends 1.4 of its square's 24 parts before the square does.
+            grid.spinner(at(22.6), y, size, theme.accent, theme.sidebar);
         }
         Urgency::Done => {
-            let green = theme.git_added;
-            grid.dot(state + 0.3, y, crate::dock::MARK_SIZE, green, theme.sidebar);
+            // A dot's ink is 12 of the 24, from the 6th.
+            grid.dot(at(18.0), y, size, theme.git_added, theme.sidebar);
         }
         Urgency::NeedsYou | Urgency::Idle => {}
     }
     if row.urgency == Urgency::NeedsYou {
-        draw_needs_you(grid, (right, y), (measure, theme));
+        draw_needs_you(grid, (row_end, right, y), (measure, theme));
     }
-    // Every row keeps the chip's room for its state, so how long ago is one column.
-    let mut end = f32::from(right) - chip_width(measure) - AGO_GAP;
+    // Every row keeps the chip's room for its state, so how long ago is one column. Its
+    // letters keep the cells they had, before the chip's own.
+    let end = row_end - chip_width(measure) - AGO_GAP;
+    let mut cells = f32::from(right) - chip_width(measure) - AGO_GAP;
     let dim = Style {
         fg: theme.gutter.fg,
         ..theme.sidebar
@@ -935,22 +943,20 @@ fn draw_row(
             ..Font::default()
         };
         let wide = measure.width(&said, font);
-        grid.label_right(end.floor() as u16, y, &said, dim, DETAIL_SIZE);
-        end -= wide + AGO_GAP;
+        grid.label_right_at(end, cells.floor() as u16, y, &said, dim, DETAIL_SIZE);
+        cells -= wide + AGO_GAP;
     }
-    // Whoever is doing nothing is quieter, and not bold.
-    let name = if row.urgency == Urgency::Idle {
-        Style {
-            fg: theme.tab.fg,
-            ..theme.sidebar
-        }
-    } else {
-        Style {
-            bold: true,
-            ..theme.sidebar
-        }
+    // A name is in the words' own colour, for a press on its row brings its tab forward: in
+    // the quiet colour an idle one's read as the menus' "not installed", which does nothing.
+    // How long ago is what's quiet. An agent doing something is bold; one idle, and a helper,
+    // which stands under the agent it works for, aren't: a helper as bold as its agent read
+    // as its equal (0.11.0's review of `next`, m2 and 172).
+    let helper = depth > 0 || from.is_some();
+    let name = Style {
+        bold: row.urgency != Urgency::Idle && !helper,
+        ..theme.sidebar
     };
-    let stop = (end.floor() as u16).max(side + 3);
+    let stop = (cells.floor() as u16).max(side + 3);
     let text = crate::context::elide(&row.name, f32::from(stop - side - 2), measure);
     let after = grid.label(side + 2, y, &text, name, stop);
     // A helper says it is one, quietly, after its name, where there's room: under its agent
@@ -979,6 +985,19 @@ fn draw_row(
     }
 }
 
+/// Where what stands at a row's end ends, in cells: as far in from the sheet's right edge as
+/// a row's mark is from its left, `edge` being how far into its first column the sheet starts,
+/// so the band under the pointer has as much air round what it holds on both sides: it ended
+/// 36 px from the band against 15 at its start (0.11.0's review of `next`, m2). On cells, two
+/// columns in.
+fn row_end(area: Rect, edge: f32, measure: &dyn Measure) -> f32 {
+    if measure.in_cells() {
+        return f32::from(area.right().saturating_sub(2));
+    }
+    // The marks stand two columns into the area.
+    f32::from(area.right()) - (2.0 - edge)
+}
+
 /// The word after a helper's name, and the room before it, in cells.
 const HELPER: &str = "helper";
 const HELPER_GAP: f32 = 1.0;
@@ -1001,11 +1020,11 @@ fn chip_width(measure: &dyn Measure) -> f32 {
 /// colour on a wash of it.
 fn draw_needs_you(
     grid: &mut Grid,
-    (right, y): (u16, u16),
+    (end, right, y): (f32, u16, u16),
     (measure, theme): (&dyn Measure, &Theme),
 ) {
     let wide = chip_width(measure);
-    let left = f32::from(right) - wide;
+    let left = end - wide;
     let wash = mix(theme.attention, theme.sidebar.bg, CHIP_WASH);
     let top = y as f32 + (1.0 - CHIP_HIGH) / 2.0;
     if !measure.in_cells() {
@@ -1126,6 +1145,51 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         let tree = Hit::Worktree(PathBuf::from("/work/tree-10"));
         let found = (0..area.h).find(|y| agents.hit(area, *y, last, &rows) == Some(tree.clone()));
         assert!(found.is_some(), "and the last one can be clicked");
+    }
+
+    /// A row's name is in the words' own colour, since a press on any row brings its tab
+    /// forward: bold while its agent does something, and at regular weight while it's idle or
+    /// is a helper under its agent. An idle row was in the quiet colour of "not installed",
+    /// and a helper as bold as its agent read as its equal (0.11.0's review of `next`, m2,
+    /// 172).
+    #[test]
+    fn names_read_as_rows_that_do_something() {
+        let agents = Agents {
+            installed: vec![SHELL],
+            ..Agents::default()
+        };
+        let row = |name: &str, urgency, parent: Option<&str>| Row {
+            icon: crate::dock::program_icon("Codex", false, false),
+            name: name.to_string(),
+            urgency,
+            since: None,
+            detail: String::new(),
+            session: name.to_string(),
+            parent: parent.map(str::to_string),
+        };
+        let rows = vec![
+            row("lead", Urgency::Working, None),
+            row("reviewer", Urgency::Working, Some("lead")),
+            row("quiet one", Urgency::Idle, None),
+        ];
+        let theme = Theme::default();
+        let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        let area = Rect::new(0, 0, 50, 30);
+        let mut grid = Grid::new(50, 30, Style::default());
+        agents.draw(&mut grid, area, (0, &rows, 0.5), None, (&measure, &theme));
+        let name = |words: &str| {
+            let found = grid.paint.iter().find_map(|p| match p {
+                Paint::Text {
+                    text, color, font, ..
+                } if text == words => Some((*color, font.bold)),
+                _ => None,
+            });
+            found.unwrap_or_else(|| panic!("{words}: {}", grid.text()))
+        };
+        let words = theme.sidebar.fg;
+        assert_eq!(name("lead"), (words, true), "doing something");
+        assert_eq!(name("reviewer"), (words, false), "a helper");
+        assert_eq!(name("quiet one"), (words, false), "idle");
     }
 
     /// What can be started is listed as the + menu lists it: the terminal first, a rule, then

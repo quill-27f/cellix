@@ -482,8 +482,22 @@ impl Grid {
     /// A label whose right edge sits at `right`, since proportional text is narrower than
     /// its cells and would otherwise leave a gap at the end.
     pub fn label_right(&mut self, right: u16, y: u16, text: &str, style: Style, size: u8) {
+        self.label_right_at(right as f32, right, y, text, style, size);
+    }
+
+    /// The same, its painted words ending at `right`, between cells, and its letters in the
+    /// cells ending at `cell`.
+    pub fn label_right_at(
+        &mut self,
+        right: f32,
+        cell: u16,
+        y: u16,
+        text: &str,
+        style: Style,
+        size: u8,
+    ) {
         let cells = text.chars().count() as u16;
-        let x = right.saturating_sub(cells);
+        let x = cell.saturating_sub(cells);
         self.put_str(
             x,
             y,
@@ -492,12 +506,12 @@ impl Grid {
                 painted: true,
                 ..style
             },
-            right,
+            cell,
         );
         self.paint.push(Paint::Text {
-            x: units(right as f32),
+            x: units(right),
             y: y as i32 * UNIT,
-            max_width: units(right as f32),
+            max_width: units(right),
             text: text.to_string(),
             color: style.fg,
             font: Font {

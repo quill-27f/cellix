@@ -394,3 +394,75 @@ fn a_failed_step_is_a_chip_of_the_failed_colour() {
     let column = grid.row_text(y)[..at].chars().count() as u16;
     assert_eq!(grid.cell(column, y).style.bg, cells.theme().failed_tint());
 }
+
+/// A row's end is as far in from the pane's right edge as its mark is from its left, so the
+/// band under the pointer has as much air round what it holds on both sides, measured in the
+/// picture: what stood at the row's end ended 36 px from the band's end, against 15 from its
+/// start to the mark (0.11.0's review of `next`, m2-agents-urgency-hover).
+#[test]
+fn a_rows_band_has_the_same_air_either_side_of_what_it_holds() {
+    use cellix_render::FontMeasure;
+    let (_dir, mut app) = project();
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+    let event = |state: AgentState, detail: &str| {
+        Request::Agent(AgentEvent {
+            session: "c".into(),
+            agent: "Gemini".into(),
+            state,
+            detail: detail.into(),
+            folder: "/w".into(),
+            pid: None,
+            transcript: String::new(),
+            name: String::new(),
+        })
+    };
+    // Done behind another tab, so its row ends in the green dot.
+    app.tab_for("Gemini", "c");
+    app.tab_for("Codex", "d");
+    app.serve(event(AgentState::Working, "Working"));
+    app.serve(event(AgentState::Idle, "Finished"));
+    app.run(cellix_input::Command::ListAgents);
+    let grid = screen(&app);
+    let y = (1..grid.height())
+        .find(|y| grid.row_text(*y).contains("Gemini") && grid.row_text(*y).contains('●'))
+        .unwrap_or_else(|| panic!("the done row: {}", grid.text()));
+    let row = grid.row_text(y);
+    let x = row[..row.find("Gemini").unwrap()].chars().count() as u16;
+    app.handle(mouse(MouseKind::Move, x, y));
+    let grid = screen(&app);
+    let rows = super::strip_tests::picture(&grid, y);
+    let band = app.theme().row_hover;
+    // The band: the longest run of its colour across the row, over its words, whose round
+    // corners take as much off both its ends.
+    let middle = &rows[9];
+    let mut best = (0, 0);
+    let mut start = None;
+    for (at, pixel) in middle
+        .iter()
+        .enumerate()
+        .chain([(middle.len(), &cellix_render::Rgb(0, 0, 0))])
+    {
+        match (start, *pixel == band) {
+            (None, true) => start = Some(at),
+            (Some(from), false) => {
+                if at - from > best.1 - best.0 {
+                    best = (from, at);
+                }
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    let (from, to) = best;
+    assert!(to - from > 400, "the band: {from}..{to}");
+    // What it holds: anything off its colour inside it, its round ends left out.
+    let inked: Vec<usize> = (from + 6..to - 6)
+        .filter(|x| (12..38).any(|line| super::strip_tests::apart(rows[line][*x], band)))
+        .collect();
+    let (first, last) = (inked[0], inked[inked.len() - 1]);
+    let (left, right) = (first - from, to - 1 - last);
+    assert!(
+        left.abs_diff(right) <= 2,
+        "{left} px from the band's start to its mark, {right} from its end to the dot"
+    );
+}

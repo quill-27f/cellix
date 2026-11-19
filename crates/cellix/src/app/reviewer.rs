@@ -11,28 +11,33 @@ use crate::roles;
 
 /// What the reviewer is called among the agents here, while the name is free.
 const REVIEWER: &str = "reviewer";
+/// The row that ends Review with…, for agents that aren't set up here.
+pub(super) const SET_UP_AGENTS: &str = "Set up more agents…";
 
 impl App {
-    /// The menu Review with… drops at `at`: every agent Cellix starts, those not installed
-    /// dimmed, saying so, each with its own mark. From the button, it stands 8 px under it.
+    /// The menu Review with… drops at `at`: every agent installed here, each with its own mark,
+    /// and after a rule, Set up more agents…, which opens Settings at Integrations. A list shows
+    /// what a press acts on: four of its six rows were agents not installed, dimmed, that did
+    /// nothing (0.11.0's review of `next`, 175). From the button, it stands 8 px under it.
     pub(super) fn show_review_with_menu(&mut self, (at, button): ((u16, u16), bool)) {
         self.agents.look_for_agents();
         let installed = self.agents.installed_programs();
         let theme = &self.theme;
-        let items = AGENTS
+        let mut items: Vec<MenuItem> = AGENTS
             .iter()
+            .filter(|(_, program)| installed.contains(program))
             .map(|(name, program)| {
                 let (icon, color) = crate::agents::mark(program, theme);
-                let item = MenuItem::new(*name, MenuAction::ReviewWith(program));
-                if installed.contains(program) {
-                    item.icon(icon, color)
-                } else {
-                    item.icon(icon, theme.disabled)
-                        .note("not installed")
-                        .when(false)
-                }
+                MenuItem::new(*name, MenuAction::ReviewWith(program)).icon(icon, color)
             })
             .collect();
+        let more = MenuItem::new(SET_UP_AGENTS, MenuAction::SetUpAgents)
+            .icon(Icon::Settings, theme.activity.fg);
+        items.push(if items.is_empty() {
+            more
+        } else {
+            more.after_rule()
+        });
         let screen = Rect::new(0, 0, self.size.0.saturating_sub(1), self.size.1);
         let mut menu = Menu::new(at, items, &*self.measure, screen);
         // Under the button, which all but fills its row, it hangs 8 px clear of its foot, as a
@@ -279,6 +284,31 @@ mod tests {
         number.recv().unwrap()
     }
 
+    /// Review with… lists what a press on it starts, the agents installed here, and ends
+    /// with Set up more agents…, which opens Settings at Integrations: four of its six rows
+    /// were agents not installed, dimmed, that did nothing (0.11.0's review of `next`, 175).
+    #[cfg(unix)]
+    #[test]
+    fn review_with_lists_what_it_starts_and_sets_up_more() {
+        let (dir, _aside, mut app, _file) = project();
+        app.review = Some(app.new_review(dir.path().to_path_buf()));
+        settle(&mut app);
+        let at = place_of(&screen(&app), "Review with");
+        press(&mut app, at);
+        let Overlay::Menu(menu) = &app.overlay else {
+            panic!("a menu drops");
+        };
+        let labels: Vec<String> = menu.labels();
+        assert_eq!(labels, ["Codex", "Gemini CLI", SET_UP_AGENTS], "{labels:?}");
+        let text = screen(&app).text();
+        assert!(!text.contains("not installed"), "{text}");
+        // The last row opens Settings at Integrations.
+        let at = place_of(&screen(&app), "Set up more");
+        press(&mut app, at);
+        let page = app.settings_page.as_ref().expect("Settings opens");
+        assert_eq!(page.section, crate::settings_page::Section::Integrations);
+    }
+
     #[cfg(unix)]
     #[test]
     fn an_agent_reviews_the_changes_and_what_it_finds_shows_in_review() {
@@ -292,7 +322,10 @@ mod tests {
         assert!(matches!(app.overlay, Overlay::Menu(_)), "a menu drops");
         let text = screen(&app).text();
         assert!(text.contains("Gemini CLI"), "{text}");
-        assert!(text.contains("not installed"), "Claude Code isn't: {text}");
+        assert!(
+            !text.contains("not installed"),
+            "Claude Code isn't, and isn't listed: {text}"
+        );
 
         // Codex starts as the reviewer, told the Reviewer role's prompt as it starts: which
         // changes and how to see them, that it's read-only, and how to leave what it finds.

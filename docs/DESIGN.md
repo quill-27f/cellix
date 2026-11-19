@@ -1760,8 +1760,8 @@ name of its own, the same square with its own name's initial; a task's tab has a
 prompt, `>_`. One meaning to a mark: a hollow square stood for an agent not installed, a
 running Copilot CLI and an ended task at once, and read as a box to tick (0.11.0's review).
 On cells one letter each, `✻ ⬡ ✦`, the initial for the squares, `↖` for Cursor's and `>` for
-a prompt. In the + menu and Review with…, an agent that isn't installed keeps its own mark,
-dimmed. Every tab has a mark: a shell's has its prompt at its prompt as while a command runs
+a prompt. In the + menu, an agent that isn't installed keeps its own mark, dimmed; Review
+with… lists only those installed. Every tab has a mark: a shell's has its prompt at its prompt as while a command runs
 in it, the browser's its globe, and where there are pictures each view's the one its icon
 has, the Agents list's, Comments' bubble, the inbox's bell, the Preview's picture, Problems'
 circled ×, the Log's lines (a shell at its prompt and the inbox were names alone beside
@@ -2202,8 +2202,10 @@ takes, "Commit · 1 staged", where any are staged, filled, and Review with…, a
 as wide as its words. They stand side by side where both fit, and one under the other in a list
 too narrow for both, as Review's own 24 columns is (Commit filled the list's width and said
 "Commit" alone, under the last file with no row of air). The palette has Agent: Review Changes
-with… for where there's no list. Both drop a menu of the agents Cellix
-starts, each with its own mark, those not installed dimmed. From the button it stands 8 px under
+with… for where there's no list. Both drop a menu of the agents installed here, each with its
+own mark, and after a rule, Set up more agents…, which opens Settings at Integrations: a list
+shows what a press on it acts on, and four of its six rows were agents not installed, dimmed,
+doing nothing (0.11.0's review of `next`, 175). From the button it stands 8 px under
 it, hung as a menu under a line is (`Menu::hang`), where it stood 3 px under the button's foot. The one picked starts in the pane as the Reviewer role does,
 called reviewer while that name is free, its first prompt the role's with its first line saying
 which changes Review compares and the git command that shows them: since the last commit (`git
@@ -2510,7 +2512,14 @@ of "you" a pixel over its foot), saying "needs you" in the attention colour with
 asking on the row under it, its words' ink in its middle, raised the 2 px their tails reach
 further down than their heads reach up (they had 11 px over them and 7 under), a green
 dot, or nothing. Every row keeps room at its end as wide as that chip, so how long ago stands in
-one column down the list (it moved six columns left on the row that needs you). Under START,
+one column down the list (it moved six columns left on the row that needs you). What stands at
+a row's end, the chip, the spinner or the dot, ends as far in from the pane's right edge as the
+marks start from its left, so the band under the pointer has 15 px either side of what it
+holds (it had 36 at its end). A name is in the words' own colour, since a press on any row
+does something: bold while its agent does something, at regular weight while it's idle or is a
+helper under its agent; how long ago is what's quiet. An idle name in the quiet colour read as
+the menus' "not installed", and a helper as bold as its agent read as its equal (0.11.0's
+review of `next`, m2, 172). Under START,
 what can be started is listed as the + menu lists it: Terminal first, a rule, then the agents,
 one row each with its mark and what it runs at the row's end, where each had a + and "Starts
 here, working on this project" under it. Done is an agent that finished a turn nobody has looked at: it stays Done

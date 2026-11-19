@@ -16328,6 +16328,14 @@ impl App {
             MenuAction::RemoveWorktree(path) => self.ask_remove_worktree(path),
             MenuAction::StartRole(program, prompt) => self.start_role(program, &prompt),
             MenuAction::ReviewWith(program) => self.review_with(program),
+            MenuAction::SetUpAgents => {
+                if self.settings_page.is_none() {
+                    self.run(Command::OpenSettings);
+                }
+                if let Some(page) = self.settings_page.as_mut() {
+                    page.section = crate::settings_page::Section::Integrations;
+                }
+            }
             // The menu opens these itself.
             MenuAction::Submenu => {}
             MenuAction::ImageWidth(percent) => {
@@ -23336,7 +23344,12 @@ mod tests {
             "no menu: {}",
             grid.text()
         );
-        assert!(grid.text().contains("Gemini CLI"), "{}", grid.text());
+        // Whatever agents this machine has, it ends with the row that sets up more.
+        assert!(
+            grid.text().contains("Set up more agents"),
+            "{}",
+            grid.text()
+        );
         // It hangs 8 px clear of the button's foot, and has every menu's half a row of air
         // over its first row: hung as from a line, a whole row's more air was shared over
         // and under it, 56 px to its words against every other menu's 40.

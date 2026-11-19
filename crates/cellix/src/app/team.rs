@@ -2093,7 +2093,7 @@ mod tests {
     }
 
     /// A helper's row and peek's header say one state, and the section counts agents: ready,
-    /// its row under its working agent has the done dot peek shows, its name bright and bold,
+    /// its row under its working agent has the done dot peek shows, its name bright and regular,
     /// under "WORKING 1", where it stood in "IDLE 1" with no mark by its hook's word while peek
     /// said "● done", and before that under "WORKING 2" (0.11.0's release review, 172, 173).
     /// The line bent round to one under its agent is one that can be seen, and starts clear
@@ -2121,7 +2121,9 @@ mod tests {
         let x = grid.row_text(helper).find("reviewer").unwrap();
         let x = grid.row_text(helper)[..x].chars().count() as u16;
         let name = grid.cell(x, helper).style;
-        assert!(name.bold, "bold, as its section's names are");
+        // At regular weight under its agent's bold name: as bold, it read as its equal
+        // (0.11.0's review of `next`, 172).
+        assert!(!name.bold, "regular, under its agent");
         assert_eq!(name.fg, app.theme.sidebar.fg, "in the words' own colour");
         // Ready, it has the done dot peek's header shows for it: with nothing at its end it
         // stood under a heading that counted it as working.
@@ -2158,8 +2160,8 @@ mod tests {
         let name = grid.row_text(helper).find("reviewer").unwrap();
         let name = grid.row_text(helper)[..name].chars().count() as u16;
         assert!(
-            grid.cell(name, helper).style.bold,
-            "bold, as its section's are"
+            !grid.cell(name, helper).style.bold,
+            "regular, under its agent's bold name"
         );
         let lines: Vec<(Bounds, Rgb)> = grid
             .paint

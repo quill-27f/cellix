@@ -7026,5 +7026,33 @@
     "title": "A revealed line stands under the pinned sticky headers",
     "test": "going_to_a_line_in_nested_scopes_shows_it_under_the_pinned_headers",
     "passes": true
+  },
+  {
+    "id": "agent-row-names-plain",
+    "milestone": 15,
+    "title": "An idle agent's row and a helper's have their names in the words' own colour at regular weight",
+    "test": "names_read_as_rows_that_do_something",
+    "passes": true
+  },
+  {
+    "id": "review-with-only-installed",
+    "milestone": 15,
+    "title": "Review with… lists only agents installed here and ends with Set up more agents…, which opens Settings at Integrations",
+    "test": "review_with_lists_what_it_starts_and_sets_up_more",
+    "passes": true
+  },
+  {
+    "id": "agent-row-ends-even",
+    "milestone": 15,
+    "title": "An Agents list row's end stands as far from the pane's right edge as its mark from the left, the hover band even round it",
+    "test": "a_rows_band_has_the_same_air_either_side_of_what_it_holds",
+    "passes": true
+  },
+  {
+    "id": "helper-row-regular-weight",
+    "milestone": 15,
+    "title": "A helper's row under its agent has its name at regular weight, its agent's in bold",
+    "test": "names_read_as_rows_that_do_something",
+    "passes": true
   }
 ]

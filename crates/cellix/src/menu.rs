@@ -121,6 +121,8 @@ pub enum Action {
     StartRole(&'static str, String),
     /// Starts this agent reviewing the changes.
     ReviewWith(&'static str),
+    /// Opens Settings at Integrations, where agents are set up.
+    SetUpAgents,
     /// Reviews what changed in a worktree, as a click on its row does.
     ReviewWorktree(PathBuf),
     /// Asks to take a worktree away.
@@ -479,6 +481,15 @@ impl Menu {
     #[cfg(test)]
     pub fn rows(&self) -> usize {
         self.items.len()
+    }
+
+    /// What each of its rows says, in order.
+    #[cfg(test)]
+    pub fn labels(&self) -> Vec<String> {
+        self.items
+            .iter()
+            .map(|item| item.label.to_string())
+            .collect()
     }
 
     /// Where it stands.

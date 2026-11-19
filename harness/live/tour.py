@@ -1132,8 +1132,10 @@ def reviewer_scenes(scratch):
                 "printf 'Left 1 finding.\\n'\n"
                 "exec sleep 300\n")
     os.chmod(f"{tools}/codex", 0o755)
+    # The menu lists the agents installed, here the stand-in Codex, and ends with the row that
+    # sets up more.
     menu = [["keys", "\u0007"], ["until", "Review with"], ["click", *ON("Review with")],
-            ["until", "Gemini CLI"], ["wait", 0.4]]
+            ["until", "Set up more"], ["wait", 0.4]]
     found = [*menu, ["click", *ON("Codex")], ["until", "Suggested by Codex"], ["wait", 1.0]]
     scenes = [
         ("175-review-with", menu, {}),
