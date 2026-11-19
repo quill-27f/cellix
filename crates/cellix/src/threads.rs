@@ -14,22 +14,19 @@ use cellix_review::{About, Thread};
 use crate::measures::BUTTON_GAP;
 use crate::theme::Theme;
 
+/// Columns from the pane's edge to its text edge, where every view in the pane starts its
+/// words, and where the list's head and a card's edge stand.
 const SIDE: u16 = 2;
 const CARD_RADIUS: u8 = 33;
-/// How far a card reaches above its first row and below its last. Text sits low in its row
-/// and buttons fill theirs, so the two differ to look the same.
-const CARD_AIR: (f32, f32) = (0.17, 0.6);
-/// How far a card reaches past the pane's text edge either side: it starts a column from
-/// the pane's edge, and its own text two columns inside it.
-const CARD_REACH: f32 = 1.0;
-/// How far an agent's answer sits in from the card's text.
-const INSET: f32 = 0.6;
 /// A card's buttons say what the palette calls the same thing, in its Title Case: "Ask agent"
 /// stood on a card beside "Ask Agent" in its own hint, Problems and the selection's buttons.
 const ASK: &str = "Ask Agent";
 const BUTTONS: [&str; 3] = ["Reply", ASK, "Resolve"];
-/// On the reviewer's own comment, after those, or on a row of their own when they don't fit.
+/// On the reviewer's own comment, after those, or behind a "⋯" at the row's end when they
+/// don't fit: on a row of their own, a narrow card had three rows of buttons.
 const EDITS: [&str; 2] = ["Edit", "Delete"];
+/// The button that opens a menu of Edit and Delete, where they don't fit beside the others.
+const MORE: &str = "\u{22ef}";
 /// On a comment an agent says it addressed: settle it, or say it isn't done.
 const ADDRESSED_BUTTONS: [&str; 2] = ["Resolve", NOT_DONE];
 const NOT_DONE: &str = "Not Done";
@@ -111,6 +108,8 @@ pub enum Hit {
     /// Changes the reviewer's own comment, or removes it.
     Edit(u32),
     Delete(u32),
+    /// Opens a menu of those two, from the "⋯" that stands for them on a narrow card.
+    More(u32),
     /// Shows the resolved comments too, or hides them again.
     ToggleResolved,
     /// Opens the file a heading names, by a comment on it.
@@ -190,8 +189,6 @@ enum Line {
     Pill(u32, String, Words),
     /// Keep and Dismiss, under a suggestion.
     Choices(u32),
-    /// Edit and Delete, under the other buttons when they don't all fit on one row.
-    Edits(u32),
     /// Resolve and Not Done, on a comment an agent says it addressed.
     Addressed(u32),
     /// Accept Rewrite, Apply as Suggestion and Not This, under a rewrite still to be decided:
@@ -203,10 +200,15 @@ enum Line {
     /// stayed (0) or came (1).
     Diff(u32, Vec<(i8, String)>),
     Text(u32, String),
-    /// Opens an answer: its verdict if it gives one, and who wrote it.
+    /// Opens an answer, under a line across the card: its verdict if it gives one, and who
+    /// wrote it.
     Answer(u32, Option<String>, String),
-    /// A row of an answer, set in from the comment it answers.
+    /// A row of an answer, on the card's column. It stood in a box whose words were 10 px from
+    /// its edge where the card's are 24 from its own.
     Reply(u32, String),
+    /// A row of the words an agent's rewrite puts in place of the comment's, in a box of their
+    /// own, `BOX_PADDING` round them.
+    Proposed(u32, String),
     Status(String),
     /// A row of what's being written, and where the caret is on it, in bytes, when it is.
     Input(String, Option<usize>),
@@ -217,14 +219,12 @@ enum Line {
     /// the one that adds a picture.
     Tools,
     /// A row of a picture standing on a card: the comment it's on and which of its pictures,
-    /// the word that names it, which of the picture's rows this is, and whether it's set in
-    /// as an answer's words are.
+    /// the word that names it, and which of the picture's rows this is.
     Picture {
         thread: u32,
         which: usize,
         name: String,
         row: usize,
-        inset: bool,
     },
     /// The emoji whose names start as the one being typed after a colon does, each with its
     /// name, in place of the hint.
@@ -530,10 +530,75 @@ const VERDICT_DROP: f32 = 0.05;
 /// How far a card's buttons are dropped in their row, in rows, so they stand half a row
 /// under the words above them: 13 px was the tightest words-to-button gap left.
 const ACTIONS_DROP: f32 = 0.14;
-/// How far the buttons under a rewrite are lifted in their row, so they stand nearer the
-/// rewrite than the comment's own buttons under them: dropped as those are, they stood 23 px
-/// under it and 11 over Reply.
-const REWRITE_LIFT: f32 = 0.11;
+/// `BOX_PADDING` in columns: how far a rewrite's words stand in from its box's edge. On cells,
+/// where there's no box, nothing.
+fn box_padding(measure: &dyn Measure) -> f32 {
+    crate::measures::columns(crate::measures::BOX_PADDING, measure).unwrap_or(0.0)
+}
+
+/// How far a rewrite's box, its words and the answer over them are lifted in their rows, in
+/// rows, so the box's foot is `BOX_PADDING` over the buttons under it, which stand as every
+/// card's do: its words' tails `BOX_PADDING` over its foot ran it to 4 px into the buttons'
+/// row. Its buttons were lifted instead, 10 px under the box and 23 over the comment's own.
+fn rewrite_lift(measure: &dyn Measure) -> f32 {
+    let (Some(tails), Some((_, row))) = (small_tails(measure), measure.cell_pixels()) else {
+        return 0.0;
+    };
+    let row = row as f32;
+    let line = row / measure.row_air().max(1.0);
+    let (top, _) = cellix_render::button_in_row(row, line);
+    let padding = crate::measures::BOX_PADDING;
+    let lift = padding * 2.0 + tails - row - top - ACTIONS_DROP * row;
+    (lift / row).max(0.0)
+}
+
+/// How far a short card's note is dropped in the row its buttons stand in while it's
+/// pointed at, in rows: its words' tails to the buttons' foot, so the card's foot is as far
+/// under either.
+fn note_drop(measure: &dyn Measure) -> f32 {
+    let (Some(tails), Some((_, row))) = (small_tails(measure), measure.cell_pixels()) else {
+        return 0.0;
+    };
+    let row = row as f32;
+    let line = row / measure.row_air().max(1.0);
+    let (_, foot) = cellix_render::button_in_row(row, line);
+    ((foot + ACTIONS_DROP * row - tails) / row).max(0.0)
+}
+
+/// Where the tails of words set small, as a note's and an answer's are, end in their row, in
+/// pixels: nearer the row's middle than the interface's words' by as much as they're smaller.
+/// Taken as the others', a rewrite's box had 19 px under its words where it had 16 over them.
+fn small_tails(measure: &dyn Measure) -> Option<f32> {
+    let (_, tails) = crate::measures::words_in_row(measure)?;
+    let (_, row) = measure.cell_pixels()?;
+    let middle = row as f32 / 2.0;
+    Some(middle + (tails - middle) * f32::from(SMALL) / 100.0)
+}
+
+/// The "⋯" that opens a menu of Edit and Delete: a plain mark, its cells washed while pointed
+/// at as a plain-word button's are, and on cells the letter.
+fn draw_more(
+    grid: &mut Grid,
+    (x, y): (u16, u16),
+    cells: &str,
+    (fill, style): (cellix_render::Rgb, Style),
+    measure: &dyn Measure,
+) {
+    if measure.in_cells() {
+        grid.button(x, y, cells, MORE, fill, style);
+        return;
+    }
+    grid.button(x, y, cells, "", fill, style);
+    let wide = cells.chars().count() as f32;
+    let side = icon_columns(MORE_MARK, measure);
+    let left = f32::from(x) + (wide - side) / 2.0;
+    let top = f32::from(y) + (1.0 - MORE_MARK) / 2.0;
+    grid.paint.push(Paint::Icon {
+        bounds: Bounds::cells(left, top, side, MORE_MARK),
+        icon: Icon::More,
+        color: style.fg,
+    });
+}
 
 /// A pill outlined in `tone`, its words in it, starting at `x`.
 fn draw_pill(
@@ -640,7 +705,9 @@ fn send_label(draft: &Draft) -> &'static str {
 const CANCEL: &str = "Cancel";
 
 fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out: &mut Vec<Line>) {
-    let spans = wrap_spans(&draft.text, width, measure);
+    // Inside its box, which stands on the card's columns with the box's padding inside it.
+    let inside = width - field_pad(measure) * 2.0;
+    let spans = wrap_spans(&draft.text, inside, measure);
     let caret = draft.caret.min(draft.text.len());
     // At a row's end and the next one's start, it's at the start of the next.
     let on = spans
@@ -655,7 +722,7 @@ fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out
         .into_iter()
         .map(|(start, end)| draft.text[start..end].to_string())
         .collect();
-    picture_lines((DRAFT_PICTURE, false), &named, &mut 0, (view, width), out);
+    picture_lines(DRAFT_PICTURE, &named, &mut 0, (view, inside), out);
     out.push(Line::Pad);
     out.push(Line::Tools);
     let found = suggested(draft, view);
@@ -681,14 +748,61 @@ fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out
     }
 }
 
+/// Columns between the composer box's edge and the words in it, where it's painted: a column,
+/// as a field's are. On cells there's no box, and its words are on the card's column.
+fn field_pad(measure: &dyn Measure) -> f32 {
+    if measure.in_cells() { 0.0 } else { 1.0 }
+}
+
+/// Where the cards stand across the pane, and where what they hold starts and ends, in
+/// columns with their fractions.
+#[derive(Clone, Copy, Debug)]
+struct Across {
+    /// A card's edges: at the pane's text edge, where every view in the pane starts its words,
+    /// and as far from the sheet's edge on its right. Cards stood a column from the pane's
+    /// edge, so the docked Comments started at x27 where the Agents list started at x45.
+    left: f32,
+    right: f32,
+    /// Where a card's words start, and where what stands at its right end ends: `CARD_INSET`
+    /// inside its edges.
+    text: f32,
+    end: f32,
+}
+
+fn across(area: Rect, view: View, measure: &dyn Measure) -> Across {
+    let left = f32::from(area.x + SIDE);
+    let air = left - (f32::from(area.x) + view.edge);
+    let right = f32::from(area.right()) - air;
+    let inset = crate::measures::card_inset(measure);
+    Across {
+        left,
+        right,
+        text: left + inset,
+        end: right - inset,
+    }
+}
+
+/// How wide a card's words run.
+fn text_width(area: Rect, view: View, measure: &dyn Measure) -> f32 {
+    let a = across(area, view, measure);
+    (a.end - a.text).max(1.0)
+}
+
+/// A place in columns as the cell it starts in and how far into that cell it is: what's laid
+/// out in cells, a row of buttons say, is painted that much further right.
+fn cell_of(at: f32) -> (u16, f32) {
+    let cell = at.max(0.0).floor();
+    (cell as u16, at - cell)
+}
+
 /// Where each kind's chip stands under a comment being written: its kind, and the columns
-/// it starts and ends, from the card's text edge.
+/// it starts and ends, from `from`, the card's text column.
 fn chips(
-    area: Rect,
+    from: f32,
     kinds: &[&'static str],
     measure: &dyn Measure,
 ) -> Vec<(&'static str, f32, f32)> {
-    let mut x = f32::from(area.x + SIDE + 1);
+    let mut x = from;
     kinds
         .iter()
         .map(|kind| {
@@ -851,7 +965,7 @@ pub fn pictures_of(thread: &Thread, view: View) -> Vec<String> {
 
 /// A picture's rows on a card, after the words it was named in.
 fn picture_lines(
-    (thread, inset): (u32, bool),
+    thread: u32,
     names: &[String],
     which: &mut usize,
     (view, width): (View, f32),
@@ -867,21 +981,27 @@ fn picture_lines(
             which: *which,
             name: name.clone(),
             row,
-            inset,
         }));
         *which += 1;
     }
 }
 
 /// Where a picture stands on its rows: the column it starts in and how wide and tall it is.
-fn picture_place(area: Rect, figure: &crate::rendered::Figure, inset: bool) -> (f32, (f32, f32)) {
-    let width = f32::from(area.w.saturating_sub(SIDE * 2 + 2));
-    let x = f32::from(area.x + SIDE + 1);
-    if inset {
-        (x + INSET, picture_size(figure, width - INSET * 2.0))
+/// On a card it stands on the card's column; one being written, in the box with the words.
+fn picture_place(
+    area: Rect,
+    (thread, view): (u32, View),
+    figure: &crate::rendered::Figure,
+    measure: &dyn Measure,
+) -> (f32, (f32, f32)) {
+    let a = across(area, view, measure);
+    let pad = if thread == DRAFT_PICTURE {
+        field_pad(measure)
     } else {
-        (x, picture_size(figure, width))
-    }
+        0.0
+    };
+    let width = (a.end - a.text - pad * 2.0).max(1.0);
+    (a.text + pad, picture_size(figure, width))
 }
 
 /// The word on an answer's chip that says it addressed the comment.
@@ -905,13 +1025,17 @@ fn resolve_all_label(count: usize) -> String {
 
 /// That button's cells and start column, at the end of the order's row. None with nothing
 /// addressed.
-fn resolve_all(area: Rect, count: usize, measure: &dyn Measure) -> Option<(String, u16)> {
+fn resolve_all(
+    area: Rect,
+    (count, view): (usize, View),
+    measure: &dyn Measure,
+) -> Option<(String, u16)> {
     if count == 0 {
         return None;
     }
     let cells = button_cells(&resolve_all_label(count), measure);
     let width = cells.chars().count() as u16;
-    let (check, x) = check_button(area, measure);
+    let (check, x) = check_button(area, view, measure);
     let end = x + check.chars().count() as u16;
     Some((cells, end.saturating_sub(width)))
 }
@@ -1014,10 +1138,6 @@ pub struct View<'a> {
     /// How far into the area's first column its sheet starts: half the frame's column for
     /// the pane beside the file. A card stands as far from the sheet's edge on its right.
     pub edge: f32,
-    /// How far into its first column a card's panel starts: half a column beside the file,
-    /// where the pane's sheet starts half way into the pane's first column, so a card is a
-    /// column from the sheet's edge on both sides. None under the file or on cells.
-    pub lead: f32,
     /// The suggestions in the document in view: how many, and which the caret is in. None
     /// when the list covers every file, or the file in view isn't a document.
     pub suggestions: Option<(usize, Option<usize>)>,
@@ -1125,7 +1245,6 @@ impl Default for View<'_> {
             pictures: None,
             laid: None,
             edge: 0.0,
-            lead: 0.0,
             suggestions: None,
         }
     }
@@ -1171,9 +1290,8 @@ const TOOL_GAP: u16 = 1;
 /// Each tool under a comment being written and the column it starts in: as many of the
 /// quick emoji as leave room for the buttons after them, where the screen draws emoji, and
 /// the picture's button either way.
-fn tools(area: Rect, view: View) -> Vec<(Tool, u16)> {
-    let width = area.w.saturating_sub(SIDE * 2 + 2);
-    let x = area.x + SIDE + 1;
+fn tools(area: Rect, view: View, measure: &dyn Measure) -> Vec<(Tool, u16)> {
+    let (x, width) = tools_from(area, view, measure);
     if view.quick.is_none() {
         return vec![(Tool::Picture, x)];
     }
@@ -1187,6 +1305,16 @@ fn tools(area: Rect, view: View) -> Vec<(Tool, u16)> {
     out
 }
 
+/// The cell the tools under a comment being written start in, inside its box with the words,
+/// and how many columns they have.
+fn tools_from(area: Rect, view: View, measure: &dyn Measure) -> (u16, u16) {
+    let a = across(area, view, measure);
+    let pad = field_pad(measure);
+    let (x, _) = cell_of(a.text + pad);
+    let width = (a.end - pad).floor() as u16;
+    (x, width.saturating_sub(x))
+}
+
 /// What the hint under a comment being written says of the tool the pointer is on.
 fn tool_hint(tool: Tool) -> Option<&'static str> {
     match tool {
@@ -1198,14 +1326,14 @@ fn tool_hint(tool: Tool) -> Option<&'static str> {
 
 /// Where each emoji offered for a name starts, and how many columns it and its name take.
 fn suggest_spots(
-    area: Rect,
+    (from, end): (f32, f32),
     found: &[(&'static str, &'static str)],
     measure: &dyn Measure,
 ) -> Vec<(f32, f32)> {
     // Short of the row's end by the room "Tab" takes there: the key that takes the first of
     // them stays in view, and it's the last of the names that gives way.
-    let right = f32::from(area.right().saturating_sub(SIDE + 1)) - SUGGEST_KEY;
-    let mut x = f32::from(area.x + SIDE + 1);
+    let right = end - SUGGEST_KEY;
+    let mut x = from;
     let mut out = Vec::new();
     for (emoji, code) in found {
         let wide = suggest_emoji(emoji, measure) + measure.width(&format!(":{code}:"), small());
@@ -1408,7 +1536,7 @@ fn control_parts(labels: &[&str], chevron: Chevron, measure: &dyn Measure) -> Pa
 /// of them; in pixels the cells are what the chip covers, holding what they can of its
 /// words so the screen's text says what it is.
 fn control(area: Rect, labels: &[&str], chevron: Chevron, measure: &dyn Measure) -> (String, u16) {
-    let x = head(area, measure);
+    let x = head(area);
     let label = labels.first().copied().unwrap_or_default();
     if measure.in_cells() {
         let cells = match chevron {
@@ -1423,17 +1551,18 @@ fn control(area: Rect, labels: &[&str], chevron: Chevron, measure: &dyn Measure)
     (format!("{held:<width$}"), x)
 }
 
-/// The column the list's head starts in, its summary, its kinds and its controls: where the
-/// cards start, a column in from the pane, where there are pictures, their panels half a
-/// column further beside the file (`View::lead`), which the head is painted as far right of.
-/// It stood at the pane's text edge, 8 px inside the cards on the left, and Check My Review
-/// 17 px inside them on the right. On cells, where a card is its rows, at the text edge.
-fn head(area: Rect, measure: &dyn Measure) -> u16 {
-    if measure.in_cells() {
-        area.x + SIDE
-    } else {
-        area.x + SIDE - CARD_REACH as u16
-    }
+/// The column the list's head starts in, its summary, its kinds and its controls: the pane's
+/// text edge, where the cards' edges are too, and where every view in the pane starts. The
+/// right-hand buttons on its rows end where the cards do (`head_end`).
+fn head(area: Rect) -> u16 {
+    area.x + SIDE
+}
+
+/// The cell the head's right-hand buttons end at, and how much further right they're painted:
+/// on the cards' right edge.
+fn head_end(area: Rect, view: View) -> (u16, f32) {
+    let right = f32::from(area.right()) - (f32::from(SIDE) - view.edge);
+    cell_of(right)
 }
 
 /// How far down its row the control on row `index` is painted: part of a row where it
@@ -1521,21 +1650,21 @@ fn draw_control(
     grid.lift_since(from, -drop);
 }
 
-/// Where the order's button is, for the menu it drops: the column its chip starts at, before
-/// the view's lead (`View::lead`), its row, and how far down that row it's painted
-/// (`control_drop`). None when the button isn't in the list.
+/// Where the order's button is, for the menu it drops: the column its chip starts at, the
+/// list head's, its row, and how far down that row it's painted (`control_drop`). None when
+/// the button isn't in the list.
 pub fn order_button(
     area: Rect,
     shown: Shown,
     top: usize,
     measure: &dyn Measure,
 ) -> Option<(u16, u16, f32)> {
-    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    let width = text_width(area, shown.4, measure);
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
     let index = all.iter().position(|line| matches!(line, Line::Sort(_)))?;
     let row = area.y + index.checked_sub(top)? as u16;
-    Some((head(area, measure), row, control_drop(&all, index, measure)))
+    Some((head(area), row, control_drop(&all, index, measure)))
 }
 
 /// The row of the buttons that send or drop what's being written, the first at or under
@@ -1548,7 +1677,7 @@ pub fn send_row(
     from: u16,
     measure: &dyn Measure,
 ) -> Option<u16> {
-    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    let width = text_width(area, shown.4, measure);
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
     let first = top + usize::from(from.checked_sub(area.y)?);
@@ -1558,7 +1687,7 @@ pub fn send_row(
 
 /// The row of the list a comment's card starts on, to scroll the pane to it.
 pub fn top_of(area: Rect, shown: Shown, id: u32, measure: &dyn Measure) -> Option<usize> {
-    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    let width = text_width(area, shown.4, measure);
     lines(shown, width, measure)
         .iter()
         .position(|line| matches!(line, Line::Header(of, ..) | Line::Quote(of, ..) if *of == id))
@@ -1580,15 +1709,24 @@ fn lay_out(
 ) -> Vec<Line> {
     let grouped = view.grouped;
     let mut out = vec![Line::Gap];
+    // How wide the list's head is: from a card's left edge to its right.
+    let head_width = width + 2.0 * crate::measures::card_inset(measure);
+    // A hint under the head is set small, and wraps where small words reach its end: measured
+    // as the interface's words, "Comment." stood alone on a row with a third of the row left.
+    let hint_width = if measure.in_cells() {
+        head_width
+    } else {
+        head_width * 100.0 / f32::from(SMALL)
+    };
     // The document's suggestions come before its comments, as Google Docs and Overleaf keep
     // the two together, with what settles them all.
     if let Some((count, at)) = view.suggestions.filter(|(count, _)| *count > 0) {
         let words = suggestions_said(count, at);
-        let buttons: f32 = settle_buttons(Rect::new(0, 0, 200, 1), measure)
+        let buttons: f32 = settle_buttons(Rect::new(0, 0, 200, 1), view, measure)
             .iter()
             .map(|(_, cells, _)| cells.chars().count() as f32 + f32::from(BUTTON_GAP))
             .sum();
-        let fits = measure.width(&words, small()) + 1.0 + buttons <= width + 2.0;
+        let fits = measure.width(&words, small()) + 1.0 + buttons <= head_width;
         out.push(Line::Suggestions(count, at, fits));
         if !fits {
             out.push(Line::Settle);
@@ -1621,7 +1759,7 @@ fn lay_out(
         for kind in KINDS {
             let picked = view.kind == Some(kind);
             let pill = coverage_width(kind, count(kind), picked, measure) + PILL_GAP;
-            if used + pill > width + 2.0 + PILL_GAP && !row.is_empty() {
+            if used + pill > head_width + PILL_GAP && !row.is_empty() {
                 out.push(Line::Coverage(std::mem::take(&mut row)));
                 used = 0.0;
             }
@@ -1645,7 +1783,7 @@ fn lay_out(
     } else if open.is_empty() {
         out.push(Line::Empty(resolved.0 > 0));
         // It starts at the pane's text edge, a column outside a card's words either side.
-        let hint = wrap(EMPTY_HINT, width + 2.0, measure);
+        let hint = wrap(EMPTY_HINT, hint_width, measure);
         out.extend(hint.into_iter().map(Line::EmptyHint));
         out.push(Line::Gap);
     }
@@ -1761,10 +1899,17 @@ fn lay_out(
                 let (words, pictures) = shown(&thread.text, view);
                 let text = wrap(&words, width, measure);
                 out.extend(text.into_iter().map(|row| Line::Text(id, row)));
-                picture_lines((id, false), &pictures, &mut which, (view, width), &mut out);
+                picture_lines(id, &pictures, &mut which, (view, width), &mut out);
             }
         }
         let answers = thread.replies.len();
+        // The last word a rewrite: it's for the reviewer to apply or not, with its own buttons.
+        let deciding = !short
+            && !thread.resolved
+            && thread
+                .replies
+                .last()
+                .is_some_and(|r| rewrite(&r.text).is_some());
         for (n, reply) in thread.replies.iter().enumerate().filter(|_| !short) {
             // A verdict reads as one: its word on a chip, who said it, then why.
             let (word, author, body) = reply_parts(reply);
@@ -1777,11 +1922,17 @@ fn lay_out(
                 None => author,
             };
             out.push(Line::Answer(id, word, author));
-            let room = width - INSET * 2.0;
             let (words, pictures) = shown(&body, view);
-            let text = wrap(&words, room, measure);
+            // A rewrite still to be decided stands in a box of its own over its buttons.
+            if deciding && n + 1 == answers {
+                let room = width - box_padding(measure) * 2.0;
+                let text = wrap(&words, room, measure);
+                out.extend(text.into_iter().map(|row| Line::Proposed(id, row)));
+                continue;
+            }
+            let text = wrap(&words, width, measure);
             out.extend(text.into_iter().map(|row| Line::Reply(id, row)));
-            picture_lines((id, true), &pictures, &mut which, (view, room), &mut out);
+            picture_lines(id, &pictures, &mut which, (view, width), &mut out);
         }
         // A suggestion is the agent's own, so there's nothing to wait for. What no agent has
         // yet says how it gets to one, so nobody wonders whether it went.
@@ -1801,14 +1952,7 @@ fn lay_out(
         if let Some(reply) = draft.filter(|d| d.thread == Some(id) && !d.editing) {
             draft_lines(reply, view, width, measure, &mut out);
         }
-        // The last word a rewrite: it's for the reviewer to apply or not.
-        if !short
-            && !thread.resolved
-            && thread
-                .replies
-                .last()
-                .is_some_and(|r| rewrite(&r.text).is_some())
-        {
+        if deciding {
             let rows = rewrite_rows(width, measure).len();
             out.extend((0..rows).map(|row| Line::Rewrite(id, row)));
         }
@@ -1826,24 +1970,13 @@ fn lay_out(
         } else {
             Line::Buttons(id)
         });
-        // Edit and Delete go on a row of their own where the five don't fit on one.
-        let addressed = thread.addressed_by().is_some();
-        if writing.is_none()
-            && !short
-            && !thread.resolved
-            && !suggested
-            && !addressed
-            && !all_fit(width, measure)
-        {
-            out.push(Line::Edits(id));
-        }
         out.push(Line::Gap);
     }
     // A kind none of them is: say so, and how to list them all again.
     if let Some(kind) = view.kind.filter(|_| listed == 0 && !threads.is_empty()) {
         let none = format!("No {kind} comments. Press {kind} again to list them all.");
         out.extend(
-            wrap(&none, width + 2.0, measure)
+            wrap(&none, hint_width, measure)
                 .into_iter()
                 .map(Line::EmptyHint),
         );
@@ -1879,7 +2012,7 @@ fn pills(
     picked: Option<&str>,
     measure: &dyn Measure,
 ) -> Vec<(&'static str, f32, f32)> {
-    let mut x = f32::from(head(area, measure));
+    let mut x = f32::from(head(area));
     kinds
         .iter()
         .map(|(kind, count)| {
@@ -1931,14 +2064,24 @@ fn rewrite_rows(width: f32, measure: &dyn Measure) -> Vec<Vec<&'static str>> {
 }
 
 /// Each button as (label, padded cells, start column): Edit and Delete with the others when
-/// all five fit.
-fn buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
-    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+/// all five fit, and the "⋯" that opens a menu of them when they don't. With how far right of
+/// their cells those at the row's end are painted, so their words end on the card's right
+/// column.
+fn buttons(
+    area: Rect,
+    view: View,
+    measure: &dyn Measure,
+) -> (Vec<(&'static str, String, u16)>, f32) {
+    let width = text_width(area, view, measure);
     let mut placed = row_of(area, &BUTTONS, measure);
-    if all_fit(width, measure) {
-        placed.extend(edits(area, measure));
-    }
-    placed
+    let ends: &[&'static str] = if all_fit(width, measure) {
+        &EDITS
+    } else {
+        &[MORE]
+    };
+    let (edits, nudge) = edits(area, ends, view, measure);
+    placed.extend(edits);
+    (placed, nudge)
 }
 
 /// Columns either side of a plain-word button's letters, for its wash under the pointer.
@@ -1946,32 +2089,66 @@ const PLAIN_ROOM: f32 = 0.5;
 /// Columns between two of them.
 const PLAIN_GAP: u16 = 1;
 
-/// The cells a button of plain words takes: Edit and Delete, the least of a card's actions.
+/// The cells a button of plain words takes: Edit and Delete, the least of a card's actions,
+/// and the "⋯" in their place.
 fn plain_cells(label: &str, measure: &dyn Measure) -> String {
     if measure.in_cells() {
         return format!(" {label} ");
+    }
+    " ".repeat(plain_width(label, measure).ceil().max(2.0) as usize)
+}
+
+/// How wide what a plain-word button shows is, in columns: its words, or the "⋯"'s mark.
+fn plain_shown(label: &str, measure: &dyn Measure) -> f32 {
+    if label == MORE && !measure.in_cells() {
+        // Its dots take the middle 16 of the 24 its square is drawn to.
+        return icon_columns(MORE_MARK, measure) * 16.0 / 24.0;
     }
     let font = Font {
         size: BUTTON_TEXT,
         ..Font::default()
     };
-    let width = (measure.width(label, font) + PLAIN_ROOM * 2.0).ceil() as usize;
-    " ".repeat(width.max(2))
+    measure.width(label, font)
 }
 
-/// Edit and Delete as (label, cells, start column), ending at the card's far text edge, so
-/// they stand apart from what answers the comment.
-fn edits(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
-    let mut end = area.right().saturating_sub(SIDE + 1);
+/// That and the room either side of it.
+fn plain_width(label: &str, measure: &dyn Measure) -> f32 {
+    plain_shown(label, measure) + PLAIN_ROOM * 2.0
+}
+
+/// How tall the square the "⋯" is drawn in is, in rows.
+const MORE_MARK: f32 = 0.6;
+
+/// How wide an icon `tall` rows tall is on screen, in columns: the painter sizes an icon by
+/// the line words are set for, not the row.
+fn icon_columns(tall: f32, measure: &dyn Measure) -> f32 {
+    measure.cell_pixels().map_or(tall * 2.0, |(wide, high)| {
+        tall * high as f32 / measure.row_air().max(1.0) / wide.max(1) as f32
+    })
+}
+
+/// Edit and Delete, or the "⋯", as (label, cells, start column), ending at the card's right,
+/// so they stand apart from what answers the comment; and how far right of their cells
+/// they're painted, so what the last shows ends on the card's right column, `CARD_INSET` in.
+fn edits(
+    area: Rect,
+    labels: &[&'static str],
+    view: View,
+    measure: &dyn Measure,
+) -> (Vec<(&'static str, String, u16)>, f32) {
+    let last = labels.last().copied().unwrap_or_default();
+    let slack =
+        (plain_cells(last, measure).chars().count() as f32 - plain_shown(last, measure)) / 2.0;
+    let (mut end, nudge) = cell_of(across(area, view, measure).end + slack);
     let mut placed = Vec::new();
-    for label in EDITS.iter().rev() {
+    for label in labels.iter().rev() {
         let cells = plain_cells(label, measure);
         let x = end.saturating_sub(cells.chars().count() as u16);
         placed.push((*label, cells, x));
         end = x.saturating_sub(PLAIN_GAP);
     }
     placed.reverse();
-    placed
+    (placed, nudge)
 }
 
 /// Whether the five fit on one row of a card `width` wide: the three chips, then Edit and
@@ -2001,8 +2178,12 @@ fn suggestions_said(count: usize, at: Option<usize>) -> String {
 
 /// Accept All, Reject All and Next as (label, cells, start column): at the right of the
 /// row, ending where Check My Review under them does.
-fn settle_buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
-    let (cells, x) = check_button(area, measure);
+fn settle_buttons(
+    area: Rect,
+    view: View,
+    measure: &dyn Measure,
+) -> Vec<(&'static str, String, u16)> {
+    let (cells, x) = check_button(area, view, measure);
     let mut end = x + cells.chars().count() as u16;
     let mut placed: Vec<_> = SETTLE
         .iter()
@@ -2020,7 +2201,7 @@ fn settle_buttons(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, Strin
 
 /// The same three on a row of their own, from where the list's head starts.
 fn settle_row(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
-    let mut x = head(area, measure);
+    let mut x = head(area);
     SETTLE
         .iter()
         .map(|label| {
@@ -2039,29 +2220,30 @@ fn deliver_label(count: usize, agent: &str) -> String {
 
 /// That button, under Check My Review and ending where it does, as (padded cells, start
 /// column): the two the pane's actions, one over the other.
-fn deliver_button(area: Rect, count: usize, agent: &str, measure: &dyn Measure) -> (String, u16) {
+fn deliver_button(
+    area: Rect,
+    (count, agent): (usize, &str),
+    view: View,
+    measure: &dyn Measure,
+) -> (String, u16) {
     let cells = button_cells(&deliver_label(count, agent), measure);
     let width = cells.chars().count() as u16;
-    let (check, x) = check_button(area, measure);
+    let (check, x) = check_button(area, view, measure);
     let end = x + check.chars().count() as u16;
-    (cells, end.saturating_sub(width).max(head(area, measure)))
+    (cells, end.saturating_sub(width).max(head(area)))
 }
 
 /// Check My Review, at the right of its row, as (padded cells, start column). In pixels it
-/// has room for the agent's icon before its words.
-fn check_button(area: Rect, measure: &dyn Measure) -> (String, u16) {
+/// has room for the agent's icon before its words. It ends where the cards end, and is
+/// painted as far past its cells as they are (`head_end`).
+fn check_button(area: Rect, view: View, measure: &dyn Measure) -> (String, u16) {
     let mut cells = button_cells(CHECK, measure);
     if !measure.in_cells() {
         cells.push_str(&" ".repeat(CHECK_ICON as usize));
     }
     let width = cells.chars().count() as u16;
-    // Ending where the cards end, a column from the pane's edge, where there are pictures.
-    let end = if measure.in_cells() {
-        SIDE
-    } else {
-        SIDE - CARD_REACH as u16
-    };
-    let x = area.right().saturating_sub(end + width).max(area.x + SIDE);
+    let (end, _) = head_end(area, view);
+    let x = end.saturating_sub(width).max(area.x + SIDE);
     (cells, x)
 }
 
@@ -2100,7 +2282,7 @@ fn last_of(rows: usize, height: u16) -> usize {
 
 /// The furthest the panel scrolls with what it shows.
 pub fn last_top(area: Rect, shown: Shown, measure: &dyn Measure) -> usize {
-    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    let width = text_width(area, shown.4, measure);
     last_of(lines(shown, width, measure).len(), area.h)
 }
 
@@ -2113,7 +2295,7 @@ pub fn hit(
     (x, y, fine_y): (u16, u16, f32),
     measure: &dyn Measure,
 ) -> Option<Hit> {
-    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    let width = text_width(area, shown.4, measure);
     let all = lines(shown, width, measure);
     let top = top.min(last_of(all.len(), area.h));
     let mut row = top + y.checked_sub(area.y)? as usize;
@@ -2128,9 +2310,12 @@ pub fn hit(
     {
         row = over;
     }
+    let view = shown.4;
+    let a = across(area, view, measure);
     match all.get(row)? {
         Line::Buttons(id) => {
-            let pressed = buttons(area, measure)
+            let pressed = buttons(area, view, measure)
+                .0
                 .into_iter()
                 .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
             match pressed?.0 {
@@ -2138,16 +2323,8 @@ pub fn hit(
                 ASK => Some(Hit::Ask(*id)),
                 "Edit" => Some(Hit::Edit(*id)),
                 "Delete" => Some(Hit::Delete(*id)),
+                MORE => Some(Hit::More(*id)),
                 _ => Some(Hit::Resolve(*id)),
-            }
-        }
-        Line::Edits(id) => {
-            let pressed = edits(area, measure)
-                .into_iter()
-                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
-            match pressed?.0 {
-                "Edit" => Some(Hit::Edit(*id)),
-                _ => Some(Hit::Delete(*id)),
             }
         }
         Line::Send(_, label) => {
@@ -2181,14 +2358,14 @@ pub fn hit(
             }
         }
         Line::Check(..) => {
-            let (cells, at) = check_button(area, measure);
+            let (cells, at) = check_button(area, view, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::Check)
         }
         line @ (Line::Suggestions(_, _, true) | Line::Settle) => {
             let placed = if matches!(line, Line::Settle) {
                 settle_row(area, measure)
             } else {
-                settle_buttons(area, measure)
+                settle_buttons(area, view, measure)
             };
             let pressed = placed
                 .into_iter()
@@ -2200,11 +2377,11 @@ pub fn hit(
             }
         }
         Line::Deliver(count) => {
-            let (cells, at) = deliver_button(area, *count, shown.2, measure);
+            let (cells, at) = deliver_button(area, (*count, shown.2), view, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::SendAll)
         }
         Line::Sort(addressed) => {
-            if let Some((cells, at)) = resolve_all(area, *addressed, measure)
+            if let Some((cells, at)) = resolve_all(area, (*addressed, view), measure)
                 && x >= at
                 && x < at + cells.chars().count() as u16
             {
@@ -2222,7 +2399,7 @@ pub fn hit(
                 _ => Some(Hit::NotDone(*id)),
             }
         }
-        Line::Tools => tools(area, shown.4)
+        Line::Tools => tools(area, view, measure)
             .into_iter()
             .find(|(_, at)| x >= *at && x < at + TOOL)
             .map(|(tool, _)| match tool {
@@ -2234,15 +2411,14 @@ pub fn hit(
             thread,
             which,
             name,
-            inset,
             ..
         } => {
             if *thread == DRAFT_PICTURE {
                 return None;
             }
             // The picture opens itself; the card beside it goes to the comment's place.
-            let figure = shown.4.pictures.and_then(|pictures| pictures.get(name))?;
-            let (left, (wide, _)) = picture_place(area, figure, *inset);
+            let figure = view.pictures.and_then(|pictures| pictures.get(name))?;
+            let (left, (wide, _)) = picture_place(area, (*thread, view), figure, measure);
             let at = f32::from(x) + 0.5;
             if at >= left && at < left + wide {
                 Some(Hit::Picture(*thread, *which))
@@ -2252,7 +2428,7 @@ pub fn hit(
         }
         Line::Suggest(found) => {
             let at = f32::from(x) + 0.5;
-            suggest_spots(area, found, measure)
+            suggest_spots((a.text, a.end), found, measure)
                 .into_iter()
                 .position(|(from, wide)| at >= from && at < from + wide)
                 .map(Hit::Suggested)
@@ -2260,7 +2436,7 @@ pub fn hit(
         Line::File(opens, ..) => opens.map(Hit::File),
         Line::Kinds(kinds) => {
             let at = f32::from(x) + 0.5;
-            chips(area, kinds, measure)
+            chips(a.text, kinds, measure)
                 .into_iter()
                 .find(|(_, from, to)| at >= *from && at < *to)
                 .map(|(kind, ..)| Hit::DraftKind(kind))
@@ -2280,14 +2456,12 @@ pub fn hit(
             let (cells, at) = resolved_button(area, *count, *shown, measure);
             (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::ToggleResolved)
         }
-        Line::Text(id, text) | Line::Reply(id, text) => {
+        Line::Text(id, text) | Line::Reply(id, text) | Line::Proposed(id, text) => {
             // A link takes the click; anywhere else on the row goes to the comment's place.
-            let reply = matches!(all.get(row)?, Line::Reply(..));
-            let text_x = f32::from(area.x + SIDE + 1);
-            let (from, size) = if reply {
-                (text_x + INSET, SMALL)
-            } else {
-                (text_x, 100)
+            let (from, size) = match all.get(row)? {
+                Line::Reply(..) => (a.text, SMALL),
+                Line::Proposed(..) => (a.text + box_padding(measure), SMALL),
+                _ => (a.text, 100),
             };
             let Some(here) = link_at(text, (from, x), size, measure) else {
                 return Some(Hit::Open(*id));
@@ -2302,7 +2476,9 @@ pub fn hit(
             let before: usize = all[first..row]
                 .iter()
                 .map(|line| match line {
-                    Line::Text(of, text) | Line::Reply(of, text) if of == id => {
+                    Line::Text(of, text) | Line::Reply(of, text) | Line::Proposed(of, text)
+                        if of == id =>
+                    {
                         link_spans(text).len()
                     }
                     _ => 0,
@@ -2311,7 +2487,7 @@ pub fn hit(
             Some(Hit::Link(*id, before + here))
         }
         Line::Pill(id, text, _) if text.starts_with(CHANGED_SINCE) => {
-            let from = f32::from(area.x + SIDE + 1);
+            let from = a.text;
             let at = f32::from(x) + 0.5;
             let on = at >= from && at < from + pill_width(text, measure);
             Some(if on {
@@ -2321,8 +2497,7 @@ pub fn hit(
             })
         }
         Line::Header(id, _, _, Some((text, _))) if text.starts_with(CHANGED_SINCE) => {
-            let right = f32::from(area.right().saturating_sub(SIDE));
-            let from = right - 1.0 - pill_width(text, measure);
+            let from = a.end - pill_width(text, measure);
             let at = f32::from(x) + 0.5;
             Some(if at >= from {
                 Hit::Changes(*id)
@@ -2350,7 +2525,7 @@ pub fn draw(
     grid.fill(area, theme.sidebar);
     // A card is painted whole, and one half out of the pane would land on the bar under it.
     let begun = grid.painted_so_far();
-    let width = area.w.saturating_sub(SIDE * 2 + 2) as f32;
+    let width = text_width(area, shown.4, measure);
     let threads = shown.0;
     let shown_draft = shown.1;
     let shown_agent = shown.2;
@@ -2372,6 +2547,11 @@ pub fn draw(
     let offered_edge = mix(theme.gutter.fg, card, 0.5);
     let row_y = |index: usize| area.y as f32 + index as f32 - top as f32;
     let shown = |y: f32, height: f32| y + height > area.y as f32 && y < area.bottom() as f32;
+    // Where the cards stand across the pane and their words in them, `CARD_INSET` in from
+    // every edge: their tops over their first words' capitals and their feet under their
+    // buttons too.
+    let a = across(area, view, measure);
+    let (over, under) = crate::measures::card_air(ACTIONS_DROP, measure);
     // Each card's rows, so a short card shows its buttons while the pointer is on it.
     let mut cards: Vec<(usize, usize, u32)> = Vec::new();
     let mut start = None;
@@ -2379,30 +2559,17 @@ pub fn draw(
         match line {
             Line::Header(..) => start = Some(index),
             Line::Quote(..) if start.is_none() => start = Some(index),
-            Line::Buttons(_) if matches!(all.get(index + 1), Some(Line::Edits(_))) => {}
             Line::Buttons(_)
-            | Line::Edits(_)
             | Line::Choices(_)
             | Line::Addressed(_)
             | Line::Reopen(_)
             | Line::Send(..) => {
                 if let Some(first) = start.take() {
                     let (y, height) = (row_y(first), (index - first + 1) as f32);
-                    // A column from the pane's edge, so its text stands two inside it, and as
-                    // far from the sheet's edge on its right as on its left: beside the file,
-                    // where the sheet starts half a column in, its panel starts half a column
-                    // further, a column from that edge on both sides.
-                    let left = side as f32 - CARD_REACH + view.lead;
-                    let air = left - (area.x as f32 + view.edge);
-                    let bounds = Bounds::cells(
-                        left,
-                        y - CARD_AIR.0,
-                        area.right() as f32 - air - left,
-                        height + CARD_AIR.0 + CARD_AIR.1,
-                    );
+                    let bounds =
+                        Bounds::cells(a.left, y - over, a.right - a.left, height + over + under);
                     let of = match line {
-                        Line::Buttons(id) | Line::Edits(id) | Line::Choices(id) => Some(*id),
-                        Line::Addressed(id) => Some(*id),
+                        Line::Buttons(id) | Line::Choices(id) | Line::Addressed(id) => Some(*id),
                         Line::Reopen(id) | Line::Send(id, _) => Some(*id),
                         _ => None,
                     };
@@ -2430,9 +2597,13 @@ pub fn draw(
             _ => {}
         }
     }
+    // A card's words are laid out from this cell, and painted from `a.text`; its buttons are
+    // laid out in whole cells from it, and painted as far right of them.
     let text_x = side + 1;
-    // What's being written stands in a box with the tools under it, as a field does: a
-    // column inside the card, with the words a column inside it.
+    let nudge = a.text - f32::from(text_x);
+    // What's being written stands in a box with the tools under it, as a field does: on the
+    // card's columns, with its words a field's padding inside it.
+    let pad = field_pad(measure);
     let first_input = all.iter().position(|line| matches!(line, Line::Input(..)));
     if let Some(first) = first_input {
         let last = all[first..]
@@ -2442,34 +2613,39 @@ pub fn draw(
         let (y, height) = (row_y(first), (last - first + 1) as f32);
         if shown(y, height) {
             let bounds = Bounds::cells(
-                f32::from(text_x) - 1.0,
+                a.text,
                 y + FIELD_INSET,
-                f32::from(right - text_x) + 1.0,
+                a.end - a.text,
                 height - FIELD_INSET * 2.0,
             );
             grid.panel(bounds, 16, Some(theme.input), Some(theme.popup_border));
         }
     }
-    // An agent's answer is set in, on a shade of its card, so who said what is plain.
+    // An agent's rewrite still to be decided stands in a box, `BOX_PADDING` round its words
+    // and over its buttons, on the card's columns; the answer over it is lifted with it.
+    let boxed = box_padding(measure);
+    let lift = rewrite_lift(measure);
     let mut index = 0;
     while index < all.len() {
-        if let Line::Answer(..) = all[index] {
-            let rows = 1 + all[index + 1..]
+        if let Line::Proposed(..) = all[index] {
+            let rows = all[index..]
                 .iter()
-                .take_while(|l| matches!(l, Line::Reply(..) | Line::Picture { inset: true, .. }))
+                .take_while(|l| matches!(l, Line::Proposed(..)))
                 .count();
             let (y, height) = (row_y(index), rows as f32);
-            if shown(y, height) {
-                let bounds = Bounds::cells(
-                    text_x as f32,
-                    y + 0.08,
-                    right as f32 - 0.8 - text_x as f32,
-                    height - 0.26,
-                );
-                let fill = theme.quiet_button(card);
-                grid.panel(bounds, 22, Some(fill), None);
+            if shown(y, height)
+                && let (Some((caps, _)), Some(tails)) =
+                    (crate::measures::words_in_row(measure), small_tails(measure))
+                && let Some(padding) = crate::measures::rows(crate::measures::BOX_PADDING, measure)
+                && let Some((_, row)) = measure.cell_pixels()
+            {
+                let row = row as f32;
+                let top = y + caps / row - padding - lift;
+                let foot = y + height - 1.0 + tails / row + padding - lift;
+                let bounds = Bounds::cells(a.text, top, a.end - a.text, foot - top);
+                grid.panel(bounds, 22, Some(theme.quiet_button(card)), None);
             }
-            index += rows;
+            index += rows.max(1);
         } else {
             index += 1;
         }
@@ -2483,7 +2659,6 @@ pub fn draw(
         fg: theme.gutter.fg,
         ..inner
     };
-    let reply_x = text_x as f32 + INSET;
     // The colour a card is painted in: the lit one's tint, else its own.
     let card_fill = |id: u32| {
         if view.lit == Some(id) {
@@ -2518,24 +2693,27 @@ pub fn draw(
         if hidden(index)
             && let Some(note) = short_note(line, threads, shown_agent, view)
         {
-            grid.label_at(text_x as f32, text_x, y, &note, inner_dim, right, SMALL);
+            // Down to where the buttons' foot is, so the card's foot is as far under these
+            // words as under its buttons: 44 px under them where it had 19 over its first.
+            grid.label_at(a.text, text_x, y, &note, inner_dim, right, SMALL);
+            grid.lift_since(from, -note_drop(measure));
             continue;
         }
         let actions = matches!(
             line,
             Line::Buttons(_)
-                | Line::Edits(_)
                 | Line::Choices(_)
                 | Line::Addressed(_)
                 | Line::Reopen(_)
                 | Line::Send(..)
+                | Line::Rewrite(..)
         );
         match line {
             Line::Kinds(kinds) => {
                 // As the coverage strip's pills are: outlined and quiet, the one picked in the
                 // accent's colours, as a kind listed alone is.
                 let picked = shown_draft.map(|draft| draft.kind.as_str());
-                for (kind, x, end) in chips(area, kinds, measure) {
+                for (kind, x, end) in chips(a.text, kinds, measure) {
                     let bounds = Bounds::cells(x, y as f32 + PILL.0, end - x, PILL.1);
                     let on_it = hover.is_some_and(|h| {
                         let at = f32::from(h.0) + 0.5;
@@ -2562,13 +2740,16 @@ pub fn draw(
                 }
             }
             Line::Status(text) => {
-                grid.label_at(text_x as f32, text_x, y, text, inner_dim, right, SMALL);
+                grid.label_at(a.text, text_x, y, text, inner_dim, right, SMALL);
             }
             Line::Input(text, caret) => {
-                grid.label(text_x, y, text, inner, right);
+                // A field's padding inside its box, which stands on the card's columns.
+                let start = a.text + pad;
+                let (cell, _) = cell_of(start);
+                grid.label_at(start, cell, y, text, inner, right, 100);
                 if let Some(at) = caret {
                     let font = Font::default();
-                    let x = text_x as f32 + measure.width(&text[..*at], font);
+                    let x = start + measure.width(&text[..*at], font);
                     grid.set_caret(x, y, 0.62);
                     // The caret goes down into the box with the words it's among.
                     if let Some(caret) = &mut grid.caret {
@@ -2579,10 +2760,12 @@ pub fn draw(
             }
             Line::Pad => {}
             Line::Tools => {
-                for (tool, at) in tools(area, view) {
+                // In the box with the words, from where they start.
+                let (_, past) = cell_of(a.text + pad);
+                for (tool, at) in tools(area, view, measure) {
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= at && h.0 < at + TOOL);
                     // Each in the middle of its first two columns, with its chip round it.
-                    let middle = f32::from(at) + 1.0;
+                    let middle = f32::from(at) + 1.0 + past;
                     if on_it {
                         let chip = crate::measures::glyph_chip(middle, y, measure);
                         grid.panel(chip, 18, Some(theme.popup_hover), None);
@@ -2627,13 +2810,14 @@ pub fn draw(
                 grid.lift_since(from, FIELD_SHIFT);
             }
             Line::Picture {
-                name, row, inset, ..
+                thread, name, row, ..
             } => {
                 // Drawn whole from whichever of its rows is the first in view, and cut at
                 // the pane's edges, which a card scrolled half out of it runs past.
                 let figure = view.pictures.and_then(|pictures| pictures.get(name));
                 if let Some(figure) = figure.filter(|_| *row == 0 || index == top) {
-                    let (left, (wide, tall)) = picture_place(area, figure, *inset);
+                    let (left, (wide, tall)) =
+                        picture_place(area, (*thread, view), figure, measure);
                     let above = f32::from(y) - *row as f32;
                     let bounds = Bounds::cells(left, above + PICTURE_DROP, wide, tall);
                     let clip = Bounds::cells(
@@ -2657,11 +2841,14 @@ pub fn draw(
             }
             Line::Suggest(found) => {
                 // The first is the one Tab takes, so its name is the plain one.
-                let spots = suggest_spots(area, found, measure);
+                let spots = suggest_spots((a.text, a.end), found, measure);
                 // And Tab is named at the row's end, where there's room for it.
                 let end = spots.last().map_or(0.0, |(x, wide)| x + wide);
-                if end + SUGGEST_KEY <= f32::from(right) {
-                    grid.label_right(right, y, "Tab", inner_dim, SMALL);
+                if end + SUGGEST_KEY <= a.end {
+                    let (cell, past) = cell_of(a.end);
+                    let named = grid.painted_so_far();
+                    grid.label_right(cell, y, "Tab", inner_dim, SMALL);
+                    grid.nudge_since(named, past);
                 }
                 for (index, ((emoji, code), (x, wide))) in found.iter().zip(spots).enumerate() {
                     let pointed = hover.is_some_and(|h| {
@@ -2698,14 +2885,14 @@ pub fn draw(
                 let pointed = hover
                     .filter(|h| h.1 + 1 == y && matches!(all.get(index - 1), Some(Line::Tools)))
                     .and_then(|h| {
-                        tools(area, view)
+                        tools(area, view, measure)
                             .into_iter()
                             .find(|(_, at)| h.0 >= *at && h.0 < at + TOOL)
                     })
                     .and_then(|(tool, _)| tool_hint(tool));
                 let usual = "Enter sends. Shift+Enter starts a new line. Esc cancels.";
                 let hint = pointed.unwrap_or(usual);
-                grid.label_at(text_x as f32, text_x, y, hint, inner_dim, right, SMALL);
+                grid.label_at(a.text, text_x, y, hint, inner_dim, right, SMALL);
             }
             Line::Empty(resolved) => {
                 let none = if *resolved {
@@ -2729,22 +2916,23 @@ pub fn draw(
                 };
                 let mut end = right;
                 if let Some((text, words)) = pill {
-                    // At the row's end: what it's about has changed or left the plan.
+                    // At the row's end, on the card's right column: what it's about has
+                    // changed or left the plan.
                     let width = pill_width(text, measure);
-                    let x = right as f32 - 1.0 - width;
+                    let x = a.end - width;
                     let tone = pill_tone(*words, theme);
                     draw_pill(grid, x, y, text, (right, inner, tone), measure);
                     end = x.floor() as u16;
                 }
-                grid.label_at(text_x as f32, text_x, y, label, style, end, SMALL);
+                grid.label_at(a.text, text_x, y, label, style, end, SMALL);
             }
             Line::Pill(_, text, words) => {
                 let tone = pill_tone(*words, theme);
-                draw_pill(grid, text_x as f32, y, text, (right, inner, tone), measure);
+                draw_pill(grid, a.text, y, text, (right, inner, tone), measure);
             }
             Line::Quote(_, quote, words) => {
-                let bar = Bounds::cells(text_x as f32, y as f32 + 0.16, 0.22, 0.68);
-                let x = text_x as f32 + 0.8;
+                let bar = Bounds::cells(a.text, y as f32 + 0.16, 0.22, 0.68);
+                let x = a.text + QUOTE_IN;
                 if *words == Words::Here {
                     grid.panel(bar, 10, Some(theme.accent), None);
                     grid.label_at(x, text_x + 1, y, quote, inner_dim, right, SMALL);
@@ -2765,9 +2953,9 @@ pub fn draw(
                 // On the quote's quiet bar, as words no longer as said are. What went in the
                 // removed colour, struck through; what came in the added colour; what stayed
                 // as the quote's words are.
-                let bar = Bounds::cells(text_x as f32, y as f32 + 0.16, 0.22, 0.68);
+                let bar = Bounds::cells(a.text, y as f32 + 0.16, 0.22, 0.68);
                 grid.panel(bar, 10, Some(mix(theme.gutter.fg, inner.bg, 0.55)), None);
-                let mut x = text_x as f32 + QUOTE_IN;
+                let mut x = a.text + QUOTE_IN;
                 for (kind, piece) in row {
                     let fg = match kind {
                         -1 => theme.error,
@@ -2785,24 +2973,28 @@ pub fn draw(
                 }
             }
             Line::Text(_, text) => {
-                let place = (f32::from(text_x), text_x, y);
+                let place = (a.text, text_x, y);
                 draw_linked(grid, place, text, (inner, 100, right), (measure, theme));
             }
             Line::Answer(_, word, author) => {
-                let block = theme.quiet_button(card);
+                // A line across the card over it, between what was said and the answer, its
+                // words on the card's column: it stood in a box whose words were 10 px from its
+                // edge where the card's are 24 from its own.
+                let rule = Bounds::cells(a.text, f32::from(y), a.end - a.text, 0.0);
+                grid.hairline(rule, theme.popup_border);
+                let lines_from = grid.painted_so_far();
                 let muted = Style {
                     fg: raised_muted,
-                    bg: block,
                     ..inner
                 };
-                let mut x = reply_x;
+                let mut x = a.text;
                 if let Some(word) = word {
                     let tone = verdict_tone(word, theme);
                     let chip = measure.width(word, small()) + 0.8;
-                    // Low in the row, so it keeps air under the block's top edge, and tall
-                    // enough for the tail of "Agrees", which stood under it.
+                    // Low in the row, so it keeps air under the line over it, and tall enough
+                    // for the tail of "Agrees", which stood under it.
                     let bounds = Bounds::cells(x, y as f32 + 0.22, chip, 0.74);
-                    grid.panel(bounds, 32, Some(mix(tone, block, 0.18)), None);
+                    grid.panel(bounds, 32, Some(mix(tone, card, 0.18)), None);
                     let style = Style {
                         fg: mix(tone, theme.text.fg, 0.6),
                         bold: true,
@@ -2812,20 +3004,28 @@ pub fn draw(
                     grid.drop_last(VERDICT_DROP);
                     x += chip + 0.4;
                 }
-                let at = (x.ceil() as u16).max(text_x + 1);
+                let at = (x.ceil() as u16).max(text_x);
                 grid.label_at(x, at, y, author, muted, right, SMALL);
                 grid.drop_last(VERDICT_DROP);
+                // Over a rewrite's box, up with it.
+                if matches!(all.get(index + 1), Some(Line::Proposed(..))) {
+                    grid.lift_since(lines_from, lift);
+                }
             }
             Line::Reply(_, text) => {
+                let place = (a.text, text_x, y);
+                draw_linked(grid, place, text, (inner, SMALL, right), (measure, theme));
+            }
+            Line::Proposed(_, text) => {
+                // In its box, its padding in from the card's column, and up with it.
+                let start = a.text + boxed;
                 let style = Style {
                     bg: theme.quiet_button(card),
                     ..inner
                 };
-                let place = (reply_x, text_x + 1, y);
+                let place = (start, cell_of(start).0, y);
                 draw_linked(grid, place, text, (style, SMALL, right), (measure, theme));
-                // Lifted a little, so the block keeps air above the buttons and below its
-                // text: the row and the links drawn over it together.
-                grid.lift_since(from, 0.12);
+                grid.lift_since(from, lift);
             }
             Line::File(opens, place, count) => {
                 let from = grid.painted_so_far();
@@ -2843,7 +3043,8 @@ pub fn draw(
                 let number = count.to_string();
                 let wide = measure.width(&number, small());
                 let chip = (wide + 0.9).max(1.3);
-                let chip_x = right as f32 - chip;
+                // Ending where the cards under it end.
+                let chip_x = a.right - chip;
                 let bounds = Bounds::cells(chip_x, y as f32 + 0.19, chip, 0.62);
                 grid.panel(bounds, 40, Some(theme.tint), None);
                 let at = chip_x + (chip - wide) / 2.0;
@@ -2872,7 +3073,7 @@ pub fn draw(
             }
             Line::Check(mine, suggested, files, filter) => {
                 let from = grid.painted_so_far();
-                let (cells, x) = check_button(area, measure);
+                let (cells, x) = check_button(area, view, measure);
                 // Nothing is painted under the pane, so the button's corners need a ground.
                 let ground = Bounds::cells(x as f32, y as f32, cells.chars().count() as f32, 1.0);
                 grid.panel(ground, 0, Some(body.bg), None);
@@ -2915,6 +3116,8 @@ pub fn draw(
                         BUTTON_TEXT,
                     );
                 }
+                // Ending on the cards' right edge.
+                grid.nudge_since(from, head_end(area, view).1);
                 // With a kind's pill pressed, what's listed: that kind, and how many of all.
                 let mut note = match (filter, suggested) {
                     (Some((kind, listed)), _) => {
@@ -2929,9 +3132,8 @@ pub fn draw(
                     n => note.push_str(&format!(" · {n} files")),
                 }
                 let end = x.saturating_sub(1);
-                let start = head(area, measure);
-                let at = f32::from(start) + view.lead;
-                grid.label_at(at, start, y, &note, dim, end, SMALL);
+                let start = head(area);
+                grid.label_at(f32::from(start), start, y, &note, dim, end, SMALL);
                 // Half a row clear over the pills under it.
                 grid.lift_since(from, CHECK_LIFT);
             }
@@ -2940,7 +3142,7 @@ pub fn draw(
                     Line::Suggestions(count, at, beside) => {
                         let words = suggestions_said(*count, *at);
                         let placed = if *beside {
-                            settle_buttons(area, measure)
+                            settle_buttons(area, view, measure)
                         } else {
                             Vec::new()
                         };
@@ -2948,9 +3150,8 @@ pub fn draw(
                             .first()
                             .map_or(right, |(_, _, x)| x.saturating_sub(1));
                         // Where the summary under it starts, as the head of the list does.
-                        let start = head(area, measure);
-                        let at = f32::from(start) + view.lead;
-                        grid.label_at(at, start, y, &words, dim, end, SMALL);
+                        let start = head(area);
+                        grid.label_at(f32::from(start), start, y, &words, dim, end, SMALL);
                         placed
                     }
                     _ => settle_row(area, measure),
@@ -2974,16 +3175,17 @@ pub fn draw(
                     };
                     grid.button(x, y, &cells, label, fill, style);
                 }
-                // On a row of their own they start where the head does, as its controls do.
-                if alone {
-                    grid.nudge_since(from, view.lead);
+                // On a row of their own they start where the head does, as its controls do;
+                // beside the words they end where Check My Review does.
+                if !alone {
+                    grid.nudge_since(from, head_end(area, view).1);
                 }
             }
             Line::Deliver(count) => {
                 // Quiet: Check My Review is the pane's filled button. As high in its row as
                 // that one is in its own, so the pills under it keep the same air.
                 let from = grid.painted_so_far();
-                let (cells, x) = deliver_button(area, *count, shown_agent, measure);
+                let (cells, x) = deliver_button(area, (*count, shown_agent), view, measure);
                 let width = cells.chars().count() as u16;
                 let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                 let fill = theme.secondary(body.bg, on_it);
@@ -2996,6 +3198,7 @@ pub fn draw(
                 };
                 let label = deliver_label(*count, shown_agent);
                 grid.button(x, y, &cells, &label, fill, style);
+                grid.nudge_since(from, head_end(area, view).1);
                 grid.lift_since(from, CHECK_LIFT);
             }
             Line::Coverage(kinds) => {
@@ -3006,7 +3209,6 @@ pub fn draw(
                 // comments alone are listed is the accent's, as a pick is, with a × that says
                 // a press lists them all again.
                 for (kind, x, end) in pills(area, kinds, view.kind, measure) {
-                    let (x, end) = (x + view.lead, end + view.lead);
                     let count = kinds
                         .iter()
                         .find(|(k, _)| *k == kind)
@@ -3056,22 +3258,17 @@ pub fn draw(
                 for (label, cells, x) in row_of(area, &labels.unwrap_or_default(), measure) {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                    // Taking it is what a rewrite is there for: the filled one.
-                    let main = label == ACCEPT_REWRITE;
-                    let fill = if main {
-                        theme.button
-                    } else {
-                        theme.secondary(card, on_it)
-                    };
+                    // Three choices, none of them the pane's main action, which is Check My
+                    // Review: Accept Rewrite was filled too, two filled buttons at once, as Keep
+                    // had been beside Dismiss.
+                    let fill = theme.secondary(card, on_it);
                     let style = Style {
                         bg: fill,
-                        fg: if main { theme.button_text } else { inner.fg },
+                        fg: inner.fg,
                         ..inner
                     };
                     grid.button(x, y, &cells, label, fill, style);
                 }
-                // Up toward the rewrite they settle, and clear of the comment's own buttons.
-                grid.lift_since(from, REWRITE_LIFT);
             }
             Line::Choices(_) => {
                 // Keep, Reply and Dismiss: the first two answer it, the last drops it.
@@ -3113,11 +3310,13 @@ pub fn draw(
                 // the card's own colour, which a lit card's tint is: Edit and Delete stood on
                 // the unlit card's there, two dark slabs.
                 let card = card_fill(*id);
-                for (label, cells, x) in buttons(area, measure) {
+                let (placed, at_end) = buttons(area, view, measure);
+                for (label, cells, x) in placed {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                    // Edit and Delete are the least of them: plain words until pointed at.
-                    let plain = EDITS.contains(&label);
+                    // Edit and Delete are the least of them: plain words until pointed at, and
+                    // the "⋯" in their place a plain mark.
+                    let plain = EDITS.contains(&label) || label == MORE;
                     let fill = match (on_it, plain) {
                         // Pointed at, a plain one takes the quiet fill the others rest in.
                         (true, true) => theme.secondary(card, false),
@@ -3133,26 +3332,15 @@ pub fn draw(
                         },
                         ..inner
                     };
-                    grid.button(x, y, &cells, label, fill, style);
-                }
-            }
-            Line::Edits(id) => {
-                let card = card_fill(*id);
-                for (label, cells, x) in edits(area, measure) {
-                    let width = cells.chars().count() as u16;
-                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
-                    // Plain words until pointed at, as beside the other three.
-                    let fill = if on_it {
-                        theme.secondary(card, false)
+                    let drawn = grid.painted_so_far();
+                    if label == MORE {
+                        draw_more(grid, (x, y), &cells, (fill, style), measure);
                     } else {
-                        card
-                    };
-                    let style = Style {
-                        bg: fill,
-                        fg: if on_it { inner.fg } else { theme.popup_dim },
-                        ..inner
-                    };
-                    grid.button(x, y, &cells, label, fill, style);
+                        grid.button(x, y, &cells, label, fill, style);
+                    }
+                    // The plain ones end on the card's right column, the others start on its
+                    // left one.
+                    grid.nudge_since(drawn, if plain { at_end } else { nudge });
                 }
             }
             Line::Reopen(_) => {
@@ -3177,9 +3365,7 @@ pub fn draw(
                 let labels = [labels[0].as_str(), labels[1].as_str()];
                 let what = (cells.as_str(), &labels[..], Chevron::Unfolds(*shown));
                 let how = (on_it, control_drop(&all, index, measure));
-                let from = grid.painted_so_far();
                 draw_control(grid, (x, y), what, how, (measure, theme));
-                grid.nudge_since(from, view.lead);
             }
             Line::Sort(addressed) => {
                 // A button that opens the list of orders, saying the one in use.
@@ -3189,11 +3375,9 @@ pub fn draw(
                 let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                 let what = (cells.as_str(), &names[..], Chevron::Opens);
                 let drop = control_drop(&all, index, measure);
-                let from = grid.painted_so_far();
                 draw_control(grid, (x, y), what, (on_it, drop), (measure, theme));
-                grid.nudge_since(from, view.lead);
                 // At the row's end, the button that resolves what agents say they addressed.
-                if let Some((cells, x)) = resolve_all(area, *addressed, measure) {
+                if let Some((cells, x)) = resolve_all(area, (*addressed, view), measure) {
                     let from = grid.painted_so_far();
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
@@ -3207,6 +3391,7 @@ pub fn draw(
                     };
                     let label = resolve_all_label(*addressed);
                     grid.button(x, y, &cells, &label, fill, style);
+                    grid.nudge_since(from, head_end(area, view).1);
                     grid.lift_since(from, -drop);
                 }
             }
@@ -3226,6 +3411,11 @@ pub fn draw(
             Line::Gap => {}
         }
         if actions {
+            // A row of buttons stands on the card's left column, but for those at its end,
+            // which `Buttons` puts in their place itself.
+            if !matches!(line, Line::Buttons(_)) {
+                grid.nudge_since(from, nudge);
+            }
             grid.lift_since(from, -ACTIONS_DROP);
         }
     }
@@ -3276,8 +3466,9 @@ mod tests {
             let mut fewer = false;
             for width in 24..=110 {
                 let area = Rect::new(0, 0, width, 10);
-                let right = f32::from(area.right() - SIDE - 1);
-                let spots = suggest_spots(area, &found, measure);
+                let a = across(area, View::default(), measure);
+                let right = a.end;
+                let spots = suggest_spots((a.text, a.end), &found, measure);
                 assert!(!spots.is_empty(), "the first is always offered");
                 let (x, wide) = spots[spots.len() - 1];
                 if spots.len() > 1 {
@@ -3291,7 +3482,8 @@ mod tests {
                 fewer |= spots.len() > 1 && spots.len() < found.len();
             }
             assert!(fewer, "some width holds a few of them and the key");
-            let all = suggest_spots(Rect::new(0, 0, 110, 10), &found, measure);
+            let wide = across(Rect::new(0, 0, 110, 10), View::default(), measure);
+            let all = suggest_spots((wide.text, wide.end), &found, measure);
             assert_eq!(all.len(), found.len(), "a wide pane holds them all");
         }
     }
@@ -3394,9 +3586,10 @@ mod tests {
             "its foot is in the row under"
         );
         assert_eq!(pressed(&pixels, row + 1.6), None, "under the chip");
-        // Its list drops from under what's painted of it, on its row and with its drop.
+        // Its list drops from under what's painted of it, on its row and with its drop, from
+        // the pane's text edge where the list's head stands.
         let button = order_button(area, shown, 0, &pixels);
-        assert_eq!(button, Some((area.x + SIDE - 1, row as u16, CONTROL_DROP)));
+        assert_eq!(button, Some((area.x + SIDE, row as u16, CONTROL_DROP)));
 
         let row = middle(&CellMeasure);
         assert_eq!(pressed(&CellMeasure, row + 0.2), Some(Hit::Sort));

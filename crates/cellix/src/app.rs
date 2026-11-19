@@ -10630,6 +10630,8 @@ impl App {
                 match hit {
                     // Its list drops from under what's painted of its button.
                     Some(ThreadHit::Sort) => self.show_sort_menu((screen.x + 2, y + 1)),
+                    // Edit and Delete, from under the "⋯" that stands for them.
+                    Some(ThreadHit::More(id)) => self.show_card_menu(id, (x, y + 1)),
                     // Every emoji, in a panel dropping from under the buttons that send what's
                     // written: from its own button it covered the hint between them.
                     Some(ThreadHit::Emoji) => {
@@ -11867,6 +11869,17 @@ impl App {
         open.and_then(|e| e.buffer.path()).is_none()
     }
 
+    /// Edit and Delete for a comment's card, from the "⋯" that stands for them where they
+    /// don't fit beside its other buttons: on a row of their own, a narrow card had three rows
+    /// of buttons. It drops from under the "⋯", as every menu dropped from a button does.
+    fn show_card_menu(&mut self, id: u32, at: (u16, u16)) {
+        let items = vec![
+            MenuItem::new("Edit", MenuAction::EditComment(id)),
+            MenuItem::new("Delete", MenuAction::DeleteComment(id)),
+        ];
+        self.show_menu(at, items);
+    }
+
     /// The orders the Comments pane can list in, as a menu dropped from the order's button,
     /// the one in use marked: as every menu dropped from a button, on its left edge and
     /// `LINE_AIR` under its foot. It opened 38 px under it and 10 px along, a step lighter
@@ -11921,11 +11934,10 @@ impl App {
         let agent = self.comment_agent().0;
         let draft = self.dock.draft.as_ref();
         let view = self.comments_view();
-        let lead = view.lead;
         let shown = (threads.as_slice(), draft, agent.as_str(), resolved, view);
         let top = self.dock.tops.of(Front::Comments);
         let (x, row, drop) = threads::order_button(screen, shown, top, &*self.measure)?;
-        Some((f32::from(x) + lead, row, drop))
+        Some((f32::from(x), row, drop))
     }
 
     /// How the Comments pane shows its list: under headings or not, which is lit, and in
@@ -11949,7 +11961,6 @@ impl App {
             pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
             laid: Some(&self.comment_rows),
             edge: self.pane_edge(),
-            lead: self.pane_card_lead(),
         }
     }
 
@@ -12571,6 +12582,11 @@ impl App {
             ThreadHit::Sort => {
                 if let Some(panel) = self.dock_panel() {
                     self.show_sort_menu((panel.x + 2, panel.y + 4));
+                }
+            }
+            ThreadHit::More(id) => {
+                if let Some(panel) = self.dock_panel() {
+                    self.show_card_menu(id, (panel.x + 2, panel.y + 4));
                 }
             }
             ThreadHit::Quick(which) => {
@@ -15884,6 +15900,8 @@ impl App {
                     self.show_lit_comment(id);
                 }
             }
+            MenuAction::EditComment(id) => self.thread_hit(ThreadHit::Edit(id)),
+            MenuAction::DeleteComment(id) => self.thread_hit(ThreadHit::Delete(id)),
             MenuAction::CloseSession(index) => self.close_session_tab(index),
             MenuAction::RenameSession(index) => self.rename_session(index),
             MenuAction::CloseAllTabs => {
@@ -28529,7 +28547,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         press(&mut app, " Reply ");
         assert_eq!(app.threads[0].replies.len(), 1);
         assert_eq!(app.threads[0].replies[0].text, "Third");
-        // Changing the comment itself is saved.
+        // Changing the comment itself is saved: Edit is behind the card's "⋯", where the
+        // five buttons don't fit on its row.
+        press(&mut app, " \u{22ef}");
         press(&mut app, "Edit");
         typed(&mut app, "!");
         press(&mut app, " Save ");

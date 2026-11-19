@@ -585,3 +585,388 @@ fn the_kinds_pills_are_outlines_and_the_head_says_the_kind_listed() {
         );
     }
 }
+
+/// Rows of the tour's terminal, in pixels, and the line its words are set for.
+const ROW: f32 = 50.0;
+const LINE: f32 = 36.0;
+
+/// Rows in units, as pixels.
+fn py(units: i32) -> f32 {
+    units as f32 * ROW / UNIT as f32
+}
+
+/// Where the capitals of words painted at row `y` start, and their tails end, in pixels: words
+/// stand in the middle of the line, a quarter and 86 hundredths of it down.
+fn words_at_row(y: i32) -> (f32, f32) {
+    let lead = (ROW - LINE) / 2.0;
+    (py(y) + lead + 0.25 * LINE, py(y) + lead + 0.86 * LINE)
+}
+
+/// The same for words set small, a note's or an answer's: their tails nearer the row's middle
+/// by as much as they're smaller. The pictures had the small words' tails 35.5 px down a row
+/// of 50, where the interface's are 38.
+fn small_at_row(y: i32) -> (f32, f32) {
+    let (caps, tails) = words_at_row(y);
+    let middle = py(y) + ROW / 2.0;
+    (
+        caps,
+        middle + (tails - middle) * f32::from(crate::threads::SMALL) / 100.0,
+    )
+}
+
+/// Where a shape shorter than a row stands, in pixels, as the painter stands it: its top and
+/// its foot.
+fn stood_at(bounds: Bounds) -> (f32, f32) {
+    let (top, tall) = cellix_render::stood(bounds.y, bounds.h, ROW, LINE);
+    (top, top + tall)
+}
+
+/// The words of the painted run that starts with `start`: where it starts, its row, and how
+/// wide it's painted, in pixels.
+fn run(grid: &Grid, start: &str) -> (f32, i32, f32) {
+    let measure = FontMeasure::new(17, 50).with_type_row(36);
+    grid.paint
+        .iter()
+        .find_map(|p| match p {
+            Paint::Text {
+                x,
+                y,
+                text,
+                font,
+                centred,
+                ..
+            } if text.starts_with(start) => {
+                let wide = cellix_render::Measure::width(&measure, text, *font) * CELL;
+                let left = if *centred {
+                    px(*x) - wide / 2.0
+                } else {
+                    px(*x)
+                };
+                Some((left, *y, wide))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no words {start:?}"))
+}
+
+/// The card painted round the row `y` (in units), in pixels: left, right, top, foot.
+fn card_round(app: &App, grid: &Grid, y: i32) -> (f32, f32, f32, f32) {
+    let (bounds, ..) = cards(app, grid)
+        .into_iter()
+        .find(|(b, ..)| b.y <= y && y < b.y + b.h)
+        .expect("a card round it");
+    (
+        px(bounds.x),
+        px(bounds.x + bounds.w),
+        py(bounds.y),
+        py(bounds.y + bounds.h),
+    )
+}
+
+/// The quiet chips painted on row `y` (in units) in a card: their left, right, top and foot
+/// in pixels, as the painter stands them.
+fn chips_on(grid: &Grid, y: i32, fill: Rgb) -> Vec<(f32, f32, f32, f32)> {
+    grid.paint
+        .iter()
+        .filter_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(f),
+                ..
+            } if *f == fill
+                && bounds.h < UNIT
+                && bounds.y + bounds.h > y
+                && bounds.y < y + UNIT =>
+            {
+                let (top, foot) = stood_at(*bounds);
+                Some((px(bounds.x), px(bounds.x + bounds.w), top, foot))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Close enough to `want` px: the painter rounds to whole pixels and a cell's fraction.
+fn near(got: f32, want: f32, what: &str) {
+    assert!((got - want).abs() <= 1.5, "{what}: {got} px, not {want}");
+}
+
+/// Every card keeps `CARD_INSET`, 24 px, on every side: its words start 24 px in, the pill at
+/// its header's end and Delete end 24 px from its right edge, its first words' capitals are 24
+/// px under its top and its buttons' foot 24 px over its own. Text stood 25 px in, the pill
+/// ended 33 px and Delete 51 px from the right, and the foot had 28 px. The composer's box
+/// stands on the same columns, where it was 8 px from the card's left and 17 from its right.
+#[test]
+fn every_card_keeps_one_inset_on_every_side() {
+    let inset = crate::measures::CARD_INSET;
+    let (_dir, mut app) = page("The cache goes first.\n\nThe tests run last.\n");
+    comment(&mut app, "cache", "Why first?");
+    let id = app.threads[0].id;
+    answer(&mut app, id, &cellix_review::threads::addressed("moved it"));
+    comment(&mut app, "tests", "Which ones?");
+    show_comments(&mut app);
+    let grid = painted(&mut app);
+    let quiet = app.theme.secondary(app.theme.popup, false);
+    // The addressed card: its pill ends 24 px in.
+    let (_, header_y, _) = run(&grid, "You");
+    let (left, right, top, foot) = card_round(&app, &grid, header_y);
+    let (header_x, ..) = run(&grid, "You");
+    near(
+        header_x - left,
+        inset,
+        "the header's words from the card's left",
+    );
+    near(
+        words_at_row(header_y).0 - top,
+        inset,
+        "its capitals under its top",
+    );
+    let pill = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            border: Some(edge),
+            fill: None,
+            ..
+        } if *edge == app.theme.git_added => Some(px(bounds.x + bounds.w)),
+        _ => None,
+    });
+    near(
+        right - pill.expect("the pill"),
+        inset,
+        "the pill from its right",
+    );
+    // Its buttons: from the card's left column, their foot 24 px over its own.
+    let resolve = chips_on(&grid, run(&grid, "Not Done").1, quiet);
+    let first = resolve.iter().map(|c| c.0).fold(f32::MAX, f32::min);
+    near(first - left, inset, "the first button from the card's left");
+    let lowest = resolve.iter().map(|c| c.3).fold(0.0, f32::max);
+    near(foot - lowest, inset, "the card's foot under its buttons");
+    // The other card: Delete's words end 24 px from its right.
+    let (_, which_y, _) = run(&grid, "Which ones?");
+    let (_, right, ..) = card_round(&app, &grid, which_y);
+    let (delete_x, _, delete_wide) = run(&grid, "Delete");
+    near(
+        right - (delete_x + delete_wide),
+        inset,
+        "Delete from the card's right",
+    );
+
+    // The box a comment is written in stands on the card's columns.
+    app.thread_hit(crate::threads::Hit::Reply(id));
+    typed(&mut app, "Thanks");
+    let grid = painted(&mut app);
+    let field = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            fill: Some(fill),
+            ..
+        } if *fill == app.theme.input => Some(*bounds),
+        _ => None,
+    });
+    let field = field.expect("the box");
+    let (left, right, ..) = card_round(&app, &grid, field.y);
+    near(px(field.x) - left, inset, "the box from the card's left");
+    near(
+        right - px(field.x + field.w),
+        inset,
+        "the box from the card's right",
+    );
+}
+
+/// In the docked pane the cards and the list's head start where every view in the pane starts
+/// its words: the Comments' content stood at x27 and the Agents list's at x45. A short card's
+/// foot is as far under its last words as its top is over its first: 19 px over and 44 under.
+#[test]
+fn a_docked_cards_inset_is_the_panes_and_its_foot_is_its_top() {
+    let inset = crate::measures::CARD_INSET;
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("note.md"), "The cache goes first.\n").unwrap();
+    // About the size Claude Code docks Cellix at, the pane under the file.
+    let mut app = App::new(dir.path().to_path_buf(), (64, 40));
+    app.open(&dir.path().join("note.md")).unwrap();
+    comment(&mut app, "cache", "Why first?");
+    let id = app.threads[0].id;
+    answer(&mut app, id, "Agree: it should be.");
+    show_comments(&mut app);
+    // Short, as a card is in a pane this small until it's lit.
+    app.lit_thread = None;
+    let grid = painted(&mut app);
+    let (head_x, ..) = run(&grid, "1 of yours");
+    let (_, header_y, _) = run(&grid, "You");
+    let (left, _, top, foot) = card_round(&app, &grid, header_y);
+    near(left, head_x, "the card's left and the head's words");
+    near(
+        words_at_row(header_y).0 - top,
+        inset,
+        "the first words' capitals under its top",
+    );
+    // Its last row says how many answers it has, where its buttons stand once pointed at.
+    let (_, note_y, _) = run(&grid, "1 reply");
+    near(
+        foot - small_at_row(note_y).1,
+        inset,
+        "its foot under those words' tails",
+    );
+    // The Agents list starts its words there too.
+    app.run(Command::ListAgents);
+    let grid = painted(&mut app);
+    let (start_x, ..) = run(&grid, "START");
+    near(start_x, head_x, "the Agents list's words and the Comments'");
+}
+
+/// An answer stands on the card's column, under a line across the card, with no box: its box
+/// had its words 10 px from its edge where the card's are 24 from its own, and its verdict's
+/// chip 8 px under its top.
+#[test]
+fn an_answer_stands_on_the_cards_column_under_a_line() {
+    let (_dir, mut app) = page("The cache goes first.\n");
+    comment(&mut app, "cache", "Why first?");
+    let id = app.threads[0].id;
+    answer(&mut app, id, "Agree: it should be.");
+    show_comments(&mut app);
+    let grid = painted(&mut app);
+    let (text_x, ..) = run(&grid, "Why first?");
+    let (said_x, said_y, _) = run(&grid, "It should be.");
+    near(said_x, text_x, "the answer's words on the card's column");
+    let (chip_x, ..) = run(&grid, "Agrees");
+    assert!(
+        chip_x - text_x < 12.0,
+        "its chip from the column: {}",
+        chip_x - text_x
+    );
+    let block = app.theme.quiet_button(app.theme.popup);
+    let boxed = grid.paint.iter().any(|p| {
+        matches!(p, Paint::Panel { fill: Some(f), bounds, .. }
+            if *f == block && bounds.h >= UNIT && bounds.y <= said_y && said_y < bounds.y + bounds.h)
+    });
+    assert!(!boxed, "no box round the answer");
+    let ruled = grid.paint.iter().any(|p| {
+        matches!(p, Paint::Hairline { bounds, .. }
+            if bounds.y < said_y && said_y - bounds.y <= 2 * UNIT && (px(bounds.x) - text_x).abs() < 1.5)
+    });
+    assert!(ruled, "a line over the answer, from the card's column");
+}
+
+/// An agent's rewrite stands in a box 16 px round its words, the box on the card's columns and
+/// 16 px over its buttons, which are one row of three quiet ones: the box's words were 10 px
+/// from its edge, it stood 10 px over its buttons, the two rows of buttons were 23 px apart and
+/// Accept Rewrite was filled beside Check My Review.
+#[test]
+fn a_rewrite_stands_in_a_box_with_room_round_it() {
+    let padding = crate::measures::BOX_PADDING;
+    let inset = crate::measures::CARD_INSET;
+    let (_dir, mut app) = page("The model improves on the baseline.\n");
+    comment(&mut app, "improves", "By how much?");
+    let id = app.threads[0].id;
+    answer(&mut app, id, "Rewrite: improves by 3.6 points");
+    show_comments(&mut app);
+    app.lit_thread = None;
+    let grid = painted(&mut app);
+    let quiet = app.theme.secondary(app.theme.popup, false);
+    let (words_x, words_y, _) = run(&grid, "improves by 3.6 points");
+    let (left, right, ..) = card_round(&app, &grid, words_y);
+    let block = app.theme.quiet_button(app.theme.popup);
+    let found = grid.paint.iter().find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            fill: Some(f),
+            ..
+        } if *f == block && bounds.y <= words_y && words_y < bounds.y + bounds.h => Some(*bounds),
+        _ => None,
+    });
+    let found = found.expect("the rewrite's box");
+    let (box_left, box_right) = (px(found.x), px(found.x + found.w));
+    let (box_top, box_foot) = (py(found.y), py(found.y + found.h));
+    near(box_left - left, inset, "the box on the card's left column");
+    near(right - box_right, inset, "and its right one");
+    near(words_x - box_left, padding, "its words from its edge");
+    let (caps, tails) = small_at_row(words_y);
+    near(caps - box_top, padding, "its words' capitals under its top");
+    near(box_foot - tails, padding, "its foot under their tails");
+    let (_, accept_y, _) = run(&grid, "Accept Rewrite");
+    let row = chips_on(&grid, accept_y, quiet);
+    assert_eq!(row.len(), 3, "three quiet buttons: {row:?}");
+    let top = row.iter().map(|c| c.2).fold(f32::MAX, f32::min);
+    near(top - box_foot, padding, "the buttons under the box");
+    // Accept Rewrite isn't filled: Check My Review is the pane's one filled button.
+    let (_, _, card_top, card_foot) = card_round(&app, &grid, words_y);
+    let filled = grid.paint.iter().filter(|p| {
+        matches!(p, Paint::Panel { fill: Some(f), bounds, .. }
+            if *f == app.theme.button && bounds.h < UNIT && bounds.w > UNIT
+                && py(bounds.y) >= card_top && py(bounds.y) < card_foot)
+    });
+    assert_eq!(filled.count(), 0, "no filled button on the card");
+    let checked = grid.paint.iter().any(|p| {
+        matches!(p, Paint::Panel { fill: Some(f), bounds, .. }
+            if *f == app.theme.button && py(bounds.y) < card_top)
+    });
+    assert!(checked, "Check My Review over it is");
+}
+
+/// On a narrow card the rewrite's buttons wrap inside the card, and Edit and Delete stand
+/// behind a "⋯" at the end of the comment's buttons, which opens them: Not This ran 13 px
+/// past the box and Edit and Delete took a third row.
+#[test]
+fn a_narrow_cards_buttons_stay_inside_it_with_edit_and_delete_behind_more() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(
+        dir.path().join("note.md"),
+        "The model improves on the baseline.\n",
+    )
+    .unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (100, 40));
+    app.open(&dir.path().join("note.md")).unwrap();
+    comment(&mut app, "improves", "By how much?");
+    let id = app.threads[0].id;
+    answer(&mut app, id, "Rewrite: improves by 3.6 points");
+    show_comments(&mut app);
+    app.lit_thread = None;
+    let grid = painted(&mut app);
+    let (_, words_y, _) = run(&grid, "By how much?");
+    let (left, right, ..) = card_round(&app, &grid, words_y);
+    let inset = crate::measures::CARD_INSET;
+    let quiet = app.theme.secondary(app.theme.popup, false);
+    for name in [
+        "Accept Rewrite",
+        "Apply as Suggestion",
+        "Not This",
+        "Reply",
+        "Resolve",
+    ] {
+        let (x, y, wide) = run(&grid, name);
+        let chip = chips_on(&grid, y, quiet)
+            .into_iter()
+            .find(|c| c.0 <= x && x + wide <= c.1)
+            .unwrap_or_else(|| panic!("{name}'s chip"));
+        assert!(
+            chip.0 >= left + inset - 1.5,
+            "{name} starts inside the card"
+        );
+        assert!(
+            chip.1 <= right - inset + 1.5,
+            "{name} ends inside the card: {chip:?}"
+        );
+    }
+    let edit = grid
+        .paint
+        .iter()
+        .any(|p| matches!(p, Paint::Text { text, .. } if text == "Edit"));
+    assert!(!edit, "Edit and Delete aren't on a row of their own");
+    let more = grid.paint.iter().any(|p| {
+        matches!(
+            p,
+            Paint::Icon {
+                icon: cellix_render::Icon::More,
+                ..
+            }
+        )
+    });
+    assert!(more, "a ⋯ stands for them");
+    // On cells it's a button that opens them.
+    let (x, y) = find(&screen(&app), "\u{22ef}");
+    click(&mut app, x, y);
+    let text = screen(&app).text();
+    assert!(text.contains("Edit") && text.contains("Delete"), "{text}");
+    press(&mut app, "Delete");
+    assert!(screen(&app).text().contains("Delete this comment?"));
+}

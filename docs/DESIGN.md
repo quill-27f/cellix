@@ -652,8 +652,9 @@ small once and again when its file changes, so a picture an agent makes after na
 when it's there. Where the screen can't, or the file is missing, the name stays in the words as
 a link that opens it.
 
-A comment being written stands in a box, as a field does: its words and, inside the box under
-them, the eight emoji and the two buttons for the rest and for a picture, each a glyph in the
+A comment being written stands in a box, as a field does, on the card's columns (it stood 8 px
+from the card's left edge and 17 from its right), its words a column inside it: its words and,
+inside the box under them, the eight emoji and the two buttons for the rest and for a picture, each a glyph in the
 middle of a square chip that shows while it's pointed at. A row is kept between the words and
 the tools, with the words a little down into it and the tools a little up, so both stand clear
 of the box's lines, and the list of every emoji hangs from its bottom line. Under the box is the hint, or the emoji
@@ -664,7 +665,11 @@ changed they stand in place of its own buttons, since one thing is being done to
 button is the pane's second with Check My Review; what's being written is what's under way.
 The list's head, what's yours and what's suggested, Check My Review, the kinds and the order,
 stands on the cards' edges: from where a card starts to where it ends, where there are pictures
-(it stood 8 px inside them on the left and 17 on the right).
+(it stood 8 px inside them on the left and 17 on the right). An agent's answer stands on the
+card's column under a line across the card, its verdict's chip first: it stood in a box of the
+buttons' colour whose words were 10 px from its edge. Edit and Delete stand at the end of a
+card's buttons where all five fit, and where they don't, a "⋯" there opens a menu of the two:
+on a row of their own, a narrow card had three rows of buttons.
 
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and
@@ -788,7 +793,11 @@ resolves the comment, as committing a suggestion on GitHub resolves its conversa
 Suggestion puts it in as a suggestion to settle on the page, which was the only way until 18
 November 2026. Both replace all of the commented words as they read now, found as a comment's
 words are (below). Where the three don't fit a card's row, Accept Rewrite stands alone and the
-two that don't take the rewrite stay together under it. A paper's suggestion whose words run onto another
+two that don't take the rewrite stay together under it. The rewrite stands in a box on the card's
+columns, 16 px round its words and 16 px over its three buttons, which are quiet: Check My Review
+is the pane's one filled button (Accept Rewrite was filled beside it, as Keep had been). Its box
+had its words 10 px from its edge and stood 10 px over its buttons, and the two rows of buttons
+under it were 23 px apart where a card's are 11. A paper's suggestion whose words run onto another
 line shows on its page as one, as a Markdown one does (`Spanning`), where a line's own command left
 a brace and lost the new words; across lines its new words stand before the old, as they do in its
 source and its PDF.
@@ -1319,13 +1328,22 @@ size and the window showed no panels. One
 measure sizes them all (`measures.rs`): a button's words keep a column
 and a half either side inside its chip, whatever they are, and buttons side by side stand two
 columns apart. In cells a button is its words between brackets. Text stands two columns inside
-whatever holds it, a panel, a card, a menu, a prompt; a card starts one column from its pane's
+whatever holds it, a panel, a menu, a prompt; a card starts one column from its pane's
 edge and is raised over it, as a menu is over the page. Beside the file, the side pane's sheet
-starts half way into the pane's first column, so a card there, a comment's, peek's or the one
+starts half way into the pane's first column, so a card there, peek's or the one
 asking to start an agent, has its panel start half way into its first column too
 (`PANE_CARD_LEAD`), a column from the sheet's edge on both sides (it stood 6 px from it at the
 left and 15 at the right); the pane's sheet shows in that half column, whatever stood there (a
 terminal's cursor in it showed half of itself beside the card).
+A comment's card keeps one inset on every side, `CARD_INSET` in `measures.rs`, 24 px: its words
+start 24 px in from its left edge, what stands at its right end (a pill, Edit and Delete) ends 24
+px from its right, its first words' capitals are 24 px under its top and its buttons' foot 24 px
+over its own (`card_air`). A box inside it, as an agent's rewrite is, keeps `BOX_PADDING`, 16 px,
+round its words and over the buttons under it. Its words stood 25 px in beside the file and 34
+docked, the pill ended 33 px from the right and Delete 51, and a short card's foot was 44 px
+under its last words where its top was 19 over its first. The cards' edges, and the list's head,
+stand at the pane's text edge, where every view in the pane starts its words: the docked
+Comments started at x27 where the Agents list did at x45.
 A dialog's buttons, as a card's, stand on the row after its last control on a row with room,
 and a row further down only on the terminal's line, where a button all but fills its row
 (`card_gap`): New Worktree had two rows, 62 px, of nothing over its buttons. On a row with

@@ -6592,5 +6592,12 @@
     "title": "The kinds' pills are outlines with the picked one the accent's and the head saying the kind listed; Reject and Accept have no shadow between them",
     "test": "the_kinds_pills_are_outlines_and_the_head_says_the_kind_listed",
     "passes": true
+  },
+  {
+    "id": "one-card-inset",
+    "milestone": 15,
+    "title": "Every comment card keeps one 24 px inset on every side, a rewrite its own 16 px box, and Edit and Delete go behind a ⋯ where they don't fit",
+    "test": "every_card_keeps_one_inset_on_every_side",
+    "passes": true
   }
 ]

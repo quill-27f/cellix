@@ -41,7 +41,7 @@ FOOT = lambda words, right=1: ON(words, right, 0, -1)
 # The face under a comment being written in a 150-column window, after the eight emoji. By
 # its column: an emoji is one letter of the screen's text and two cells of the screen, so
 # words after one aren't where the text has them.
-EMOJI_BUTTON = (122, 5)
+EMOJI_BUTTON = (123, 5)
 # The button that shows the resolved comments, when none is open: under the two lines that
 # say so, in that window. And where it stands under the review's two cards, and the order's
 # button over them.

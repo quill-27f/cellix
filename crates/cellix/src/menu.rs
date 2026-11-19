@@ -46,6 +46,9 @@ pub enum Action {
     Run(Command),
     /// Lists the Comments pane in another order.
     SortComments(crate::threads::Sort),
+    /// Changes a comment of the reviewer's own, or removes it, from its card's "⋯".
+    EditComment(u32),
+    DeleteComment(u32),
     /// One of the language server's fixes, by its place in the list it sent.
     ServerFix(usize),
     NewFile(PathBuf),

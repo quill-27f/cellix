@@ -34,6 +34,16 @@ pub const TAB_CLOSE_END: f32 = 2.26;
 pub fn tab_painted(name: f32, more: f32) -> f32 {
     TAB_NAME + name + more + TAB_CLOSE_AIR + TAB_CLOSE_END
 }
+/// Pixels between a card's edge and what it holds, on every side: its words start this far in
+/// from its left edge, what stands at its right end ends this far from its right, its first
+/// words' capitals stand this far under its top and its last buttons this far over its foot.
+/// Every comment card keeps it, and the composer's box stands this far in. It was a column and
+/// a half on the left beside the file and two docked, two on the right, and the foot had a
+/// row and more where the top had a quarter. See DESIGN.md, Look.
+pub const CARD_INSET: f32 = 24.0;
+/// Pixels a box inside a card keeps round what it holds, as an agent's rewrite's does, and
+/// between it and the buttons under it.
+pub const BOX_PADDING: f32 = 16.0;
 /// How far under the top of a line of words their capitals start, and their tails end, in
 /// lines: 9 px and 31 of a line of 36, as the interface's font is set.
 const CAPS: f32 = 0.25;
@@ -108,6 +118,43 @@ pub fn card_parts(last: DialogLast, side: f32, measure: &dyn Measure) -> Option<
     let over = (row + caps - lift - air).clamp(0.0, row);
     let under = (row * 2.0 - foot - air).clamp(0.0, row);
     Some((lift / row, over / row, under / row))
+}
+
+/// `CARD_INSET` in columns, where there are pixels. On cells, where a card is its rows and has
+/// no edge, its words are a column in.
+pub fn card_inset(measure: &dyn Measure) -> f32 {
+    columns(CARD_INSET, measure).unwrap_or(1.0)
+}
+
+/// `pixels` in columns, where there are pixels.
+pub fn columns(pixels: f32, measure: &dyn Measure) -> Option<f32> {
+    let (wide, _) = measure.cell_pixels()?;
+    Some(pixels / wide.max(1) as f32)
+}
+
+/// `pixels` in rows, where there are pixels.
+pub fn rows(pixels: f32, measure: &dyn Measure) -> Option<f32> {
+    let (_, tall) = measure.cell_pixels()?;
+    Some(pixels / tall.max(1) as f32)
+}
+
+/// How far a card reaches over its first row and under its last, in rows, so its first
+/// words' capitals stand `CARD_INSET` under its top and the foot of the buttons on its last
+/// row, dropped `drop` of a row, `CARD_INSET` over its own. A short card's last row says how
+/// many answers it has in place of its buttons, its words dropped to their foot, so the card
+/// is the same with either. On cells, where nothing's painted, what the design's quarter row
+/// was.
+pub fn card_air(drop: f32, measure: &dyn Measure) -> (f32, f32) {
+    let Some((_, row)) = measure.cell_pixels() else {
+        return (0.17, 0.6);
+    };
+    let row = row as f32;
+    let line = row / measure.row_air().max(1.0);
+    let (caps, _) = words_in_row(measure).unwrap_or((0.0, row));
+    let (_, foot) = cellix_render::button_in_row(row, line);
+    let top = (CARD_INSET - caps) / row;
+    let under = (foot + drop * row + CARD_INSET - row) / row;
+    (top.max(0.0), under.max(0.0))
 }
 
 /// How thick a line is on screen, in pixels: what the painter draws a hairline at, a pixel
