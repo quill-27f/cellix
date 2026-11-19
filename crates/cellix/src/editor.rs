@@ -4739,7 +4739,12 @@ impl Editor {
                     // a drawing's "Drawing with LaTeX…" (82-paper-changes-row).
                     let moved = self.row_shift(area, at);
                     let y = self.thumb_inside(to);
-                    self.draw_block_thumb(grid, (left, edge, y), (moved, most), theme);
+                    // As far in from the box's sides as over its foot: its end lay on the
+                    // box's left line.
+                    let side = (self.measure.cell_pixels())
+                        .map_or(0.0, |(wide, _)| THUMB_INSIDE / wide.max(1) as f32);
+                    let ends = (left + side, edge - side, y);
+                    self.draw_block_thumb(grid, ends, (moved, most), theme);
                 }
             } else if let Some(table) = &row.table {
                 // A table too wide even with its cells wrapped shows as much as there's room

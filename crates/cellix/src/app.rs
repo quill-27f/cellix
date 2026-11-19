@@ -128,12 +128,19 @@ const SELECTION_CHIP: (f32, f32) = (0.2, 0.96);
 const CHANGE_CHIP_LEAN: f32 = 0.08;
 
 /// Which side of a bar what it's for is on: under it, as a selection's first line is under
-/// the buttons over it, or over it, as its last is over the buttons under it.
+/// the buttons over it, or over it, as its last is over the buttons under it; or neither, where
+/// the bar stands past the rest of the block the line is in, a paragraph's other rows or a
+/// label over it, which it isn't for.
 #[derive(Clone, Copy)]
 enum Serves {
     Under,
     Over,
+    Between,
 }
+
+/// How far into its first column a button by a selection starts, so the gap from the one
+/// beside it is a quarter of a column.
+const CHIP_SIDE: f32 = 0.24;
 /// Rows kept over a suggestion Next goes up to: its chips' row and one of what's before it.
 const CHANGE_CONTEXT: usize = 2;
 /// The list an empty window shows, its width, the rows above it, and the height it needs.
@@ -5314,6 +5321,7 @@ impl App {
                 let wanted = match side {
                     Serves::Under => (below - air - tall).max(centred),
                     Serves::Over => (above + air).min(centred),
+                    Serves::Between => centred,
                 };
                 // Some of it on its own row, whatever's asked.
                 wanted.clamp(0.2 - tall, 0.8)
@@ -5353,7 +5361,7 @@ impl App {
     /// beside the end of that line, and then over it. Until then they stood on the row over
     /// the first line whatever was there, lifted toward words over it, or under the last when
     /// the first was out of view, on a table's lines or over their own selection.
-    fn selection_bar_at(&self) -> Option<(Rect, Rect, f32)> {
+    fn selection_bar_at(&self) -> Option<(Rect, Rect, (f32, f32))> {
         let idle = matches!(self.overlay, Overlay::None) && self.drag != Drag::Text;
         let plain = self.review.is_none() && self.settings_page.is_none();
         if !idle || !plain || self.dock.draft.is_some() {
@@ -5383,7 +5391,14 @@ impl App {
         let last = editor.cell_of(area, end.saturating_sub(1).max(start));
         // Their left edge at the selection's start, or the text column's with that out of
         // view: at the caret's column they stood 123 px into the text (s1-page-drag-scroll).
-        let left = place(first.map_or(f32::from(editor.text_start(area)), |(x, _)| x));
+        // Painted from there, not from its cell, where they stood 4 to 9 px off it.
+        let wanted = first.map_or(f32::from(editor.text_start(area)), |(x, _)| x);
+        let left = place(wanted);
+        let along = if left == wanted as u16 {
+            wanted - f32::from(left) - CHIP_SIDE
+        } else {
+            0.0
+        };
         let fits = |x: u16, y: u16, serves: Option<Serves>| {
             let span = (f32::from(x), f32::from(x + width));
             Some((
@@ -5404,16 +5419,21 @@ impl App {
                     && ink.across.1 > span.0
             })
         };
+        // Past the rest of the block, they're for neither what's over them nor what's under,
+        // and stand in the middle of the gap: 12 px over a paper's "Abstract" label, which
+        // isn't selected, they read as its own (s1-paper-shift-select).
         let in_the_gap = |rows: &mut dyn Iterator<Item = u16>, serves: Serves| {
-            let mut gap = false;
+            let (mut gap, mut past) = (false, false);
             for row in rows {
                 if words_across(row) {
                     if gap {
                         return None;
                     }
+                    past = true;
                     continue;
                 }
                 gap = true;
+                let serves = if past { Serves::Between } else { serves };
                 if let Some(found) = fits(left, row, Some(serves)) {
                     return Some(found);
                 }
@@ -5457,10 +5477,11 @@ impl App {
                 (place(x), y.saturating_sub(1).max(text.y), SELECTION_CHIP.0)
             }
         };
+        let along = if x == left { along } else { 0.0 };
         Some((
             Rect::new(x, y, comment, 1),
             Rect::new(x + comment, y, ask, 1),
-            lift,
+            (lift, along),
         ))
     }
 
@@ -5933,11 +5954,23 @@ impl App {
         grid: &mut Grid,
         chip: Rect,
         name: &str,
-        (lift, height): (f32, f32),
+        lift: (f32, f32),
         (main, floating): (bool, bool),
     ) {
-        /// Its gap from the button beside it, in cells.
-        const SIDE: f32 = 0.24;
+        self.draw_chip_along(grid, chip, name, lift, (main, floating), 0.0);
+    }
+
+    /// The same, painted `along` columns from where its cells put it.
+    fn draw_chip_along(
+        &self,
+        grid: &mut Grid,
+        chip: Rect,
+        name: &str,
+        (lift, height): (f32, f32),
+        (main, floating): (bool, bool),
+        along: f32,
+    ) {
+        const SIDE: f32 = CHIP_SIDE;
         let theme = &self.theme;
         let on_it = self.hover.is_some_and(|h| chip.contains(h.0, h.1));
         let words = if main {
@@ -5975,7 +6008,7 @@ impl App {
             };
             let edge = if main { fill } else { theme.popup_border };
             let bounds = Bounds::cells(
-                chip.x as f32 + SIDE,
+                chip.x as f32 + SIDE + along,
                 chip.y as f32 + (1.0 - height) / 2.0 - lift,
                 chip.w as f32 - SIDE * 2.0,
                 height,
@@ -5987,7 +6020,7 @@ impl App {
             }
             let font = Font::default();
             let width = self.measure.width(name, font);
-            let x = chip.x as f32 + (chip.w as f32 - width) / 2.0;
+            let x = chip.x as f32 + (chip.w as f32 - width) / 2.0 + along;
             // Its ink in the chip's middle, as a button's words are, so the tail of "Agent"
             // keeps off its edge and "Comment" doesn't stand high: at 0.04 of a row over the
             // middle its capitals were 9 px under the chip's top and its baseline 12 over its
@@ -6075,11 +6108,12 @@ impl App {
             self.draw_chip_as(grid, comment, "Comment", lift, (false, false));
             self.draw_chip_as(grid, ask, "Ask Agent", lift, (false, false));
         }
-        if let Some((comment, ask, lift)) = self.selection_bar_at() {
+        if let Some((comment, ask, (lift, along))) = self.selection_bar_at() {
             let (comment_says, ask_says) = self.selection_labels();
             let lift = (lift, SELECTION_CHIP.1);
-            self.draw_chip_as(grid, comment, &comment_says, lift, (false, false));
-            self.draw_chip_as(grid, ask, &ask_says, lift, (false, false));
+            let quiet = (false, false);
+            self.draw_chip_along(grid, comment, &comment_says, lift, quiet, along);
+            self.draw_chip_along(grid, ask, &ask_says, lift, quiet, along);
         } else if let Some((chip, _)) = self.picture_comment() {
             self.draw_chip(grid, chip, "Comment");
         } else if let Some((_, reject, accept, (first, _))) = self.change_chips() {
@@ -6095,7 +6129,7 @@ impl App {
     /// its middle, and there their own row takes the click wherever they stand in it. True
     /// for Ask Agent.
     fn on_selection_bar(&self, x: u16, fine_y: f32) -> Option<bool> {
-        let (comment, ask, lift) = self.selection_bar_at()?;
+        let (comment, ask, (lift, _)) = self.selection_bar_at()?;
         let (tall, _) = self.bar_room();
         let middle = f32::from(comment.y) + 0.5 - lift;
         let only_row = fine_y.fract() == 0.5 && fine_y.floor() == f32::from(comment.y);
@@ -31591,8 +31625,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // The sheet's lines: half a column before its first column, and at its end.
         let left = px(clip.x) - (f32::from(screen_area.x) - 0.5) * 10.0;
         let right = f32::from(screen_area.right()) * 10.0 - px(clip.x + clip.w);
-        assert!((left - 16.0).abs() < 0.5, "{left} px from its left");
-        assert!((right - 16.0).abs() < 0.5, "{right} px from its right");
+        // 16 px of air past the sheet's line, which is 2 px.
+        assert!((left - 18.0).abs() < 0.5, "{left} px from its left");
+        assert!((right - 18.0).abs() < 0.5, "{right} px from its right");
     }
 
     #[test]

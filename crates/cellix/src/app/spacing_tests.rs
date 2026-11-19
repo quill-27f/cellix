@@ -1171,6 +1171,12 @@ fn a_drawings_note_stands_clear_under_its_box_and_thumb() {
         .expect("a sideways thumb: the source is wider than the page");
     let (thumb_top, thumb_tall) = tall(thumb.0);
     assert!(thumb_top > top, "inside the box");
+    let (box_left, thumb_left) = (px(code.0.x), px(thumb.0.x));
+    assert!(
+        (thumb_left - box_left - 4.0).abs() <= 0.5,
+        "{} px in from the box's side",
+        thumb_left - box_left
+    );
     let over = foot - (thumb_top + thumb_tall);
     assert!((over - 4.0).abs() <= 0.5, "{over} px over the box's foot");
     // The note, the first ink under the box across its words.

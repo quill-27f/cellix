@@ -690,7 +690,9 @@ out of view. Over or under, it's the gap next to the block the line is in, never
 whatever comes after that: under a paragraph with a table after it they stood under the table,
 11 px over the next paragraph. In the gap they stand in, their foot is 12 px over what they're for, or their top 12 px
 under it where they stand under the last line (`measures::SELECTION_BAR_AIR`); where that would
-leave less on the gap's other side, they stand in its middle. Their left edge is at the selection's
+leave less on the gap's other side, they stand in its middle, and so they do past the rest of the
+line's block, a paragraph's other rows or a label over it, which they aren't for: 12 px over a
+paper's "Abstract" label they read as its own. Their left edge is at the selection's
 start, or at the text column's with the start out of view. In 0.11.0 they leaned no more than a
 fifth of a row from their row's middle, which put them 5 to 45 px from the selection scene by
 scene, and at the caret's column with the start out of view (its release check, P1). Lifted so,
@@ -834,7 +836,7 @@ the web page and PDF export carry them too. What only LaTeX can draw (TikZ, `tik
 `circuitikz`, `algorithm`) is built alone in the background with the paper's own engine and setup,
 and kept by its content in the cache folder, so typing never waits. Until it's drawn its source
 stands in its box, with "Drawing with LaTeX…" 16 px under the box and a thumb for its width inside
-the box, 4 px over its foot, where the thumb ran through the note (0.11.0's release check, P4).
+the box, 4 px in from its sides and over its foot, where the thumb ran through the note (0.11.0's release check, P4).
 LaTeX that gives no answer in a minute (`snippets::LIMIT`) is stopped, with whatever it started,
 and the note says so where it waited for ever; what held it up may pass, as a first fetch of
 packages does, so each session asks once more. With no LaTeX installed the note says that. Line art becomes ink in the

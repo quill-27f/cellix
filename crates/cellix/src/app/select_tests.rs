@@ -663,11 +663,20 @@ fn the_selection_bar_stands_over_the_first_line_clear_of_everything() {
         assert!(air >= AIR, "{word}: {air} px from the buttons");
         (bar.0.y, y)
     };
-    // A word on the paragraph's last row: over the paragraph, not on its words.
+    // A word on the paragraph's last row: over the paragraph, not on its words, and in the
+    // middle of the gap there, since it's for neither what's over it nor the paragraph's
+    // first row (0.11.0's release check, P1).
     let (bar, line) = check(&mut app, "words over it", 5);
     let first = spot(&app, at(&app, "A first paragraph")).unwrap().1;
     assert!(line >= first + 2, "the word is on the third row");
     assert_eq!(bar, first - 1, "in the row over the paragraph");
+    let air = air_about(&screen(&app), app.selection_bar().unwrap());
+    assert!(
+        (air.over - air.under).abs() <= 2.0,
+        "in the middle: {} px over, {} under",
+        air.over,
+        air.under
+    );
     // A cell of the table's second line: over the table, clear of its box.
     let (bar, _) = check(&mut app, "43", 2);
     let head = spot(&app, at(&app, "name")).unwrap().1;
@@ -761,7 +770,7 @@ fn the_selection_bar_stands_twelve_pixels_from_its_selection() {
         );
         let left = start_px(&app, from);
         assert!(
-            (air.left - left).abs() < CELL.0 as f32,
+            (air.left - left).abs() < 1.0,
             "{word}: at its start, {left} px, not {}",
             air.left
         );
@@ -798,7 +807,7 @@ fn the_selection_bar_stands_twelve_pixels_from_its_selection() {
     );
     let column = start_px(&app, at(&app, "Right-click"));
     assert!(
-        (air.left - column).abs() < CELL.0 as f32,
+        (air.left - column).abs() < 1.0,
         "on the text column, {column} px, not {}",
         air.left
     );
@@ -819,7 +828,7 @@ fn the_selection_bar_stands_twelve_pixels_from_its_selection() {
     assert!(near(air.over, 12.0), "{} px under it", air.over);
     let column = start_px(&app, at(&app, "The last paragraph"));
     assert!(
-        (air.left - column).abs() < CELL.0 as f32,
+        (air.left - column).abs() < 1.0,
         "on the text column, {column} px, not {}",
         air.left
     );

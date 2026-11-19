@@ -13,8 +13,9 @@ use crate::theme::Theme;
 /// Space between pages, and around them, in rows and columns.
 const GAP: f32 = 0.6;
 const SIDE: f32 = 1.0;
-/// Pixels a page or picture keeps from the pane's sides however far it's zoomed.
-const SIDE_AIR: f32 = 16.0;
+/// Pixels a page or picture keeps from the sheet's lines however far it's zoomed: 16 px of air
+/// past a line 2 px wide.
+const SIDE_AIR: f32 = 18.0;
 
 /// How much one press of the zoom buttons changes the size.
 const ZOOM_STEP: f32 = 0.25;
