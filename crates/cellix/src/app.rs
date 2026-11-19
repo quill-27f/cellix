@@ -1607,6 +1607,10 @@ pub struct App {
     pointed_change: Option<usize>,
     /// The order the Comments pane lists them in.
     comment_sort: threads::Sort,
+    /// The user's own settings file, where an order picked for comments is kept for every
+    /// session on the machine, and read again as this one comes back to it. None in tests,
+    /// unless one gives it a file of its own.
+    settings_file: Option<PathBuf>,
     /// The emoji put in comments, the last first, so the ones reached for stand ready.
     emoji_used: Vec<&'static str>,
     /// The pictures the comments in view name, read small to stand on their cards, by the
@@ -1818,7 +1822,14 @@ impl App {
             lit_thread: None,
             lit_range: None,
             pointed_change: None,
-            comment_sort: threads::Sort::Document,
+            comment_sort: (settings.comment_sort.as_deref())
+                .and_then(threads::Sort::named)
+                .unwrap_or_default(),
+            settings_file: if cfg!(test) {
+                None
+            } else {
+                Settings::user_file()
+            },
             emoji_used: Vec::new(),
             looked_at: Vec::new(),
             commands_used: Vec::new(),
@@ -8889,6 +8900,7 @@ impl App {
                 self.dock.close_view(Front::Comments);
             }
             Command::ShowComments => {
+                self.follow_comment_sort();
                 self.dock.open = true;
                 self.dock.show_comments();
                 self.dock.focused = false;
@@ -12164,11 +12176,33 @@ impl App {
         self.show_menu(at, items);
     }
 
+    /// The order comments are listed in as the settings have it now: another Cellix on the
+    /// machine may have picked one since this one read them. Read again as the order's menu
+    /// opens, as the list is shown and as the terminal comes back to this window; a setting
+    /// that names none leaves the order as it is.
+    fn follow_comment_sort(&mut self) {
+        let settings = Settings::load_with(self.settings_file.as_deref(), self.workspace.root());
+        let named = settings
+            .comment_sort
+            .as_deref()
+            .and_then(threads::Sort::named);
+        if let Some(sort) = named.filter(|sort| *sort != self.comment_sort) {
+            self.comment_sort = sort;
+            self.dock.tops.set(Front::Comments, 0);
+        }
+    }
+
+    /// The terminal has given this window the keys again.
+    pub fn window_returned(&mut self) {
+        self.follow_comment_sort();
+    }
+
     /// The orders the Comments pane can list in, as a menu dropped from the order's button,
     /// the one in use marked: as every menu dropped from a button, on its left edge and
     /// `LINE_AIR` under its foot. It opened 38 px under it and 10 px along, a step lighter
     /// than every other menu. With the button out of view, it opens at `at`.
     fn show_sort_menu(&mut self, at: (u16, u16)) {
+        self.follow_comment_sort();
         // The check in a column of its own, as an icon is, so every order's words start in
         // one place: written into the words, it pushed the one in use 8 px along.
         let colour = self.theme.text.fg;
@@ -16246,6 +16280,10 @@ impl App {
             MenuAction::Transcript(index) => self.open_transcript(Some(index)),
             MenuAction::SortComments(sort) => {
                 self.comment_sort = sort;
+                // For every Cellix on the machine: the user's file, not the workspace's.
+                if let Some(file) = &self.settings_file {
+                    let _ = Settings::store_in(file, "comment_sort", json!(sort.name()));
+                }
                 self.dock.tops.set(Front::Comments, 0);
                 if let Some(id) = self.lit_thread {
                     self.show_lit_comment(id);
@@ -30284,6 +30322,73 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     fn select_word(app: &mut App, word: &str) {
         let (x, y) = find(&screen(app), word);
         double_click(app, x + 1, y);
+    }
+
+    /// An order picked for the Comments pane is kept in the user's own settings file, for every
+    /// Cellix on the machine, and read by one as it starts: it was this session's only (the
+    /// user: "when I choose an order in comments - it should be persistent for all cellix
+    /// sessions on the machine"). One that names no order leaves the document's.
+    #[test]
+    fn a_comment_order_picked_is_kept_for_every_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join(".config/cellix/settings.json");
+        let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+        app.settings_file = Some(file.clone());
+        assert_eq!(app.comment_sort, threads::Sort::Document);
+        app.menu_action(MenuAction::SortComments(threads::Sort::Newest));
+        let saved: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(saved["comment_sort"], "newest", "in the user's own file");
+        assert!(
+            !dir.path().join(".cellix/settings.json").exists(),
+            "not the workspace's"
+        );
+        // Another Cellix, started after it, reads the user's file as it starts. (A test's App
+        // reads nobody's own file as it starts, so it's given this one and reads it as a
+        // started one does when it comes back to the terminal.)
+        let mut next = App::new(dir.path().to_path_buf(), (150, 40));
+        next.settings_file = Some(file.clone());
+        next.window_returned();
+        assert_eq!(next.comment_sort, threads::Sort::Newest);
+        // As it starts, a workspace's own settings are read for it too, and override.
+        let other = tempfile::tempdir().unwrap();
+        fs::create_dir_all(other.path().join(".cellix")).unwrap();
+        let own = other.path().join(".cellix/settings.json");
+        fs::write(&own, r#"{"comment_sort":"oldest"}"#).unwrap();
+        let started = App::new(other.path().to_path_buf(), (150, 40));
+        assert_eq!(started.comment_sort, threads::Sort::Oldest);
+        fs::write(&own, r#"{"comment_sort":"sideways"}"#).unwrap();
+        let started = App::new(other.path().to_path_buf(), (150, 40));
+        assert_eq!(
+            started.comment_sort,
+            threads::Sort::Document,
+            "an unknown order"
+        );
+    }
+
+    /// A Cellix already running follows an order another picked as its menu of orders opens,
+    /// with the one in use marked.
+    #[test]
+    fn a_running_session_follows_an_order_picked_in_another() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join(".config/cellix/settings.json");
+        let mut one = App::new(dir.path().to_path_buf(), (150, 40));
+        let mut two = App::new(dir.path().to_path_buf(), (150, 40));
+        one.settings_file = Some(file.clone());
+        two.settings_file = Some(file.clone());
+        one.menu_action(MenuAction::SortComments(threads::Sort::Oldest));
+        assert_eq!(two.comment_sort, threads::Sort::Document, "until it looks");
+        two.show_sort_menu((10, 5));
+        assert_eq!(two.comment_sort, threads::Sort::Oldest);
+        let text = screen(&two).text();
+        assert!(text.contains("Oldest first"), "{text}");
+        // As the Comments list is shown, too.
+        one.menu_action(MenuAction::SortComments(threads::Sort::Newest));
+        two.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        two.run(Command::ShowComments);
+        assert_eq!(two.comment_sort, threads::Sort::Newest);
     }
 
     #[test]

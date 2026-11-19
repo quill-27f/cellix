@@ -1062,6 +1062,20 @@ impl Sort {
             Sort::Oldest => "Oldest first",
         }
     }
+
+    /// How it's written in settings, `comment_sort`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Sort::Document => "document",
+            Sort::Newest => "newest",
+            Sort::Oldest => "oldest",
+        }
+    }
+
+    /// The order a setting names, if it names one.
+    pub fn named(name: &str) -> Option<Sort> {
+        Self::ALL.into_iter().find(|sort| sort.name() == name)
+    }
 }
 
 /// How a comment no agent has yet reaches one, which each waiting card says.

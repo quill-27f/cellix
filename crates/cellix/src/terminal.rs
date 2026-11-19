@@ -1512,6 +1512,12 @@ pub fn run(options: Options) -> io::Result<()> {
                         workspace.app.window_left();
                     }
                 }
+                // What another Cellix may have changed while this one was away.
+                if came_back {
+                    for workspace in &mut spaces.list {
+                        workspace.app.window_returned();
+                    }
+                }
                 // The terminal may have turned dark or light while Cellix was away, as a Mac
                 // does at sunset, or a reattach finds it changed: its colour is asked again.
                 if came_back

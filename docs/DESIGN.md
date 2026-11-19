@@ -523,6 +523,12 @@ clipboard the way every copy goes (OSC 52), and Save Review as Markdown… asks 
 project, offering `review.md` or the next one free (`review-2.md`), asks before it replaces a
 file that's there, writes it and opens it as a page. A right click on the Comments tab has both:
 the pane has no header menu of its own, and the list its order button drops is only orders. The
+order picked there (Document order, Newest first, Oldest first) is kept as `comment_sort` in the
+user's own `~/.config/cellix/settings.json`, so it holds for every Cellix on the machine, and a
+workspace's `.cellix/settings.json` can still set its own. A Cellix already running reads it again
+as the menu opens, as the list is shown and as the terminal comes back to it; there's no watch on
+the file. Until 19 November 2026 it was the session's only (the user: "it should be persistent for
+all cellix sessions on the machine"). Tests read nobody's own settings file. The
 review is every comment the reviewer kept, open and resolved: a file at a time by name, as the
 pane lists them with no file in view, a terminal's output last; in each file a kind at a time,
 in the strip's order, those with no kind last under Other; and down the document within a kind.

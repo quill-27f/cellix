@@ -65,6 +65,9 @@ pub struct Settings {
     pub auto_save: Option<String>,
     /// How long after the last change `after_delay` saves, in milliseconds.
     pub auto_save_delay: Option<u64>,
+    /// The order the Comments pane lists in: `document` (the default), `newest` or `oldest`.
+    /// Picked from the pane's menu, it's kept here for every session on the machine.
+    pub comment_sort: Option<String>,
 }
 
 /// The row heights `row_height` can name, with how many of the terminal's lines each is
@@ -116,6 +119,7 @@ impl Settings {
         self.format_on_save = other.format_on_save.or(self.format_on_save.take());
         self.auto_save = other.auto_save.or(self.auto_save.take());
         self.auto_save_delay = other.auto_save_delay.or(self.auto_save_delay.take());
+        self.comment_sort = other.comment_sort.or(self.comment_sort.take());
     }
 
     /// The words the user has said are right.
@@ -128,7 +132,7 @@ impl Settings {
     }
 
     /// The user's own settings file.
-    fn user_file() -> Option<PathBuf> {
+    pub(crate) fn user_file() -> Option<PathBuf> {
         let home = PathBuf::from(std::env::var_os("HOME")?);
         Some(home.join(".config/cellix/settings.json"))
     }
@@ -143,15 +147,27 @@ impl Settings {
         Self::store_in(&file, key, value)
     }
 
-    fn store_in(file: &Path, key: &str, value: serde_json::Value) -> std::io::Result<()> {
+    pub(crate) fn store_in(
+        file: &Path,
+        key: &str,
+        value: serde_json::Value,
+    ) -> std::io::Result<()> {
         let mut settings = crate::integrations::read_settings(file)?;
         settings.insert(key.to_string(), value);
         crate::integrations::write_settings(file, &settings)
     }
 
     pub fn load(root: &Path) -> Self {
+        // Tests read nobody's own settings: an order or a keymap picked on the machine would
+        // change what they see.
+        let user = if cfg!(test) { None } else { Self::user_file() };
+        Self::load_with(user.as_deref(), root)
+    }
+
+    /// The same, with the user's own file at `user`, if there's one.
+    pub(crate) fn load_with(user: Option<&Path>, root: &Path) -> Self {
         let mut settings = Self::default();
-        if let Some(found) = Self::user_file().as_deref().and_then(read) {
+        if let Some(found) = user.and_then(read) {
             settings.merge(found);
         }
         if let Some(found) = read(&root.join(".cellix/settings.json")) {
@@ -395,5 +411,22 @@ mod tests {
         let saved = read(&file).unwrap();
         assert_eq!(saved.theme.as_deref(), Some("light"));
         assert_eq!(saved.keymap.as_deref(), Some("vim"));
+    }
+
+    /// The comment order is read from the user's file, and a workspace's own file overrides
+    /// it, as every other key.
+    #[test]
+    fn a_workspaces_comment_order_overrides_the_users() {
+        let home = tempfile::tempdir().unwrap();
+        let user = home.path().join("settings.json");
+        fs::write(&user, r#"{"comment_sort":"newest"}"#).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let read = Settings::load_with(Some(&user), root.path());
+        assert_eq!(read.comment_sort.as_deref(), Some("newest"));
+        fs::create_dir_all(root.path().join(".cellix")).unwrap();
+        let own = r#"{"comment_sort":"oldest"}"#;
+        fs::write(root.path().join(".cellix/settings.json"), own).unwrap();
+        let read = Settings::load_with(Some(&user), root.path());
+        assert_eq!(read.comment_sort.as_deref(), Some("oldest"));
     }
 }

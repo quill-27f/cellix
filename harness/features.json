@@ -6921,5 +6921,12 @@
     "title": "A first tab cut to its mark takes the room to stand in the middle, its chip 8 px from the sheet's line",
     "test": "a_first_tab_cut_to_its_mark_stands_in_the_middle_of_its_room",
     "passes": true
+  },
+  {
+    "id": "comment-order-kept",
+    "milestone": 15,
+    "title": "An order picked for the Comments pane is kept for every Cellix on the machine, and followed by one already running",
+    "test": "a_comment_order_picked_is_kept_for_every_session",
+    "passes": true
   }
 ]

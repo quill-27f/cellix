@@ -330,8 +330,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let heard = dir.join(format!("{name}.txt"));
         let fake = dir.join(name);
+        // Written whole and then moved into place: `printf` may write a line at a time, and
+        // a look between them read "started" alone, which failed a test under load.
         let script = format!(
-            "#!/bin/sh\nprintf '%s\\n' started \"$@\" > '{}'\nsleep 9\n",
+            "#!/bin/sh\nprintf '%s\\n' started \"$@\" > '{0}.part'\nmv '{0}.part' '{0}'\nsleep 9\n",
             heard.display()
         );
         fs::write(&fake, script).unwrap();
