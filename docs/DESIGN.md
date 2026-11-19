@@ -675,7 +675,7 @@ offered for a name (the first on the selection's chip, with Tab named at the row
 that two buttons: the one that sends it, filled and named for what sending does (Comment, Reply,
 Save, Ask Agent), and Cancel. They do what Enter and Esc do. While a comment is answered or
 changed they stand in place of its own buttons, since one thing is being done to it. The filled
-button is the pane's second with Check My Review; what's being written is what's under way.
+button is the pane's one: what's being written is what's under way.
 The list's head, what's yours and what's suggested, Check My Review, the kinds and the order,
 stands on the cards' edges: from where a card starts to where it ends, where there are pictures
 (it stood 8 px inside them on the left and 17 on the right). An agent's answer stands on the
@@ -811,7 +811,7 @@ menu and the palette, where they still are, with no key: the user asked for them
 
 A document with suggestions opens the Comments pane's list with them, as Google Docs and Overleaf
 keep suggestions with comments: "3 suggestions", or "Suggestion 2 of 3" while the caret is in the
-second, then Accept All, Reject All and Next, quiet as every button there but Check My Review, on a
+second, then Accept All, Reject All and Next, quiet as every button there is, on a
 row of their own under the count where the pane is too narrow for one. Next goes to the next one
 round the document and leaves the keyboard in the file, where the chips then stand by it. The row
 is the document's in view, so the list of every file's comments has none. The suggestions are found
@@ -826,7 +826,9 @@ words are (below). Where the three don't fit a card's row they flow left to righ
 a row as fit: Accept Rewrite kept alone on a narrow card's first row had 400 px free beside it.
 The rewrite stands in a box on the card's columns, 16 px round its words and 16 px over its three
 buttons. Accept Rewrite is the card's one primary, filled, the other two quiet: quiet beside a
-blue Check My Review, it read as one choice among equals (0.11.0's release review). Its box
+blue Check My Review, it read as one choice among equals (0.11.0's release review). Check My
+Review is quiet too, with its agent's icon in its words' colour, so one button in view is filled
+(0.11.0's release check, P4: both were blue). Its box
 had its words 10 px from its edge and stood 10 px over its buttons, and the two rows of buttons
 under it were 23 px apart where a card's are 11. A paper's suggestion whose words run onto another
 line shows on its page as one, as a Markdown one does (`Spanning`), where a line's own command left

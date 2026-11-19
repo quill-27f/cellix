@@ -3163,12 +3163,16 @@ pub fn draw(
                 let from = grid.painted_so_far();
                 let (cells, x) = check_button(area, view, measure);
                 // Nothing is painted under the pane, so the button's corners need a ground.
-                let ground = Bounds::cells(x as f32, y as f32, cells.chars().count() as f32, 1.0);
+                let width = cells.chars().count() as u16;
+                let ground = Bounds::cells(x as f32, y as f32, f32::from(width), 1.0);
                 grid.panel(ground, 0, Some(body.bg), None);
-                let fill = theme.button;
+                // Quiet, as every button on the pane is: filled, it was a second blue button
+                // in view with a rewrite's Accept Rewrite, the one a card offers first.
+                let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                let fill = theme.secondary(body.bg, on_it);
                 let style = Style {
                     bg: fill,
-                    fg: theme.button_text,
+                    fg: theme.text.fg,
                     ..body
                 };
                 if measure.in_cells() {
@@ -3188,7 +3192,7 @@ pub fn draw(
                     let words = measure.width(CHECK, font);
                     let whole = cells.chars().count() as f32;
                     let start = x as f32 + (whole - words - CHECK_ICON as f32) / 2.0;
-                    grid.glyph(start - 0.2, y, Icon::Agents, theme.button_text, " ", style);
+                    grid.glyph(start - 0.2, y, Icon::Agents, theme.text.fg, " ", style);
                     let at = start + CHECK_ICON as f32;
                     let text = Style {
                         painted: true,
@@ -3248,8 +3252,8 @@ pub fn draw(
                 };
                 let from = grid.painted_so_far();
                 let alone = matches!(line, Line::Settle);
-                // Quiet, as every button on the pane is but Check My Review, and a control's
-                // height in its row, as Check My Review is.
+                // Quiet, as every button on the pane is, and a control's height in its row, as
+                // Check My Review is.
                 for (label, cells, x) in placed {
                     let width = cells.chars().count() as u16;
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
@@ -3272,7 +3276,7 @@ pub fn draw(
                 }
             }
             Line::Deliver(count) => {
-                // Quiet: Check My Review is the pane's filled button. As high in its row as
+                // Quiet, as Check My Review over it is. As high in its row as
                 // that one is in its own, so the pills under it keep the same air.
                 let from = grid.painted_so_far();
                 let (cells, x) = deliver_button(area, (*count, shown_agent), view, measure);
@@ -3350,7 +3354,8 @@ pub fn draw(
                     let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
                     // Accept Rewrite is the card's one primary, filled, as the answer a dialog
                     // offers first is; the other two are quiet. All three quiet, Accept Rewrite
-                    // read as one choice among equals under a filled Check My Review.
+                    // read as one choice among equals under a filled Check My Review, which is
+                    // quiet now too: one filled button in view.
                     let (fill, fg) = if label == ACCEPT_REWRITE {
                         let filled = if on_it {
                             theme.quiet_button(theme.button)
@@ -3405,9 +3410,8 @@ pub fn draw(
                 }
             }
             Line::Buttons(id) => {
-                // Check My Review is the panel's one filled button; these are all quiet, on
-                // the card's own colour, which a lit card's tint is: Edit and Delete stood on
-                // the unlit card's there, two dark slabs.
+                // These are all quiet, on the card's own colour, which a lit card's tint is:
+                // Edit and Delete stood on the unlit card's there, two dark slabs.
                 let card = card_fill(*id);
                 let (placed, at_end) = buttons(area, view, measure);
                 for (label, cells, x) in placed {

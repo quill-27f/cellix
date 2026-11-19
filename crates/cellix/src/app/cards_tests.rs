@@ -1155,6 +1155,64 @@ fn a_rewrite_stands_in_a_box_with_room_round_it() {
     assert_eq!(filled.count(), 1, "one filled button on the card");
 }
 
+/// With a rewrite to decide, one button in view is filled: Accept Rewrite. Check My Review at
+/// the head of the list is quiet, as the pane's other buttons are, with its agent's icon kept
+/// and in its words' colour: both were blue (0.11.0's release check, P4).
+#[test]
+fn one_button_in_view_is_filled_with_a_rewrite_to_decide() {
+    let (_dir, mut app) = page("The model improves on the baseline.\n");
+    comment(&mut app, "improves", "By how much?");
+    let id = app.threads[0].id;
+    answer(&mut app, id, "Rewrite: improves by 3.6 points");
+    show_comments(&mut app);
+    app.lit_thread = None;
+    let grid = painted(&mut app);
+    // Buttons' chips: the accent's lines under the tabs in front are thinner than half a row.
+    let chip = |b: &Bounds| b.h > UNIT / 2 && b.h < UNIT && b.w > UNIT;
+    let filled: Vec<Bounds> = grid
+        .paint
+        .iter()
+        .filter_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(f),
+                ..
+            } if *f == app.theme.button && chip(bounds) => Some(*bounds),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(filled.len(), 1, "one filled button: {filled:?}");
+    let (accept_x, accept_y, _) = run(&grid, "Accept Rewrite");
+    let on_it = |b: &Bounds, x: f32, y: i32| {
+        px(b.x) <= x && x < px(b.x + b.w) && b.y <= y + UNIT / 2 && y + UNIT / 2 < b.y + b.h
+    };
+    assert!(
+        on_it(&filled[0], accept_x, accept_y),
+        "Accept Rewrite is the filled one"
+    );
+    let (check_x, check_y, _) = run(&grid, "Check My Review");
+    let quiet = app.theme.secondary(app.theme.sidebar.bg, false);
+    let quiet_chip = grid.paint.iter().any(|p| {
+        matches!(p, Paint::Panel { bounds, fill: Some(f), .. }
+            if *f == quiet && on_it(bounds, check_x, check_y))
+    });
+    assert!(quiet_chip, "Check My Review's chip is the quiet fill");
+    assert_eq!(painted_in(&grid, "Check My Review"), app.theme.text.fg);
+    let icon = grid.paint.iter().find_map(|p| match p {
+        Paint::Icon {
+            icon: cellix_render::Icon::Agents,
+            color,
+            bounds,
+        } if (bounds.y - check_y).abs() < UNIT => Some(*color),
+        _ => None,
+    });
+    assert_eq!(
+        icon,
+        Some(app.theme.text.fg),
+        "its agent's icon, as its words"
+    );
+}
+
 /// On a narrow card the rewrite's buttons wrap inside the card, and Edit and Delete stand
 /// behind a "⋯" at the end of the comment's buttons, which opens them: Not This ran 13 px
 /// past the box and Edit and Delete took a third row.

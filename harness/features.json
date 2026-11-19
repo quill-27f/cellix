@@ -6977,5 +6977,12 @@
     "title": "What Cellix waits on and the file's details share the status bar by what they take as drawn",
     "test": "a_wait_leaves_the_files_details_the_room_they_have",
     "passes": true
+  },
+  {
+    "id": "check-my-review-quiet",
+    "milestone": 15,
+    "title": "Check My Review is quiet with its agent's icon, so one button in view is filled beside a rewrite's Accept Rewrite",
+    "test": "one_button_in_view_is_filled_with_a_rewrite_to_decide",
+    "passes": true
   }
 ]

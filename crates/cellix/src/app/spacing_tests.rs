@@ -287,23 +287,24 @@ fn a_comments_card_is_as_far_from_both_sides_of_the_sheet() {
         .find(|(_, fill, ..)| *fill == Some(card))
         .expect("a card")
         .0;
+    // Both quiet: the order's chip the first on the left, Check My Review the last on the right.
     let quiet = app.theme.quiet_button(app.theme.sidebar.bg);
-    let order = panels(&grid)
+    let head: Vec<Bounds> = panels(&grid)
         .into_iter()
-        .find(|(b, fill, ..)| *fill == Some(quiet) && b.y < found.y && b.x + UNIT >= found.x)
-        .expect("the order's chip")
-        .0;
+        .filter(|(b, fill, ..)| *fill == Some(quiet) && b.y < found.y && b.x + UNIT >= found.x)
+        .map(|(b, ..)| b)
+        .collect();
+    let order = *head.iter().min_by_key(|b| b.x).expect("the order's chip");
     assert!(
         (px(order.x) - px(found.x)).abs() <= 1.0,
         "the order at {} px, the card at {}",
         px(order.x),
         px(found.x)
     );
-    let check = panels(&grid)
-        .into_iter()
-        .find(|(b, fill, ..)| *fill == Some(app.theme.button) && b.y < found.y && b.x >= found.x)
-        .expect("Check My Review")
-        .0;
+    let check = *head
+        .iter()
+        .max_by_key(|b| b.x + b.w)
+        .expect("Check My Review");
     let (end, card_end) = (px(check.x + check.w), px(found.x + found.w));
     assert!(
         (end - card_end).abs() <= 1.0,
