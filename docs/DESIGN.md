@@ -1032,10 +1032,17 @@ the status bar's. What the status bar painted is raised with the bar's own, so t
 level and keep their air at the window's edge.
 
 The bar has a row of its own under the status bar, as it had until then, where fewer than 72
-columns would be left between the workspaces and the machine's name: a narrow window, or
-many workspaces. That's what the status bar gives a message, 64 columns, and a branch before
-it; with less, a message was cut short (the real-binary tests caught one). There its button
-says New Workspace. Without pictures there's no chip, and the workspace in front
+columns would be left between the workspaces and the machine's name, Resume and the bell: a
+narrow window, or many workspaces. That's what the status bar gives a message, 64 columns,
+and a branch before it; with less, a message was cut short (the real-binary tests caught
+one). It has a row of its own too where what's left wouldn't hold the status bar's words at
+their fullest, measured as they're drawn: a branch, a language server's wait and a file's
+details (`App::status_full_room`). The status bar's words come before the workspaces'. Those
+are fixed words, not what it says now, so the foot keeps its rows while a server starts or
+stops fetching. With the 72 columns alone, and Resume and the bell not counted, the tiles had
+the row once they were narrower, when agents outside Cellix stopped giving them words, and
+"Spaces: 4" went while rust-analyzer fetched (the review of `next` before 0.11.1). There its
+button says New Workspace. Without pictures there's no chip, and the workspace in front
 has the brighter name.
 
 A workspace's tile shows what its agents are doing with the marks their tabs have: the spinner
@@ -1053,7 +1060,12 @@ mark its name has the chip's padding before it. The status bar's "An agent needs
 same dot at the same size, where a dot half that size stood. What it says is the most urgent
 thing any of its tabs says, and the badge on the Agents icon and the status bar count the same
 way: a tab asking stood beside a tile that said "done just now" once another agent's news from
-the same process had taken the asking one's place among the agents (`App::needing_you`). The
+the same process had taken the asking one's place among the agents (`App::needing_you`). What
+waits in a workspace's Inbox and no tab's mark shows, a failed test run or an agent's answer to
+a comment, gives its tile the needs-you dot too, so the bar names where the next step is: a
+tile had no mark while "1 of 14 tests failed" waited in its Inbox. Only agents the Agents list
+shows count anywhere, the tiles, the Inbox, the badge and the bell alike: one outside Cellix
+has nothing here a press could act on. The
 first screen, the workspaces to pick from, shows the same marks, a spinner where it had a
 still dot, and Open and Quit are buttons, the main one filled and Quit quiet, where they were
 words.

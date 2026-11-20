@@ -419,6 +419,19 @@ const MORE_FONT: Font = Font {
 const DOCK_WIDTH: u16 = 80;
 /// Columns the status bar gives a branch's name, so a long one can't crowd the message.
 const STATUS_BRANCH_WIDTH: u16 = 28;
+/// The size the status bar's words are set at.
+const STATUS_FONT: Font = Font {
+    mono: false,
+    bold: false,
+    italic: false,
+    size: 90,
+};
+/// What the status bar says at its fullest, for the room it needs on a row it shares with the
+/// workspaces: a language server's wait and a file's details. Fixed words rather than what it
+/// says now, so the foot keeps its rows while a server starts or stops fetching and the cursor
+/// moves.
+const FULL_WAIT: &str = "rust-analyzer: fetching";
+const FULL_DETAILS: &str = "Ln 100, Col 10   1000 lines   TypeScript   UTF-8   Spaces: 4";
 const WHEEL_LINES: isize = 3;
 /// Wheel events closer together than this are a trackpad's stream.
 /// How close together presses must be to count as one double or triple click.
@@ -10675,7 +10688,13 @@ impl App {
     pub fn tile_state(&self) -> TileState {
         use crate::dock::TabMark;
         let stopped = self.stopped_count();
-        if self.needing_you() > 0 {
+        // What waits in the Inbox here and no tab's mark shows is on the tile too, so the bar
+        // names where the next step is: a failed test run, or an agent's answer to a comment.
+        // api-server's tile had no mark while "1 of 14 tests failed" waited (the review of
+        // `next` before 0.11.1, scene 140).
+        let unmarked = (self.inbox.items.iter())
+            .any(|item| matches!(item.kind, Waits::TestFailed | Waits::Reply));
+        if self.needing_you() > 0 || unmarked {
             return TileState::NeedsYou;
         }
         if stopped > 0 {
@@ -14231,6 +14250,19 @@ impl App {
     #[cfg(test)]
     pub fn showing_agents_for_test(&self) -> bool {
         self.dock.showing(Front::Agents)
+    }
+
+    /// Has a language server wait as rust-analyzer does while it fetches, for tests outside
+    /// this module.
+    #[cfg(test)]
+    pub fn fetching_for_test(&mut self) {
+        self.source.busy = Some("rust-analyzer: fetching…");
+    }
+
+    /// Has nothing waited on, for tests outside this module.
+    #[cfg(test)]
+    pub fn source_settled_for_test(&mut self) {
+        self.source.busy = None;
     }
 
     /// The tab in front in the side pane, when one is, for tests outside this module.
@@ -20623,21 +20655,8 @@ impl App {
         let end = bell
             .map_or(last, |(at, _)| at.saturating_sub(1))
             .saturating_sub(self.status_room.get().1);
-        let status_font = Font {
-            size: 90,
-            ..Font::default()
-        };
-        // How many columns the bar's words take as they're drawn: painted, their letters'
-        // width, a good deal short of a column each; on cells, a column each. Counted a column
-        // a letter, "rust-analyzer: fetching" left "Spaces: 4" no room with 600 px of the bar
-        // free (0.11.0's release check, P9 and R6).
-        let span = |words: &str| -> u16 {
-            if self.measure.in_cells() {
-                words.chars().count() as u16
-            } else {
-                self.measure.width(words, status_font).ceil() as u16
-            }
-        };
+        let status_font = STATUS_FONT;
+        let span = |words: &str| self.status_span(words);
         // What Cellix itself waits on stands before the message, and gives way to one that
         // wouldn't fit beside it.
         let left_wide = usize::from(span(left)).min(kept) as u16;
@@ -20962,6 +20981,30 @@ impl App {
         let name = self.branch.as_ref()?.chars().count() as u16;
         let at = self.status_start();
         Some((at, at + 2 + name.min(STATUS_BRANCH_WIDTH) + 1))
+    }
+
+    /// How many columns the status bar's `words` take as they're drawn: painted, their
+    /// letters' width, a good deal short of a column each; on cells, a column each. Counted a
+    /// column a letter, "rust-analyzer: fetching" left "Spaces: 4" no room with 600 px of the
+    /// bar free (0.11.0's release check, P9 and R6).
+    pub(crate) fn status_span(&self, words: &str) -> u16 {
+        if self.measure.in_cells() {
+            words.chars().count() as u16
+        } else {
+            self.measure.width(words, STATUS_FONT).ceil() as u16
+        }
+    }
+
+    /// The columns the status bar needs on a row it shares with the workspaces, measured as
+    /// it lays its words out: a column in, a branch of four letters with its mark and the
+    /// column after it, a language server's wait with its spinner and gaps, the three
+    /// columns it keeps, a file's details at their fullest, and the bell with a count of one
+    /// figure after them. The machine's name and the button that quits are the bar's to count.
+    pub(crate) fn status_full_room(&self) -> u16 {
+        let branch = 1 + 2 + 4 + 1 + 1;
+        let wait = self.status_span(FULL_WAIT) + WAIT_ROOM;
+        let bell = 1 + BELL_WIDTH + 2;
+        branch + wait + 3 + self.status_span(FULL_DETAILS) + bell
     }
 
     /// Where the status bar's own words start: a column in, or after the workspaces where
@@ -24904,14 +24947,21 @@ mod tests {
         let row = settings_row(&app, "Markdown");
         assert!(row.contains("Found"), "{row}");
         let deadline = std::time::Instant::now() + BACKGROUND;
-        while !started.exists() {
+        // Its whole line, not only the file: the shell makes the file before it writes to it,
+        // and on a loaded machine the test read it empty in between.
+        let said = || {
+            fs::read_to_string(&started)
+                .ok()
+                .filter(|s| s.ends_with('\n'))
+        };
+        while said().is_none() {
             assert!(
                 std::time::Instant::now() < deadline,
                 "marksman never started"
             );
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        let from = fs::read_to_string(&started).unwrap();
+        let from = said().unwrap();
         assert_eq!(
             from.trim(),
             home.join(".local/bin/marksman").display().to_string()
@@ -27952,9 +28002,13 @@ mod tests {
         let reply = app.inbox.items.last().unwrap();
         assert_eq!(reply.title, "Claude Code answered your comment");
         assert!(reply.detail.contains("note.md"), "{}", reply.detail);
+        // What waits in the Inbox is on the workspace's tile too, while it waits.
+        let marked = |app: &App| matches!(app.tile_state(), TileState::NeedsYou);
+        assert!(marked(&app), "the tile names where the answer is");
         app.thread_hit(ThreadHit::Resolve(id));
         app.poll();
         assert!(kinds(&app).is_empty(), "{:?}", kinds(&app));
+        assert!(!marked(&app));
 
         // A failed run waits until one passes.
         let run = |passed| {
@@ -27968,8 +28022,10 @@ mod tests {
         assert_eq!(kinds(&app), vec![Kind::TestFailed]);
         assert_eq!(app.inbox.items[0].title, "cargo test failed");
         assert_eq!(app.inbox.items[0].detail, "cargo test · refunds");
+        assert!(marked(&app), "the tile names where the failures are");
         app.serve(run(true));
         assert!(kinds(&app).is_empty());
+        assert!(!marked(&app));
 
         // Asking, then finishing, then working again, from an agent with a tab here: one
         // outside Cellix isn't noted.

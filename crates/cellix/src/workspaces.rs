@@ -45,7 +45,8 @@ const WORD_LIFT: f32 = 0.045;
 const CHIP_RADIUS: u8 = 26;
 /// Columns the status bar keeps for its own words where the workspaces lead its row: what
 /// it gives a message, and a branch before it. With fewer than that left between the
-/// workspaces and the machine's name, the bar has a row to itself under the status bar.
+/// workspaces and the machine's name, or fewer than its words take at their fullest
+/// (`App::status_full_room`), the bar has a row to itself under the status bar.
 const STATUS_ROOM: f32 = 72.0;
 /// Between the button that opens a workspace and what the status bar says after it, where
 /// the two share a row. A rule stands in the middle of it.
@@ -181,17 +182,26 @@ impl Workspaces {
 
     /// Whether there's one bar at the foot: the workspaces lead the status bar's own row, the
     /// branch and what was last done follow them, and the machine's name stands before the
-    /// bell. That's wherever both fit. A window too narrow, or with too many workspaces,
-    /// keeps the bar a row of its own under the status bar.
+    /// bell. That's wherever both fit: the status bar keeps a message's room, and the room its
+    /// words take at their fullest, a server's wait and a file's details, as they're drawn. A
+    /// window too narrow, or with too many workspaces, keeps the bar a row of its own under
+    /// the status bar. With the 72 columns alone, tiles narrower once agents outside Cellix
+    /// weren't counted gave the bar the row, and "Spaces: 4" went while a server fetched.
     fn one_bar(&self) -> bool {
         if !self.shows_bar() {
             return false;
         }
         let lead = self.spans().1 + self.new_width(false) + AFTER;
-        // The machine's name, and after the bell the button that quits.
+        // The machine's name and Resume, as `shared` takes them from the status bar, and
+        // after the bell the button that quits. Resume wasn't counted, and took the room the
+        // file's details had.
         let quit = f32::from(crate::app::quit_room(self.size));
-        let tail = self.text_width(&self.machine) + 2.0 + quit;
-        f32::from(self.size.0) - lead - tail >= STATUS_ROOM
+        let resume = self
+            .resume_label()
+            .map_or(0.0, |label| self.resume_width(&label) + 1.5);
+        let tail = self.text_width(&self.machine) + 2.0 + resume + quit;
+        let full = f32::from(self.app().status_full_room());
+        f32::from(self.size.0) - lead - tail >= STATUS_ROOM.max(full)
     }
 
     /// The columns of the status bar's row the bar has, where they share one: at its start,
@@ -287,14 +297,17 @@ impl Workspaces {
         std::mem::take(&mut self.switched)
     }
 
-    /// Gives every app the size it has now.
-    fn fit(&mut self) {
+    /// Gives every app the size it has now. Says whether any changed.
+    fn fit(&mut self) -> bool {
         let (width, height) = self.app_size();
+        let mut changed = false;
         for workspace in &mut self.list {
             if workspace.app.size() != (width, height) {
                 workspace.app.handle(Event::Resize(width, height));
+                changed = true;
             }
         }
+        changed
     }
 
     pub fn handle(&mut self, event: Event) {
@@ -413,6 +426,12 @@ impl Workspaces {
         let count = self.list.len();
         let active = self.active;
         self.settle();
+        // News changes what the tiles say, and with it whether the bar shares the status bar's
+        // row: fitted only on the next key or tick, a frame drew the tiles' own row over the
+        // status bar.
+        if !self.list.is_empty() {
+            changed |= self.fit();
+        }
         changed || count != self.list.len() || active != self.active
     }
 
@@ -1651,7 +1670,7 @@ mod tests {
         let mut spaces = spaces();
         spaces.open(first);
         spaces.open(second);
-        spaces.handle(Event::Resize(140, 30));
+        spaces.handle(Event::Resize(170, 30));
         assert!(spaces.one_bar());
         let (lead, tail) = spaces.shared();
         assert!(lead > 0 && tail > 0, "{lead} {tail}");
@@ -1716,6 +1735,69 @@ mod tests {
         assert_eq!(spaces.app().status_room.get(), (0, 0));
     }
 
+    /// The status bar's words come before the workspaces': wherever a language server's wait
+    /// and the file's details wouldn't all fit beside the tiles, the tiles take a row of their
+    /// own, where New Workspace has its words, and wherever they share the status bar's, none
+    /// of its words is left out. Narrower once agents outside Cellix weren't counted, the
+    /// tiles had the row by the 72 columns kept for a message, with Resume and the bell not
+    /// counted, and "Spaces: 4" went while rust-analyzer fetched (the review of `next` before
+    /// 0.11.1, finding 6). The rows are the same with the wait and without it.
+    #[test]
+    fn the_status_bars_words_come_before_the_workspaces_row() {
+        use cellix_render::{CellMeasure, FontMeasure, Paint, UNIT};
+        let (_dir, first, second) = projects();
+        fs::write(first.join("queue.rs"), "fn main() {\n    let x = 1;\n}\n").unwrap();
+        let mut spaces = spaces();
+        spaces.open(first.clone());
+        spaces.open(second);
+        spaces.active = 0;
+        spaces.app_mut().open(&first.join("queue.rs")).unwrap();
+        let painted: Rc<dyn Measure> = Rc::new(FontMeasure::new(17, 37));
+        let cells: Rc<dyn Measure> = Rc::new(CellMeasure);
+        for measure in [painted, cells] {
+            for workspace in &mut spaces.list {
+                workspace.app.set_measure(measure.clone());
+            }
+            let (mut shared, mut own) = (0, 0);
+            for width in (100..=240).step_by(4) {
+                spaces.handle(Event::Resize(width, 30));
+                spaces.app_mut().source_settled_for_test();
+                let quiet = spaces.one_bar();
+                spaces.app_mut().fetching_for_test();
+                let one = spaces.one_bar();
+                assert_eq!(one, quiet, "{width}: the rows change with the wait");
+                let grid = screen(&spaces);
+                // What's drawn on the foot's rows, painted or in cells.
+                let foot = if one { 29 } else { 28 };
+                let words: Vec<String> = if measure.in_cells() {
+                    vec![grid.row_text(foot), grid.row_text(29)]
+                } else {
+                    (grid.paint.iter())
+                        .filter_map(|paint| match paint {
+                            // Words on the foot are lifted or lowered within their rows.
+                            Paint::Text { y, text, .. }
+                                if *y >= i32::from(foot) * UNIT - UNIT / 2 =>
+                            {
+                                Some(text.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect()
+                };
+                let said = |what: &str| words.iter().any(|w| w.contains(what));
+                assert!(said("rust-analyzer: fetching"), "{width}: {words:?}");
+                assert!(said("Spaces: 4"), "{width}: one bar {one}: {words:?}");
+                if one {
+                    shared += 1;
+                } else {
+                    own += 1;
+                    assert!(said("New Workspace"), "{width}: {words:?}");
+                }
+            }
+            assert!(shared > 0 && own > 0, "both are seen: {shared} {own}");
+        }
+    }
+
     /// Where the bar has a row of its own under the status bar, the grid says its foot is two
     /// rows, so a backend with pixels left under them stands both evenly in what's there.
     /// Sharing the status bar's row it's one, and so is the first screen's.
@@ -1725,7 +1807,7 @@ mod tests {
         let mut spaces = spaces();
         spaces.open(first);
         spaces.open(second);
-        spaces.handle(Event::Resize(140, 30));
+        spaces.handle(Event::Resize(170, 30));
         assert!(spaces.one_bar());
         assert_eq!(screen(&spaces).foot, 1, "one bar is one row");
         spaces.handle(Event::Resize(90, 30));
@@ -1940,8 +2022,8 @@ mod tests {
         assert!(screen(&spaces).row_text(28).contains("Ctrl+P"));
         // A wider window has room for both in one row: the workspaces lead the status bar's,
         // their button its mark alone. Narrowed again, the bar has its own row back.
-        spaces.handle(Event::Resize(140, 30));
-        assert_eq!(spaces.app().size(), (140, 30));
+        spaces.handle(Event::Resize(170, 30));
+        assert_eq!(spaces.app().size(), (170, 30));
         let row = bar(&spaces);
         assert!(
             !row.contains("New Workspace") && row.contains(" + "),
@@ -2003,7 +2085,7 @@ mod tests {
             app: App::new(root, size),
             server: None,
         });
-        let mut spaces = Workspaces::new((140, 30), "ip-10-0-129-183".to_string(), start);
+        let mut spaces = Workspaces::new((160, 30), "ip-10-0-129-183".to_string(), start);
         spaces.open(root.clone());
         spaces.app_mut().open(&root.join("notes.txt")).unwrap();
         // Five letters longer than BibTeX's, for the count of problems the bar had there.
@@ -2025,7 +2107,7 @@ mod tests {
         let (_dir, first, _) = projects();
         let mut spaces = spaces();
         spaces.open(first);
-        spaces.handle(Event::Resize(140, 30));
+        spaces.handle(Event::Resize(170, 30));
         spaces.app_mut().set_branch("main");
         let row = i32::from(spaces.size().1 - 1) * UNIT;
         // Anything of the bar's starts after this, raised or not.
@@ -2315,7 +2397,7 @@ mod tests {
         let mut spaces = spaces();
         spaces.open(first);
         spaces.open(second);
-        spaces.handle(Event::Resize(140, 36));
+        spaces.handle(Event::Resize(170, 36));
         // The bell at the right end of the status bar opens it. Empty, it says what would
         // fill it, and what to do meanwhile.
         // The workspaces lead the status bar's row, and the bell still ends what it says,
@@ -2353,7 +2435,10 @@ mod tests {
         let grid = screen(&spaces);
         let text = grid.text();
         assert!(text.contains("Inbox 2"), "the tab counts them: {text}");
-        let bell = grid.row_text(status);
+        // Both tiles say they need you now, and they have a row of their own under the status
+        // bar's, which keeps the bell.
+        assert!(!spaces.one_bar());
+        let bell = grid.row_text(status - 1);
         let said = bell.trim_end().strip_suffix("Quit").unwrap_or(&bell);
         assert!(said.trim_end().ends_with("◬ 2"), "and the bell: {bell}");
         assert!(text.contains("2 waiting in 2 workspaces"), "{text}");

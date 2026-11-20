@@ -645,7 +645,14 @@ def workspaces(scratch):
     """Work left running in other projects, as the bar along the bottom shows it, and what
     stopped with the machine. Sessions need a host, whose socket needs a short path."""
     cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
-    space = {"env": {"XDG_CACHE_HOME": cache, "SHELL": "/bin/sh"}}
+    # Claude Code is a stand-in on PATH that says so and waits. Its news below comes through
+    # Cellix's real hook to its tab: an agent with no tab here isn't listed, counted or shown.
+    tools = f"{scratch}/space-bin"
+    os.makedirs(tools)
+    with open(f"{tools}/claude", "w") as f:
+        f.write("#!/bin/sh\nprintf 'claude (stand-in)\\n'\nexec sleep 600\n")
+    os.chmod(f"{tools}/claude", 0o755)
+    space = {"env": {"XDG_CACHE_HOME": cache, "SHELL": "/bin/sh", "PATH": f"{tools}:{os.environ['PATH']}"}}
     others = {}
     for name in ["api-server", "infra", "notes"]:
         others[name] = f"{scratch}/{name}"
@@ -653,23 +660,26 @@ def workspaces(scratch):
         with open(f"{others[name]}/README.md", "w") as f:
             f.write(f"# {name}\n")
     terminal = [["keys", CTRL("j")], ["wait", 1.0]]
+    claude = [*command("Open Claude Code", F1), ["until", "stand-in"], ["wait", 0.4]]
     # Notes had a terminal when the machine went down.
     shoot("w0-notes", [*terminal, ["keys", "echo building the index\r"], ["wait", 0.5]],
           cwd=others["notes"], **space)
     subprocess.run(["pkill", "-9", "-f", cache])
-    # api-server's terminal is busy; infra's is back at its prompt, its agent done.
-    shoot("w0-api-server", [*terminal, ["keys", "sleep 300\r"], ["wait", 0.5]],
+    # api-server's terminal is busy, beside its agent; infra's is back at its prompt, beside
+    # the agent that's about to finish its turn.
+    shoot("w0-api-server", [*terminal, ["keys", "sleep 300\r"], ["wait", 0.5], *claude],
           cwd=others["api-server"], **space)
-    shoot("w0-infra", [*terminal, ["keys", "echo deployed\r"], ["wait", 0.5]],
+    shoot("w0-infra", [*terminal, ["keys", "echo deployed\r"], ["wait", 0.5], *claude],
           cwd=others["infra"], **space)
 
     def hook(kind, root, **fields):
         stdin = json.dumps({"session_id": "s1", "cwd": root, **fields})
         return ["run", f"'{binary}' hook {kind}", stdin]
 
+    asking = hook("notify", others["api-server"], message="Claude Code needs your permission")
     told = [
         ["wait", 1.0],
-        hook("notify", others["api-server"], message="Claude Code needs your permission"),
+        asking,
         hook("stop", others["infra"]),
         ["wait", 0.6],
     ]
@@ -685,7 +695,9 @@ def workspaces(scratch):
     # What waits everywhere, in the side pane: an agent asking, a finished turn, a failed run.
     failed = hook("tool-failed", others["api-server"], tool_input={"command": "cargo test orders"},
                   tool_response={"stdout": "test refunds::rejects_twice ... FAILED\ntest result: FAILED. 13 passed; 1 failed"})
-    inbox = [*told, failed, ["wait", 0.6], *SHOW_INBOX, ["wait", 0.8]]
+    # The agent's run fails, and then it asks again: news of a tool it ran after asking says
+    # the ask was answered, so it asks last.
+    inbox = [*told, failed, ["wait", 0.3], asking, ["wait", 0.6], *SHOW_INBOX, ["wait", 0.8]]
     shoot("140-inbox", inbox, CODE_FILE, size="150x44", **space)
     shoot("141-inbox-hover", [*inbox, ["move", *ON("finished its turn")], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     # Find, after a press on the pane, looks through the list in front of it.
