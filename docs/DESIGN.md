@@ -977,7 +977,11 @@ a picture, and opens to its source with the picture under it while it's written,
 source's box as a drawing's note is: a formula's numerator touched the box (46). A pie's slices
 and swatches take colours 3:1 or more from the page in both themes, where the renderer's first was
 white on white (67), and the slices are drawn whole, as the swatches are: at the renderer's 0.7 to
-0.85 opacity no slice was its swatch's colour. They are drawn by
+0.85 opacity no slice was its swatch's colour. A state diagram's labelled edge to the state right under it goes straight
+down with its label beside it, 8 units clear of the line, in the middle of the gap: the renderer
+leaves that gap the label's height and routed the edge round its own label, so the arrowhead
+stood on the label's foot (66). Cellix lays a diagram out with the renderer and changes that
+much of its layout before it's drawn. They are drawn by
 pure Rust (`mermaid-rs-renderer`, `layout-rs`, `resvg`), so nothing needs a browser or Node, and
 the web page and PDF export carry them too. What only LaTeX can draw (TikZ, `tikzcd`, `forest`,
 `circuitikz`, `algorithm`) is built alone in the background with the paper's own engine and setup,

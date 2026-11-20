@@ -7,7 +7,9 @@ use std::sync::{Arc, Once, OnceLock};
 
 use layout::backends::svg::SVGWriter;
 use layout::gv::{DotParser, GraphBuilder};
-use mermaid_rs_renderer::{RenderOptions, Theme, render_with_options};
+use mermaid_rs_renderer::{
+    DiagramKind, Layout, RenderOptions, Theme, compute_layout, parse_mermaid_strict, render_svg,
+};
 use resvg::usvg;
 
 /// What a fenced block is drawn with.
@@ -149,6 +151,58 @@ const PIE_DARK: [&str; 12] = [
 ];
 
 fn mermaid(source: &str, dark: bool) -> Result<String, String> {
+    let options = mermaid_options(dark);
+    let layout = laid_out(source, &options)?;
+    Ok(render_svg(&layout, &options.theme, &options.layout))
+}
+
+/// A Mermaid diagram laid out as the renderer lays it, and then what Cellix changes of that.
+fn laid_out(source: &str, options: &RenderOptions) -> Result<Layout, String> {
+    let parsed = parse_mermaid_strict(source).map_err(|e| first_line(&e.to_string()))?;
+    let mut layout = compute_layout(&parsed.graph, &options.theme, &options.layout);
+    labels_beside_short_edges(&mut layout);
+    Ok(layout)
+}
+
+/// Units between an edge and a label stood beside it.
+const LABEL_BESIDE: f32 = 8.0;
+/// What the renderer draws a state diagram's edge label with: its words at 0.85 of the
+/// theme's size, and 3 units either side of them.
+const STATE_LABEL_SCALE: f32 = 0.85;
+const STATE_LABEL_PAD: f32 = 3.0;
+
+/// A state diagram's labelled edge to a state right under it: the renderer leaves the gap
+/// between them the label's height and routes the edge round its own label, out to the side
+/// and back, so its arrowhead stood on the label's foot ("approved", 66). Such an edge goes
+/// straight down, as Mermaid draws it, and its label stands beside it, in the middle of the
+/// gap, 8 units clear of the line. The picture is made wider where the label needs it.
+fn labels_beside_short_edges(layout: &mut Layout) {
+    if layout.kind != DiagramKind::State {
+        return;
+    }
+    let mut width = layout.width;
+    for edge in &mut layout.edges {
+        let (Some(label), Some((_, at))) = (&edge.label, edge.label_anchor) else {
+            continue;
+        };
+        let (Some(&(x0, y0)), Some(&(x1, y1))) = (edge.points.first(), edge.points.last()) else {
+            continue;
+        };
+        let down = (x0 - x1).abs() < 1.0 && y1 > y0;
+        let round = edge.points.iter().any(|&(x, _)| (x - x0).abs() >= 1.0);
+        if !down || !round || !(y0..y1).contains(&at) {
+            continue;
+        }
+        edge.points = vec![(x0, y0), (x1, y1)];
+        let half = label.width * STATE_LABEL_SCALE / 2.0 + STATE_LABEL_PAD;
+        let middle = x0 + LABEL_BESIDE + half;
+        edge.label_anchor = Some((middle, (y0 + y1) / 2.0));
+        width = width.max(middle + half + LABEL_BESIDE);
+    }
+    layout.width = width;
+}
+
+fn mermaid_options(dark: bool) -> RenderOptions {
     let mut theme = if dark { Theme::dark() } else { Theme::modern() };
     // The page shows through, in whichever theme it has.
     theme.background = "transparent".to_string();
@@ -163,11 +217,10 @@ fn mermaid(source: &str, dark: bool) -> Result<String, String> {
     // swatches beside their names, (91,131,221) for "Writing"'s (63,111,216), and nearer the
     // page (0.12.0's release review, finding 11).
     theme.pie_opacity = 1.0;
-    let options = RenderOptions {
+    RenderOptions {
         theme,
         ..RenderOptions::default()
-    };
-    render_with_options(source, options).map_err(|e| first_line(&e.to_string()))
+    }
 }
 
 fn graphviz(source: &str, dark: bool) -> Result<String, String> {
@@ -268,6 +321,63 @@ mod tests {
             let svg = svg(kind, source, false).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert!(inked(&rasterize(&svg, 1.0, 900).unwrap()) > 50, "{name}");
         }
+    }
+
+    /// The sample's state diagram (samples/writing.md, 66).
+    const STATES: &str = "stateDiagram-v2\n  [*] --> Draft\n  Draft --> Review\n  \
+                          Review --> Draft : changes wanted\n  Review --> [*] : approved\n";
+
+    /// A labelled edge to the state right under it goes straight down with its label beside
+    /// it, 8 units clear of the line, in the middle of the gap: the renderer routed it round
+    /// its own label and ended it under the label's foot, so its arrowhead stood on the
+    /// label's border ("approved", 66). An edge that goes round for its own sake is left be.
+    #[test]
+    fn a_labelled_edge_straight_down_has_its_label_beside_it() {
+        let labelled = |layout: &Layout, words: &str| {
+            let found = layout.edges.iter().find(|edge| {
+                edge.label
+                    .as_ref()
+                    .is_some_and(|label| label.lines.iter().any(|line| line == words))
+            });
+            found
+                .cloned()
+                .unwrap_or_else(|| panic!("no edge says {words}"))
+        };
+        let options = mermaid_options(false);
+        let parsed = parse_mermaid_strict(STATES).unwrap();
+        let routed = compute_layout(&parsed.graph, &options.theme, &options.layout);
+        assert!(
+            labelled(&routed, "approved").points.len() > 2,
+            "the renderer goes round the label: the case this is for"
+        );
+        let layout = laid_out(STATES, &options).unwrap();
+        let edge = labelled(&layout, "approved");
+        assert_eq!(edge.points.len(), 2, "{:?}", edge.points);
+        let ((x0, y0), (x1, y1)) = (edge.points[0], edge.points[1]);
+        assert!((x0 - x1).abs() < 1.0 && y1 > y0, "{:?}", edge.points);
+        // The label's box as the renderer draws it.
+        let label = edge.label.as_ref().unwrap();
+        let (middle, at) = edge.label_anchor.unwrap();
+        let half = label.width * STATE_LABEL_SCALE / 2.0 + STATE_LABEL_PAD;
+        assert!(
+            (middle - half - x0 - LABEL_BESIDE).abs() < 0.01,
+            "8 units from the line"
+        );
+        assert!(
+            (at - (y0 + y1) / 2.0).abs() < 0.01,
+            "in the middle of the gap"
+        );
+        assert!(
+            middle + half + LABEL_BESIDE <= layout.width + 0.01,
+            "inside the picture"
+        );
+        // The edge back up goes round the states, as it did.
+        let back = labelled(&layout, "changes wanted");
+        assert_eq!(back.points, labelled(&routed, "changes wanted").points);
+        // And it's drawn: the label in the picture, which is wider for it.
+        let svg = mermaid(STATES, false).unwrap();
+        assert!(svg.contains("approved"));
+        assert!(inked(&rasterize(&svg, 1.0, 900).unwrap()) > 50);
     }
 
     #[test]

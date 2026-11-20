@@ -7355,5 +7355,12 @@
     "title": "The side pane's program stands 8 px under the line under the pane's tabs where a row has room, its cells, presses and the cell tier unchanged",
     "test": "the_panes_program_stands_clear_of_the_line_under_its_tabs",
     "passes": true
+  },
+  {
+    "id": "state-edge-label-beside",
+    "milestone": 15,
+    "title": "A state diagram's labelled edge to the state right under it goes straight down with its label beside it, clear of the arrowhead",
+    "test": "a_labelled_edge_straight_down_has_its_label_beside_it",
+    "passes": true
   }
 ]
