@@ -771,6 +771,65 @@ comments, so each file's stand under a heading with its icon, its name and how m
 Comments view: a file at a time by name, a terminal's output last. A click on a heading opens the
 file, and the list is then that file's alone.
 
+### Ask, a side question
+
+A question isn't a comment. The user selected "ICL" on a paper, pressed Ask Agent and asked what
+it meant, and the agent answered every comment in the review: Ask Agent made the question a
+comment and typed it into the agent, and the prompt hook handed every waiting comment over with
+it. A comment is feedback the agent is to act on, counted, sent and answered under its words; a
+question wants an answer, now, for the reader, and nothing done (approved by the user, 20
+November 2026).
+
+So Ask runs the agent's own command line once, in the background, non-interactive and
+read-only, in the project's folder (`ask.rs`). It never types into the agent working in the
+side pane or disturbs its session, and it brings in no comments. Which command line: the one
+the `ask_agent` setting names (`claude`, `codex`, `gemini`), else the kind of agent in the side
+pane where that's installed, else the first installed of Claude Code, Codex and Gemini CLI.
+With none, the card says what it needs and has Open Integrations, which opens Settings there;
+with the setting naming one that isn't installed, it says that.
+
+What it knows, by layer:
+
+1. The document whole, with the selection marked ⟦like this⟧, the headings it's under ("The
+   selection is under: Notes › Method", a paper's numbered as LaTeX numbers them, "2 Method ›
+   2.1 Training"), its path in the project, so it can read the bibliography or anything else,
+   and a paper's `\input` and `\include` files read in where they're named, each between lines
+   naming its file. Past 150,000 letters (`WHOLE_LIMIT`), it gets the widest section round the
+   selection that fits, else as much round the selection as fits, after the document's outline
+   with each heading's line, and is told the rest is in the file. Output selected in a terminal
+   tab goes with the tab's name, the command that printed it and the project's places it names.
+   The rules come first, every time: answer only this question, briefly and for the reader;
+   change, create or delete nothing; ignore any review comments.
+2. Read-only tools. Claude Code: `-p --output-format stream-json --verbose
+   --include-partial-messages --allowedTools Read,Grep,Glob --disallowedTools
+   Bash,Edit,Write,MultiEdit,NotebookEdit`. Codex: `exec --sandbox read-only --json
+   --skip-git-repo-check -C <root> -`. Gemini CLI: `--output-format stream-json --approval-mode
+   default -p …`; without a person to ask it leaves out every tool that would need one, the
+   shell, edits and writes. Every prompt goes on the program's input, never as an argument,
+   which a whole document would take past Linux's 128 KB for one. Those options were read from
+   `--help` on this machine (Claude Code 2.1.311, Codex 0.166.0); Gemini CLI isn't installed
+   here, so its are from its documentation and unverified.
+3. One side conversation per document. The first question records the session the command line
+   gives (Claude Code's `init` message, Codex's `thread.started`, Gemini's `init`); a later one on
+   the same document, on any of its words, resumes it (`claude -p --resume <id>`, `codex exec
+   resume <id> -`, `gemini --resume <id>`), so it remembers earlier questions and the document is
+   mostly cached. The ids are kept in `asks.json` with Cellix's own state for the project (beside
+   its sessions, `hold::folder_of`), never in the project's files. Each keeps the hash of the
+   document's text as it last went: unchanged, a later question sends only the words, where
+   they are and the question; changed, it resumes and sends the document again as it reads now,
+   saying it changed, since the earlier questions still mean something. A resumed conversation
+   that fails before saying anything (its command line forgot it) is forgotten and the question
+   asked once afresh. Another command line than the kept one starts its own.
+
+Every hook ignores a side question. The run carries `CELLIX_SIDE_QUESTION=1`, and under it
+`cellix hook` does nothing for any agent or kind (`hook::handle_for`, and before it the binary's
+own session-start work), and `cellix pane`, which Claude Code's mod starts as a session starts,
+doesn't start. Otherwise the side question would collect every waiting comment, the very bug,
+take a checkpoint, log a turn and show up in the Agents list. It also leaves out what says it's
+held by Cellix or named by it (`CELLIX_HELD`, `CELLIX_NAME`) or inside another Claude Code.
+
+The card that asks and shows the answer comes with the next change; until then Ask Agent on a selection still writes a comment.
+
 ## The pointer
 
 Cellix tells the terminal which pointer to show with OSC 22: a hand on what can be pressed, a bar on

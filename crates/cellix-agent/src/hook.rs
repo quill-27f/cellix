@@ -18,6 +18,15 @@ const LABEL_LENGTH: usize = 60;
 const AGENT_KEY: &str = "cellix_agent";
 /// Set by Cellix's session host to its socket, for a program it holds.
 pub const HELD_VAR: &str = "CELLIX_HELD";
+/// Set on an agent's command line that Cellix runs to answer a side question (Ask). Every hook
+/// does nothing under it: the question mustn't collect the comments that wait, take a
+/// checkpoint, log a turn, or show up as an agent working here.
+pub const SIDE_QUESTION_VAR: &str = "CELLIX_SIDE_QUESTION";
+
+/// Whether this process runs for a side question, by `SIDE_QUESTION_VAR`.
+pub fn side_question() -> bool {
+    std::env::var_os(SIDE_QUESTION_VAR).is_some_and(|v| !v.is_empty())
+}
 
 /// How to resume an agent held by Cellix, left by its hooks beside the host's socket so it
 /// outlives the host, as when the machine restarts.
@@ -770,6 +779,15 @@ pub fn handle(kind: &str, stdin: &str) -> Option<String> {
 
 /// Handles one hook from a named agent, and returns what to print for it, if anything.
 pub fn handle_for(agent: &str, kind: &str, stdin: &str) -> Option<String> {
+    handle_as(agent, kind, stdin, side_question())
+}
+
+/// `handle_for`, told whether the agent runs for a side question, under which every hook
+/// does nothing at all: it asks Cellix nothing and leaves nothing anywhere.
+fn handle_as(agent: &str, kind: &str, stdin: &str, side: bool) -> Option<String> {
+    if side {
+        return None;
+    }
     // Without its details this can't be told from a stray call, and nothing here should
     // guess which project it's about, least of all from the folder it happens to run in.
     let mut input: Value = serde_json::from_str(stdin).ok()?;
@@ -1028,6 +1046,56 @@ mod tests {
         assert!(context.contains("a.rs line 3: why?"), "{context}");
         assert!(shared.lock().unwrap().is_empty(), "delivered once");
         assert_eq!(handle("prompt", &hook), None);
+    }
+
+    /// A side question (Ask) runs the agent's command line with `SIDE_QUESTION_VAR`, and every
+    /// hook, Claude Code's, Codex's and Gemini's alike, then does nothing: the prompt hook
+    /// takes no comment, and none tells Cellix the agent is working, so it isn't listed.
+    #[test]
+    fn under_a_side_question_every_hook_does_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let shared: SharedComments = Arc::new(std::sync::Mutex::new(vec![comment()]));
+        let server = start(&root, shared.clone()).unwrap();
+        let kinds = [
+            "session-start",
+            "prompt",
+            "working",
+            "plan",
+            "notify",
+            "tool-done",
+            "tool-failed",
+            "stop",
+            "stop-failed",
+            "session-end",
+        ];
+        for agent in [
+            "Claude Code",
+            "Codex",
+            "Gemini",
+            "OpenCode",
+            "Copilot",
+            "Cursor",
+        ] {
+            for kind in kinds {
+                let hook = input(
+                    &root,
+                    json!({"prompt": "Explain this", "tool_input": {"command": "cargo test", "plan": "# P"},
+                           "notification_type": "permission_prompt"}),
+                );
+                assert_eq!(handle_as(agent, kind, &hook, true), None, "{agent} {kind}");
+            }
+        }
+        assert_eq!(shared.lock().unwrap().len(), 1, "no comment was taken");
+        assert!(
+            server.requests.try_recv().is_err(),
+            "Cellix was told something"
+        );
+        assert!(!root.join(".cellix").exists(), "nothing was logged");
+        // The same prompt, not a side question, takes the comment: the setup can tell.
+        let hook = input(&root, json!({"prompt": "Explain this"}));
+        let output = handle_as("Claude Code", "prompt", &hook, false).unwrap();
+        assert!(output.contains("a.rs line 3: why?"), "{output}");
     }
 
     /// Ask Agent on one comment's card types that comment in, and its prompt goes alone: the

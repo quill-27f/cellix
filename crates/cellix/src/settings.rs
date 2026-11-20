@@ -68,6 +68,9 @@ pub struct Settings {
     /// The order the Comments pane lists in: `document` (the default), `newest` or `oldest`.
     /// Picked from the pane's menu, it's kept here for every session on the machine.
     pub comment_sort: Option<String>,
+    /// Which agent's command line answers Ask's side questions: `claude`, `codex` or
+    /// `gemini`. Unset, the kind of agent in the side pane, else the first installed.
+    pub ask_agent: Option<String>,
 }
 
 /// The row heights `row_height` can name, with how many of the terminal's lines each is
@@ -120,6 +123,7 @@ impl Settings {
         self.auto_save = other.auto_save.or(self.auto_save.take());
         self.auto_save_delay = other.auto_save_delay.or(self.auto_save_delay.take());
         self.comment_sort = other.comment_sort.or(self.comment_sort.take());
+        self.ask_agent = other.ask_agent.or(self.ask_agent.take());
     }
 
     /// The words the user has said are right.

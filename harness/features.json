@@ -7117,5 +7117,19 @@
     "title": "A workspace's tile is marked while its Inbox holds what no tab shows",
     "test": "what_waits_here_comes_and_goes_with_what_happens",
     "passes": true
+  },
+  {
+    "id": "ask-side-question-hooks-quiet",
+    "milestone": 15,
+    "title": "An agent run for a side question (CELLIX_SIDE_QUESTION) leaves every hook of Claude Code, Codex and Gemini quiet, and starts no pane",
+    "test": "a_side_question_leaves_every_hook_quiet",
+    "passes": true
+  },
+  {
+    "id": "ask-engine-read-only-run",
+    "milestone": 15,
+    "title": "Ask's engine runs the agent's command line read-only, told it's a side question, with the prompt on its input, and streams its news back",
+    "test": "a_run_is_read_only_told_it_is_a_side_question_and_streams_back",
+    "passes": true
   }
 ]

@@ -314,6 +314,10 @@ fn remove_agent(agent: &str) -> ExitCode {
 /// `cellix hook <kind>` is what the Claude Code plugin calls. It always succeeds, because a
 /// failing hook would get in the agent's way.
 fn hook(agent: &str, kind: &str) -> ExitCode {
+    // An agent run to answer a side question: no hook of Cellix's does anything for it.
+    if cellix_agent::hook::side_question() {
+        return ExitCode::SUCCESS;
+    }
     if agent == "Claude Code" && kind == "session-start" {
         cellix::plugin::refresh();
         // Too late for this session, which has read tmux's options already, but every
@@ -389,6 +393,8 @@ fn main() -> ExitCode {
         ["ls"] => return list(),
         ["hook", kind] => return hook("Claude Code", kind),
         ["hook", "--agent", agent, kind] => return hook(agent, kind),
+        // Claude Code run for a side question loads the mod too, which would start a pane.
+        ["pane"] if cellix_agent::hook::side_question() => return ExitCode::SUCCESS,
         ["pane"] => {
             return match std::env::current_dir()
                 .and_then(|d| cellix::pane::run(&dunce::canonicalize(d)?))

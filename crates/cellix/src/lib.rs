@@ -3,6 +3,7 @@
 mod agent_task;
 mod agents;
 mod app;
+pub mod ask;
 mod brackets;
 mod clock;
 mod conflicts;

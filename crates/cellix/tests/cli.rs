@@ -103,6 +103,91 @@ fn the_prompt_hook_checkpoints_without_holding_the_prompt() {
     assert!(!files.lines().any(|f| f == "dump.bin"), "{files}");
 }
 
+/// An agent run for a side question carries `CELLIX_SIDE_QUESTION`, and then every hook the
+/// plugins call, Claude Code's, Codex's and Gemini's, does nothing: no comment is taken, no
+/// checkpoint made, no turn logged, Cellix told nothing. And the mod's `cellix pane` doesn't
+/// start. Without the variable the same prompt hook takes the comment, so the test can tell.
+#[test]
+fn a_side_question_leaves_every_hook_quiet() {
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    git(&root, &["init", "-q"]);
+    std::fs::write(root.join("a.txt"), "a\n").unwrap();
+    let comment = cellix_review::Comment {
+        file: "a.txt".into(),
+        line: 1,
+        text: "why?".into(),
+        ..Default::default()
+    };
+    let shared = Arc::new(Mutex::new(vec![comment]));
+    let server = cellix_agent::start(&root, shared.clone()).unwrap();
+    let input = format!(
+        r#"{{"prompt":"Explain this","cwd":{:?},"session_id":"side","tool_input":{{"command":"cargo test"}}}}"#,
+        root.to_str().unwrap()
+    );
+    let run = |args: &[&str], side: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_cellix"));
+        command
+            .args(args)
+            .current_dir(&root)
+            .env("XDG_CACHE_HOME", root.join("cache"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped());
+        if side {
+            command.env("CELLIX_SIDE_QUESTION", "1");
+        } else {
+            command.env_remove("CELLIX_SIDE_QUESTION");
+        }
+        let mut child = command.spawn().unwrap();
+        let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+        child.wait_with_output().unwrap()
+    };
+    let hooks: &[&[&str]] = &[
+        &["hook", "session-start"],
+        &["hook", "prompt"],
+        &["hook", "tool-done"],
+        &["hook", "notify"],
+        &["hook", "stop"],
+        &["hook", "session-end"],
+        &["hook", "--agent", "Codex", "session-start"],
+        &["hook", "--agent", "Codex", "prompt"],
+        &["hook", "--agent", "Codex", "stop"],
+        &["hook", "--agent", "Gemini", "session-start"],
+        &["hook", "--agent", "Gemini", "prompt"],
+        &["hook", "--agent", "Gemini", "stop"],
+    ];
+    for args in hooks {
+        let output = run(args, true);
+        assert!(output.status.success(), "{args:?}");
+        assert!(
+            output.stdout.is_empty(),
+            "{args:?} printed {:?}",
+            output.stdout
+        );
+    }
+    let pane = run(&["pane"], true);
+    assert!(
+        pane.status.success() && pane.stdout.is_empty(),
+        "a pane started"
+    );
+    assert_eq!(shared.lock().unwrap().len(), 1, "a comment was taken");
+    assert!(
+        server.requests.try_recv().is_err(),
+        "Cellix was told something"
+    );
+    assert!(!root.join(".cellix").exists(), "a turn was logged");
+    let turns = git(&root, &["for-each-ref", "refs/cellix/"]);
+    assert!(turns.trim().is_empty(), "a checkpoint was made: {turns}");
+    // Proves the setup: the same prompt, not a side question, takes the comment.
+    let output = run(&["hook", "prompt"], false);
+    let said = String::from_utf8_lossy(&output.stdout).to_string();
+    assert!(said.contains("why?"), "{said}");
+    assert!(shared.lock().unwrap().is_empty());
+}
+
 /// One frame of cells: its columns, rows and each cell's character.
 type CellFrame = (u16, u16, Vec<char>);
 
