@@ -45,6 +45,9 @@ pub struct Search {
     root: PathBuf,
     pub query: String,
     pub replace: String,
+    /// How much of each box's words stands after its caret (`field::caret_of`).
+    pub back: usize,
+    pub replace_back: usize,
     pub options: Options,
     /// Which box has the keyboard, if any.
     pub focus: Option<Field>,
@@ -115,6 +118,8 @@ impl Search {
             root,
             query: String::new(),
             replace: String::new(),
+            back: 0,
+            replace_back: 0,
             options: Options::default(),
             focus: None,
             results: Vec::new(),
@@ -125,11 +130,30 @@ impl Search {
         }
     }
 
-    pub fn field_mut(&mut self) -> Option<&mut String> {
+    /// The box with the keyboard, and its caret.
+    pub fn field_mut(&mut self) -> Option<(&mut String, &mut usize)> {
         match self.focus? {
-            Field::Query => Some(&mut self.query),
-            Field::Replace => Some(&mut self.replace),
+            Field::Query => Some((&mut self.query, &mut self.back)),
+            Field::Replace => Some((&mut self.replace, &mut self.replace_back)),
         }
+    }
+
+    /// A press in a box at `x`, with its fraction of a column: the box has the keyboard, with
+    /// its caret at the letter pressed.
+    pub fn press_field(
+        &mut self,
+        area: Rect,
+        (field, x): (Field, f32),
+        measure: &dyn Measure,
+        theme: &Theme,
+    ) {
+        let (line, shown) = self.field_box(area, field, theme);
+        let at = crate::palette::input_press(line, &shown, x, measure);
+        match field {
+            Field::Query => crate::field::set_caret(&self.query, &mut self.back, at),
+            Field::Replace => crate::field::set_caret(&self.replace, &mut self.replace_back, at),
+        }
+        self.focus = Some(field);
     }
 
     /// Searches on a thread, so a large project can't stall typing.
@@ -230,34 +254,51 @@ impl Search {
         }
     }
 
-    fn draw_box(
-        &self,
-        grid: &mut Grid,
-        area: Rect,
-        y: u16,
-        field: Field,
-        measure: &dyn Measure,
-        theme: &Theme,
-    ) {
-        let (text, hint) = match field {
-            Field::Query => (self.query.as_str(), "Search"),
-            Field::Replace => (self.replace.as_str(), "Replace"),
+    /// A box's line, on the panel's text edge two columns in from either side as its title
+    /// is, and what it shows. The switches stand inside the query's end, and its words stop
+    /// short of them.
+    fn field_box(&self, area: Rect, field: Field, theme: &Theme) -> (Rect, Input<'_>) {
+        let (text, hint, back, row) = match field {
+            Field::Query => (self.query.as_str(), "Search", self.back, 1),
+            Field::Replace => (
+                self.replace.as_str(),
+                "Replace",
+                self.replace_back,
+                REPLACE_ROW,
+            ),
         };
-        // On the panel's text edge, two columns in from either side, as its title is.
         let end = area.right().saturating_sub(2);
         let width = if field == Field::Replace {
             end.saturating_sub(area.x + 6)
         } else {
             end.saturating_sub(area.x + 2)
         };
-        let line = Rect::new(area.x + 2, y, width, 1);
-        let box_state = Input {
+        let line = Rect::new(area.x + 2, area.y + row, width, 1);
+        let kept = match field {
+            Field::Query => line.right().saturating_sub(switches_start(area)),
+            Field::Replace => 0,
+        };
+        let shown = Input {
             text,
             hint,
             focused: self.focus == Some(field),
             behind: theme.sidebar.bg,
+            caret: crate::field::caret_of(text, back),
+            kept,
         };
-        input(grid, line, &box_state, measure, theme);
+        (line, shown)
+    }
+
+    fn draw_box(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        field: Field,
+        measure: &dyn Measure,
+        theme: &Theme,
+    ) {
+        let (line, shown) = self.field_box(area, field, theme);
+        input(grid, line, &shown, measure, theme);
     }
 
     pub fn draw(
@@ -270,7 +311,7 @@ impl Search {
     ) {
         grid.fill(area, theme.sidebar);
         crate::palette::sidebar_title(grid, area, "Search", theme);
-        self.draw_box(grid, area, area.y + 1, Field::Query, measure, theme);
+        self.draw_box(grid, area, Field::Query, measure, theme);
         draw_switches(
             grid,
             (switches_start(area), area.y + 1),
@@ -283,14 +324,7 @@ impl Search {
             theme,
             measure,
         );
-        self.draw_box(
-            grid,
-            area,
-            area.y + REPLACE_ROW,
-            Field::Replace,
-            measure,
-            theme,
-        );
+        self.draw_box(grid, area, Field::Replace, measure, theme);
         let button = area.right().saturating_sub(REPLACE_ALL.len() as u16 + 2);
         grid.small_glyph(
             button as f32,

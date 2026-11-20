@@ -3,7 +3,7 @@
 
 use std::borrow::Cow;
 
-use cellix_input::Key;
+use cellix_input::{Command, Key, KeyEvent, simple_keymap};
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 use emojis::{Emoji, EmojiVersion, Group};
 
@@ -386,6 +386,24 @@ impl Picker {
             _ => {}
         }
         self.keep_in_view();
+    }
+
+    /// The deletes a Mac or a shell has taught, by word and to the start, from the field's
+    /// end, where its caret stays: the arrows are for moving among the emoji. Returns whether
+    /// it was one.
+    pub fn delete(&mut self, key: KeyEvent) -> bool {
+        let deletes = matches!(
+            simple_keymap(key),
+            Some(Command::DeleteWordLeft | Command::DeleteToLineStart)
+        );
+        if !deletes && !crate::field::takes_word(key) {
+            return false;
+        }
+        let mut caret = self.query.len();
+        crate::field::key(&mut self.query, &mut caret, key);
+        self.list();
+        self.keep_in_view();
+        true
     }
 
     /// Takes pasted words into the field.

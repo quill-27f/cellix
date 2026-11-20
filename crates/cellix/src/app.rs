@@ -54,7 +54,9 @@ use crate::measures::{self, BUTTON_GAP};
 use crate::menu::{Action as MenuAction, Item as MenuItem, Menu, Outcome as MenuOutcome};
 use crate::neovim::{self, Neovim};
 use crate::outline::Outline;
-use crate::palette::{COMMANDS, Input, Item, Palette, SymbolRow, goes_by, input, popup};
+use crate::palette::{
+    COMMANDS, Input, Item, Palette, SymbolRow, goes_by, input, input_press, popup,
+};
 use crate::panels::{MathPanel, SYMBOLS, TablePicker};
 use crate::pdfview::{Hit as PdfHit, PdfView};
 use crate::rendered::{self, Dialect, Target};
@@ -471,6 +473,31 @@ struct Autoscroll {
     owed: f32,
 }
 
+/// What the Find bar's query box shows on its `line`. The switches stand inside its end,
+/// from `switches`, and its words and caret stop short of them.
+fn find_query<'a>(find: &'a Find, line: Rect, switches: u16, theme: &Theme) -> Input<'a> {
+    Input {
+        text: &find.query,
+        hint: "Find",
+        focused: !find.in_replace,
+        behind: theme.popup,
+        caret: find.caret(),
+        kept: line.right().saturating_sub(switches),
+    }
+}
+
+/// What the Find bar's replace box shows, while its row is open.
+fn find_replacement<'a>(find: &'a Find, theme: &Theme) -> Option<Input<'a>> {
+    Some(Input {
+        text: find.replace.as_deref()?,
+        hint: "Replace",
+        focused: find.in_replace,
+        behind: theme.popup,
+        caret: find.replace_caret(),
+        kept: 0,
+    })
+}
+
 /// The row of `text` nearest the pointer, and how far past its top (negative) or bottom the
 /// pointer is, in rows, when it's outside.
 fn past_edge(text: Rect, mouse: MouseEvent) -> (u16, Option<f32>) {
@@ -538,7 +565,26 @@ enum PromptAction {
 struct Prompt {
     label: String,
     input: String,
+    /// How much of `input` stands after the caret (`field::caret_of`): none as it opens, so
+    /// a name it's opened with has the caret at its end.
+    back: usize,
     action: PromptAction,
+}
+
+impl Prompt {
+    fn new(label: &str, input: String, action: PromptAction) -> Self {
+        Self {
+            label: label.to_string(),
+            input,
+            back: 0,
+            action,
+        }
+    }
+
+    /// Where the caret is in what's typed, in bytes.
+    fn caret(&self) -> usize {
+        crate::field::caret_of(&self.input, self.back)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3199,12 +3245,18 @@ impl App {
         }
     }
 
-    fn click_source(&mut self, x: u16, y: u16) {
+    fn click_source(&mut self, mouse: MouseEvent) {
+        let (x, y) = (mouse.x, mouse.y);
         let Some(area) = self.sidebar_area() else {
             return;
         };
         let hit = self.source.hit(area, (x, y), &*self.measure);
         self.source.focused = hit == Some(SourceHit::Message);
+        // A press on the message puts its caret at the letter pressed.
+        if self.source.focused {
+            let at = (mouse.fine_x, y);
+            self.source.press_message(area, at, &*self.measure);
+        }
         let root = self.workspace.root().to_path_buf();
         let result = match hit {
             None | Some(SourceHit::Message) => Ok(()),
@@ -3342,13 +3394,10 @@ impl App {
         }
         match key.key {
             Key::Esc => self.source.focused = false,
-            Key::Enter if key.mods.shift || key.mods.alt => self.source.message.push('\n'),
+            Key::Enter if key.mods.shift || key.mods.alt => self.source.message_insert("\n"),
             Key::Enter => self.commit_message(),
-            Key::Backspace => {
-                self.source.message.pop();
-            }
-            Key::Char(c) if !key.mods.ctrl => self.source.message.push(c),
-            _ => return false,
+            // Written as any text box is; what it doesn't take is a shortcut.
+            _ => return self.source.message_key(key),
         }
         true
     }
@@ -5108,11 +5157,11 @@ impl App {
                 return;
             }
             Overlay::Prompt(prompt) => {
-                prompt.input.push_str(text);
+                crate::field::line_insert(&mut prompt.input, &mut prompt.back, text);
                 return;
             }
             Overlay::Find(find) => {
-                find.field_mut().push_str(text);
+                find.paste(text);
                 if !find.in_replace {
                     self.search_file();
                 }
@@ -5133,7 +5182,7 @@ impl App {
             return;
         }
         if self.source.focused {
-            self.source.message.push_str(text);
+            self.source.message_insert(text);
             return;
         }
         if self.dock.focused
@@ -5146,6 +5195,22 @@ impl App {
                     "{name} hasn't read what was sent to it, so the paste wasn't sent"
                 ));
             }
+            return;
+        }
+        // Settings' filter has what's typed there, and so what's pasted; and a search box
+        // with the keyboard has it too, at its caret.
+        if let Some(page) = &mut self.settings_page {
+            let line = text.lines().next().unwrap_or_default();
+            crate::field::line_insert(&mut page.filter, &mut page.filter_back, line);
+            page.found_top = 0;
+            page.focus = None;
+            return;
+        }
+        if self.sidebar_area().is_some()
+            && let Some((field, back)) = self.search.field_mut()
+        {
+            crate::field::line_insert(field, back, text);
+            self.search_edited();
             return;
         }
         // A file dropped on a terminal arrives as its path.
@@ -6704,11 +6769,22 @@ impl App {
         if self.recording_keys(key) {
             return;
         }
-        // These two work from anywhere, even with a palette or prompt open.
-        let leaving = matches!(
-            self.workflow.keys.command(key),
-            Some(Command::Quit | Command::CloseTab)
+        // These two work from anywhere, even with a palette or prompt open. But in a box being
+        // written in, Ctrl+W takes the word before the caret, as it does in a shell and in a
+        // comment, and leaves the tab under the box be.
+        let boxed = matches!(
+            self.overlay,
+            Overlay::Palette(_)
+                | Overlay::Prompt(_)
+                | Overlay::Find(_)
+                | Overlay::NewWorktree(_)
+                | Overlay::Emoji(_)
         );
+        let leaving = match self.workflow.keys.command(key) {
+            Some(Command::Quit) => true,
+            Some(Command::CloseTab) => !(boxed && crate::field::takes_word(key)),
+            _ => false,
+        };
         if !matches!(self.overlay, Overlay::None) && !leaving {
             self.overlay_key(key);
             return;
@@ -7473,15 +7549,12 @@ impl App {
             Overlay::Prompt(mut prompt) => match key.key {
                 Key::Esc => {}
                 Key::Enter => self.finish_prompt(prompt),
-                Key::Backspace => {
-                    prompt.input.pop();
+                // A box like any other: letters go in at the caret, and the arrows, Home,
+                // End, the moves by word and the deletes do what they do everywhere.
+                _ => {
+                    crate::field::line_key(&mut prompt.input, &mut prompt.back, key);
                     self.overlay = Overlay::Prompt(prompt);
                 }
-                Key::Char(c) if !key.mods.ctrl && !key.mods.alt => {
-                    prompt.input.push(c);
-                    self.overlay = Overlay::Prompt(prompt);
-                }
-                _ => self.overlay = Overlay::Prompt(prompt),
             },
             Overlay::Find(find) => self.find_key(find, key),
             Overlay::Confirm(confirm) => self.confirm_key(confirm, key),
@@ -7509,6 +7582,9 @@ impl App {
                         self.put_emoji(emoji, false);
                     }
                 }
+                // By word or to the start, as in any box; else a letter with Ctrl or Alt is
+                // nothing here.
+                _ if picker.delete(key) => self.overlay = Overlay::Emoji(picker),
                 Key::Char(_) if key.mods.ctrl || key.mods.alt => {
                     self.overlay = Overlay::Emoji(picker);
                 }
@@ -7561,15 +7637,8 @@ impl App {
             Key::Enter if key.mods.shift => find.step(-1),
             Key::Enter | Key::Down => find.step(1),
             Key::Up => find.step(-1),
-            Key::Backspace => {
-                find.field_mut().pop();
-                searched = !find.in_replace;
-            }
-            Key::Char(c) if !key.mods.ctrl && !key.mods.alt => {
-                find.field_mut().push(c);
-                searched = !find.in_replace;
-            }
-            _ => {}
+            // Either field is a box like any other, and what's found follows the query.
+            _ => searched = find.key(key),
         }
         self.overlay = Overlay::Find(find);
         if searched {
@@ -8274,13 +8343,13 @@ impl App {
         if find.replaces() {
             self.find_button(grid, toggle, chevron, false);
         }
-        let text = Input {
-            text: &find.query,
-            hint: "Find",
-            focused: !find.in_replace,
-            behind: theme.popup,
-        };
-        input(grid, line, &text, &*self.measure, theme);
+        input(
+            grid,
+            line,
+            &find_query(find, line, switches, theme),
+            &*self.measure,
+            theme,
+        );
         let base = Style {
             fg: theme.popup_dim,
             bg: theme.popup,
@@ -8307,14 +8376,8 @@ impl App {
             self.find_button(grid, Rect::new(x, area.y, FIND_BUTTON, 1), icon, false);
             x += FIND_BUTTON;
         }
-        if let Some(with) = &find.replace {
+        if let Some(text) = find_replacement(find, theme) {
             let row = Rect::new(line.x, area.y + 1, line.w, 1);
-            let text = Input {
-                text: with,
-                hint: "Replace",
-                focused: find.in_replace,
-                behind: theme.popup,
-            };
             input(grid, row, &text, &*self.measure, theme);
             let mut x = row.right() + 1;
             for icon in [Icon::Replace, Icon::ReplaceAll] {
@@ -8324,16 +8387,36 @@ impl App {
         }
     }
 
-    fn click_find(&mut self, mut find: Find, x: u16, y: u16) {
+    /// A press on the Find bar. One in either box puts the caret at the letter pressed, as
+    /// in any text box, and gives that box the keyboard.
+    fn click_find(&mut self, mut find: Find, mouse: MouseEvent) {
+        let (x, y) = (mouse.x, mouse.y);
         let area = self.find_bar_for(find.replace.is_some());
         let chevron = find.replaces();
         let (field, switches, _, first) = Self::find_layout(area, chevron);
+        let row = Rect::new(field.x, area.y + 1, field.w, 1);
+        let measure = &*self.measure;
+        if field.contains(x, y) && x < switches {
+            let at = input_press(
+                field,
+                &find_query(&find, field, switches, &self.theme),
+                mouse.fine_x,
+                measure,
+            );
+            crate::field::set_caret(&find.query, &mut find.back, at);
+        }
+        if let Some(text) = find_replacement(&find, &self.theme).filter(|_| row.contains(x, y)) {
+            let at = input_press(row, &text, mouse.fine_x, measure);
+            let with = find.replace.as_deref().unwrap_or_default();
+            crate::field::set_caret(with, &mut find.replace_back, at);
+        }
         let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
         if chevron && toggle.contains(x, y) {
             find.replace = match find.replace {
                 Some(_) => None,
                 None => Some(String::new()),
             };
+            find.replace_back = 0;
             find.in_replace = find.replace.is_some() && !find.query.is_empty();
             self.overlay = Overlay::Find(find);
             return;
@@ -12426,7 +12509,8 @@ impl App {
         self.sidebar_view = SidebarView::Explorer;
     }
 
-    /// Keys for the search boxes. Returns false to let a shortcut through.
+    /// Keys for the search boxes, each a text box like any other. Returns false to let a
+    /// shortcut through.
     fn search_key(&mut self, key: KeyEvent) -> bool {
         if let Key::Char(c) = key.key
             && key.mods.alt
@@ -12436,35 +12520,34 @@ impl App {
             self.search.start();
             return true;
         }
-        if key.mods.ctrl || key.mods.alt {
-            return false;
-        }
+        let plain = !key.mods.ctrl && !key.mods.alt;
         match key.key {
-            Key::Esc => {
+            Key::Esc if plain => {
                 self.search.focus = None;
                 self.drawer = false;
             }
-            Key::Tab | Key::BackTab => {
+            Key::Tab | Key::BackTab if plain => {
                 self.search.focus = Some(match self.search.focus {
                     Some(Field::Query) => Field::Replace,
                     _ => Field::Query,
                 });
             }
-            Key::Enter if self.search.focus == Some(Field::Replace) => self.replace_all(),
-            Key::Enter => self.search.start(),
-            Key::Backspace => {
-                if let Some(field) = self.search.field_mut() {
-                    field.pop();
+            Key::Enter if plain && self.search.focus == Some(Field::Replace) => self.replace_all(),
+            Key::Enter if plain => self.search.start(),
+            // Letters go in at the caret, and the arrows, Home, End, the moves by word and
+            // the deletes do what they do in every box. Anything else is a shortcut.
+            _ => {
+                let Some((text, back)) = self.search.field_mut() else {
+                    return false;
+                };
+                let was = text.clone();
+                if !crate::field::line_key(text, back, key) {
+                    return false;
                 }
-                self.search_edited();
-            }
-            Key::Char(c) => {
-                if let Some(field) = self.search.field_mut() {
-                    field.push(c);
+                if *text != was {
+                    self.search_edited();
                 }
-                self.search_edited();
             }
-            _ => return false,
         }
         true
     }
@@ -12535,9 +12618,15 @@ impl App {
         self.review = None;
     }
 
-    fn click_search(&mut self, area: Rect, x: u16, y: u16) {
+    fn click_search(&mut self, area: Rect, mouse: MouseEvent) {
+        let (x, y) = (mouse.x, mouse.y);
         match self.search.hit(area, x, y) {
-            Some(search::Hit::Field(field)) => self.search.focus = Some(field),
+            // The box has the keyboard, with the caret at the letter pressed.
+            Some(search::Hit::Field(field)) => {
+                let pressed = (field, mouse.fine_x);
+                self.search
+                    .press_field(area, pressed, &*self.measure, &self.theme);
+            }
             Some(search::Hit::Switch(switch)) => {
                 self.search.options.flip(switch);
                 self.search.start();
@@ -12550,11 +12639,7 @@ impl App {
     }
 
     fn ask(&mut self, label: &str, action: PromptAction) {
-        self.overlay = Overlay::Prompt(Prompt {
-            label: label.to_string(),
-            input: String::new(),
-            action,
-        });
+        self.overlay = Overlay::Prompt(Prompt::new(label, String::new(), action));
     }
 
     fn save_dirty(&mut self, only_active: bool) {
@@ -14261,11 +14346,8 @@ impl App {
         let Some(session) = self.dock.sessions.get(index) else {
             return;
         };
-        self.overlay = Overlay::Prompt(Prompt {
-            label: "Rename tab".to_string(),
-            input: session.label(),
-            action: PromptAction::RenameSession(index),
-        });
+        let action = PromptAction::RenameSession(index);
+        self.overlay = Overlay::Prompt(Prompt::new("Rename tab", session.label(), action));
     }
 
     /// The tab of the side pane an agent's news is about: the one whose agent has that
@@ -16155,12 +16237,12 @@ impl App {
             }
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Search => {
                 if let Some(area) = self.sidebar_area() {
-                    self.click_search(area, x, y);
+                    self.click_search(area, mouse);
                 }
             }
             MouseKind::Left if !in_sidebar && self.click_welcome(x, y) => {}
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Source => {
-                self.click_source(x, y);
+                self.click_source(mouse);
             }
             MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Source => {}
             MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Context => {
@@ -16495,7 +16577,7 @@ impl App {
                     MenuOutcome::Outside => {}
                 }
             }
-            Overlay::Find(find) => self.click_find(find, mouse.x, mouse.y),
+            Overlay::Find(find) => self.click_find(find, mouse),
             Overlay::TablePicker(picker) => {
                 if let Some(size) = picker.size_at(mouse.x, mouse.fine_y) {
                     self.insert_table(size);
@@ -16507,6 +16589,16 @@ impl App {
                 }
             }
             Overlay::NewWorktree(form) => self.new_worktree_click(form, mouse.at()),
+            // A press in its box puts the caret at the letter pressed, as in any text box.
+            Overlay::Prompt(mut prompt) => {
+                let (_, line) = self.prompt_area();
+                if line.contains(mouse.x, mouse.y) {
+                    let field = self.prompt_field(&prompt);
+                    let at = input_press(line, &field, mouse.fine_x, &*self.measure);
+                    crate::field::set_caret(&prompt.input, &mut prompt.back, at);
+                }
+                self.overlay = Overlay::Prompt(prompt);
+            }
             Overlay::Confirm(confirm) => {
                 let y = self.confirm_area().y + self.confirm_button_row();
                 let spots = self.confirm_buttons(&confirm);
@@ -16928,13 +17020,8 @@ impl App {
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default()
         };
-        let prompt = |label: &str, input: String, action| {
-            Overlay::Prompt(Prompt {
-                label: label.to_string(),
-                input,
-                action,
-            })
-        };
+        let prompt =
+            |label: &str, input: String, action| Overlay::Prompt(Prompt::new(label, input, action));
         match action {
             MenuAction::Run(Command::AddComment) if self.review_line.is_some() => {
                 // Comment on the line the menu was opened on, as a click on its number does.
@@ -17029,11 +17116,8 @@ impl App {
             }
             MenuAction::ChooseImage => self.choose_image(false),
             MenuAction::TypeImagePath => {
-                self.overlay = Overlay::Prompt(Prompt {
-                    label: "Image file".to_string(),
-                    input: String::new(),
-                    action: PromptAction::Image,
-                });
+                let action = PromptAction::Image;
+                self.overlay = Overlay::Prompt(Prompt::new("Image file", String::new(), action));
             }
             MenuAction::Diagram(index) => {
                 let (_, language, source) = cellix_doc::diagram::TEMPLATES[index];
@@ -17216,6 +17300,9 @@ impl App {
             self.settings_page = None;
         } else if let Some(control) = page.control_at(area, mouse.x, mouse.y) {
             self.use_control(control);
+        } else if let Some(page) = &mut self.settings_page {
+            // A press in the filter puts its caret at the letter pressed.
+            page.press_filter(area, (mouse.fine_x, mouse.y), &*self.measure);
         }
     }
 
@@ -17239,6 +17326,7 @@ impl App {
                         Some(first) => page.found_top = first,
                         None => {
                             page.filter.clear();
+                            page.filter_back = 0;
                             page.found_top = 0;
                             // A page opens at its top, however far the last one was scrolled.
                             if page.section != section {
@@ -17253,6 +17341,7 @@ impl App {
             Control::ClearFilter => {
                 if let Some(page) = &mut self.settings_page {
                     page.filter.clear();
+                    page.filter_back = 0;
                     page.found_top = 0;
                     page.focus = None;
                 }
@@ -19107,11 +19196,30 @@ impl App {
         }
     }
 
-    /// Asks in a floating box at the top, as VS Code's quick input does.
-    fn draw_prompt(&self, grid: &mut Grid, prompt: &Prompt) {
-        // Where a palette stands, its sides off the sheets' lines.
+    /// The prompt's bar, where a palette stands, its sides off the sheets' lines, and the line
+    /// of its box: under the question, both on the text edge two columns in.
+    fn prompt_area(&self) -> (Rect, Rect) {
         let top = Palette::area(self.palette_screen());
         let area = Rect::new(top.x, top.y, top.w, 2);
+        let line = Rect::new(area.x + 2, area.y + 1, area.w.saturating_sub(4), 1);
+        (area, line)
+    }
+
+    /// What the prompt's box shows.
+    fn prompt_field<'a>(&self, prompt: &'a Prompt) -> Input<'a> {
+        Input {
+            text: &prompt.input,
+            hint: "",
+            focused: true,
+            behind: self.theme.popup,
+            caret: prompt.caret(),
+            kept: 0,
+        }
+    }
+
+    /// Asks in a floating box at the top, as VS Code's quick input does.
+    fn draw_prompt(&self, grid: &mut Grid, prompt: &Prompt) {
+        let (area, line) = self.prompt_area();
         crate::palette::raised_bar(grid, area, &self.theme);
         let parts = grid.painted_so_far();
         let base = Style {
@@ -19133,13 +19241,7 @@ impl App {
             area.right(),
             90,
         );
-        let line = Rect::new(area.x + 2, area.y + 1, area.w.saturating_sub(4), 1);
-        let field = Input {
-            text: &prompt.input,
-            hint: "",
-            focused: true,
-            behind: self.theme.popup,
-        };
+        let field = self.prompt_field(prompt);
         input(grid, line, &field, &*self.measure, &self.theme);
         // Raised so its box's foot is as far from the bar's as the question's capitals are
         // from its top: it stood 10 px from the foot and 19 from the top. The caret goes up
@@ -21990,6 +22092,8 @@ mod agents_list_tests;
 mod ask_tests;
 #[cfg(test)]
 mod blink_tests;
+#[cfg(test)]
+mod box_tests;
 #[cfg(test)]
 mod card_copy_tests;
 #[cfg(test)]
@@ -26571,6 +26675,8 @@ mod tests {
             hint: "",
             focused: false,
             behind: theme.popup,
+            caret: 0,
+            kept: 0,
         };
         input(&mut grid, Rect::new(1, 0, 22, 1), &field, &measure, &theme);
         let mut rasterizer =
@@ -27639,11 +27745,22 @@ mod tests {
         );
     }
 
+    /// Ctrl+Q quits with a palette open. Ctrl+W closed the tab under it too, until every box
+    /// came to take it as a shell does, for the word before the caret, as the comment
+    /// composer always had: with the palette gone, it closes the tab again.
     #[test]
     fn close_and_quit_work_with_a_palette_open() {
         let (dir, mut app) = project();
         app.open(&dir.path().join("alpha.txt")).unwrap();
         app.run(Command::QuickOpen);
+        typed(&mut app, "alpha txt");
+        app.handle(Event::Key(KeyEvent::ctrl('w')));
+        let Overlay::Palette(palette) = &app.overlay else {
+            panic!("the palette closed");
+        };
+        assert_eq!(palette.query, "alpha ");
+        assert!(app.active_text().is_some(), "the file is open");
+        key(&mut app, Key::Esc);
         app.handle(Event::Key(KeyEvent::ctrl('w')));
         assert!(!screen(&app).text().contains("first line"));
         app.run(Command::QuickOpen);
@@ -27651,13 +27768,22 @@ mod tests {
         assert!(app.quit);
     }
 
+    /// Ctrl+Q quits from the search box. Ctrl+W there takes the word before the caret, as in
+    /// every box (it closed the tab, when the box took no keys with Ctrl), and once the box
+    /// has let go of the keyboard it closes the tab.
     #[test]
     fn close_and_quit_work_from_the_search_box() {
         let (dir, mut app) = project();
         app.open(&dir.path().join("alpha.txt")).unwrap();
         app.run(Command::FindInProject);
+        typed(&mut app, "wanted word");
+        app.handle(Event::Key(KeyEvent::ctrl('w')));
+        assert_eq!(app.search.query, "wanted ");
+        assert!(app.active_text().is_some(), "the file is open");
+        key(&mut app, Key::Esc);
         app.handle(Event::Key(KeyEvent::ctrl('w')));
         assert!(!screen(&app).text().contains("first line"));
+        app.run(Command::FindInProject);
         app.handle(Event::Key(KeyEvent::ctrl('q')));
         assert!(app.quit);
     }
@@ -33319,6 +33445,64 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
     }
 
+    /// The message took letters and Backspace only, and its caret stood after the last letter
+    /// that wasn't a space wherever it was: it's written as any text box is.
+    #[test]
+    fn a_commit_message_is_written_as_any_text_box_is() {
+        let (_dir, mut app) = source_app();
+        let area = app.sidebar_area().unwrap();
+        app.handle(mouse(MouseKind::Left, area.x + 4, area.y + 3));
+        assert!(app.source.focused);
+        let with = |app: &mut App, key: Key, mods: Mods| {
+            app.handle(Event::Key(KeyEvent { key, mods }));
+        };
+        let (alt, ctrl, shift) = (
+            Mods {
+                alt: true,
+                ..Mods::default()
+            },
+            Mods {
+                ctrl: true,
+                ..Mods::default()
+            },
+            Mods {
+                shift: true,
+                ..Mods::default()
+            },
+        );
+        typed(&mut app, "Fix the cache now");
+        with(&mut app, Key::Backspace, alt);
+        with(&mut app, Key::Char('w'), ctrl);
+        typed(&mut app, "store");
+        assert_eq!(app.source.message, "Fix the store");
+        // Option+Left, and typing goes in where the caret is, which is drawn there.
+        with(&mut app, Key::Left, alt);
+        typed(&mut app, "whole ");
+        assert_eq!(app.source.message, "Fix the whole store");
+        let grid = screen(&app);
+        let (x, y) = find(&grid, "Fix the whole store");
+        assert_eq!(grid.cursor, Some((x + 14, y)), "before \"store\"");
+        key(&mut app, Key::Home);
+        key(&mut app, Key::Delete);
+        typed(&mut app, "f");
+        // A space moves it.
+        key(&mut app, Key::End);
+        typed(&mut app, " ");
+        assert_eq!(screen(&app).cursor, Some((x + 20, y)));
+        // A line of its own, under the first.
+        key(&mut app, Key::Backspace);
+        with(&mut app, Key::Enter, shift);
+        typed(&mut app, "Why");
+        assert_eq!(app.source.message, "fix the whole store\nWhy");
+        assert_eq!(screen(&app).cursor, Some((x + 3, y + 1)));
+        // A press on a letter puts the caret there, on the row pressed.
+        app.handle(mouse(MouseKind::Left, x + 4, y));
+        typed(&mut app, "all ");
+        assert_eq!(app.source.message, "fix all the whole store\nWhy");
+        app.handle(Event::Paste("so ".into()));
+        assert_eq!(app.source.message, "fix all so the whole store\nWhy");
+    }
+
     #[test]
     fn with_nothing_staged_commit_takes_everything() {
         let (_dir, mut app) = source_app();
@@ -34248,6 +34432,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             hint: "",
             focused: false,
             behind: theme.popup,
+            caret: 0,
+            kept: 0,
         };
         input(&mut grid, Rect::new(1, 0, 22, 1), &field, &measure, &theme);
         let rasterizer = SoftwareRasterizer::new(cell.0, cell.1).expect("fonts are in the binary");

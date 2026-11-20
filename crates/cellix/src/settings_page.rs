@@ -500,12 +500,26 @@ pub struct SettingsPage {
     pub shortcuts: Vec<Shortcut>,
     /// What's typed in the filter, which narrows the rows of every page to those that fit.
     pub filter: String,
+    /// How much of the filter stands after its caret (`field::caret_of`).
+    pub filter_back: usize,
     /// The first of what it found that's in view.
     pub found_top: usize,
     /// The first command in view in the Keyboard section.
     pub keys_top: usize,
     /// A command whose new keys are being pressed, and those pressed so far.
     pub recording: Option<(usize, Option<String>)>,
+}
+
+/// The part of Settings' filter that shows: where its words are painted, the cell they start
+/// in, where they stop, each letter's width, and how many letters are out of sight before
+/// the field's start and before the caret.
+struct FilterShown {
+    x: f32,
+    cell: u16,
+    end: u16,
+    advances: std::rc::Rc<Vec<f32>>,
+    hidden: usize,
+    before: usize,
 }
 
 impl SettingsPage {
@@ -521,6 +535,7 @@ impl SettingsPage {
             failed: None,
             shortcuts: Vec::new(),
             filter: String::new(),
+            filter_back: 0,
             found_top: 0,
             keys_top: 0,
             recording: None,
@@ -1265,15 +1280,10 @@ impl SettingsPage {
         };
         let icon = field.x as f32 + 0.6;
         grid.small_glyph(icon, y, Icon::Search, theme.gutter.fg, "⌕", theme.text);
-        let (text, cell) = (icon + 2.3, field.x + 4);
         let words = grid.painted_so_far();
-        let mut end = field.right().saturating_sub(1);
-        if self.filtering() {
-            let count = match self.found_rows().len() {
-                0 => "No settings".to_string(),
-                1 => "1 setting".to_string(),
-                n => format!("{n} settings"),
-            };
+        let count = self.filter_count();
+        let shown = self.filter_shown(area, count.as_deref(), measure);
+        if let Some(count) = &count {
             let clear = Rect::new(field.right().saturating_sub(CLEAR_WIDTH), y, CLEAR_WIDTH, 1);
             let on = hover.is_some_and(|h| clear.contains(h.0, h.1));
             let colour = if on { theme.text.fg } else { theme.gutter.fg };
@@ -1286,21 +1296,101 @@ impl SettingsPage {
                 theme.text,
             );
             let right = clear.x.saturating_sub(1);
-            grid.label_right(right, y, &count, quiet, NOTE_SIZE);
-            end = right.saturating_sub(count.chars().count() as u16 + 1);
+            grid.label_right(right, y, count, quiet, NOTE_SIZE);
         }
+        let FilterShown { x, cell, end, .. } = shown;
         if self.filter.is_empty() {
-            grid.label_at(text + 0.4, cell, y, FILTER_HINT, quiet, end, 100);
+            grid.label_at(x + 0.4, cell, y, FILTER_HINT, quiet, end, 100);
         } else {
-            grid.label_at(text, cell, y, &self.filter, theme.text, end, 100);
+            let from = self.filter.char_indices().nth(shown.hidden);
+            let words = &self.filter[from.map_or(self.filter.len(), |(from, _)| from)..];
+            grid.label_at(x, cell, y, words, theme.text, end, 100);
         }
         // Raised in the box, as every text box's words are.
         grid.lift_since(words, crate::measures::field_lift(measure));
         if self.recording.is_none() {
-            // Where the text really ends, which proportional letters make short of its cells.
-            let caret = text + measure.width(&self.filter, Font::default());
-            grid.set_caret(caret, y, 0.62);
+            // Where the text before it really ends, which proportional letters make short of
+            // its cells; in cells, the cell typing goes into.
+            let before: f32 = shown.advances[shown.hidden..shown.before].iter().sum();
+            let nudge = crate::palette::caret_nudge(&self.filter, &shown.advances, shown.before);
+            let at = match nudge {
+                _ if measure.in_cells() => f32::from(cell) + before,
+                // Clear of the letters either side of it, as in every box.
+                Some(nudge) => (x + before + nudge).max(x),
+                None => x,
+            };
+            grid.set_caret(at, y, 0.62);
         }
+    }
+
+    /// How many rows the filter found, said at its field's end while there's a filter.
+    fn filter_count(&self) -> Option<String> {
+        self.filtering().then(|| match self.found_rows().len() {
+            0 => "No settings".to_string(),
+            1 => "1 setting".to_string(),
+            n => format!("{n} settings"),
+        })
+    }
+
+    /// The part of the filter's words that shows: a filter longer than its field shows the
+    /// part its caret is in, as every text box does.
+    fn filter_shown(&self, area: Rect, count: Option<&str>, measure: &dyn Measure) -> FilterShown {
+        let field = Self::filter_field(area);
+        let x = field.x as f32 + 0.6 + 2.3;
+        let cell = field.x + 4;
+        let end = match count {
+            Some(count) => {
+                let right = field.right().saturating_sub(CLEAR_WIDTH).saturating_sub(1);
+                right.saturating_sub(count.chars().count() as u16 + 1)
+            }
+            None => field.right().saturating_sub(1),
+        };
+        let advances = measure.advances(&self.filter, Font::default());
+        let caret = crate::field::caret_of(&self.filter, self.filter_back);
+        let before = self.filter[..caret].chars().count().min(advances.len());
+        let start = if measure.in_cells() {
+            f32::from(cell)
+        } else {
+            x
+        };
+        let hidden = crate::palette::hidden_before(&advances, before, f32::from(end) - start);
+        FilterShown {
+            x,
+            cell,
+            end,
+            advances,
+            hidden,
+            before,
+        }
+    }
+
+    /// A press on the filter's field, at `x` with its fraction of a column, puts its caret at
+    /// the letter pressed, and the keyboard back in it. Returns whether it was on the field.
+    pub fn press_filter(&mut self, area: Rect, (x, y): (f32, u16), measure: &dyn Measure) -> bool {
+        let field = Self::filter_field(area);
+        let count = self.filter_count();
+        let shown = self.filter_shown(area, count.as_deref(), measure);
+        if y != field.y || x < f32::from(field.x) || x >= f32::from(shown.end) {
+            return false;
+        }
+        let mut edge = if measure.in_cells() {
+            f32::from(shown.cell)
+        } else {
+            shown.x
+        };
+        let mut letters = shown.hidden;
+        for advance in shown.advances.iter().skip(shown.hidden) {
+            if x < edge + advance / 2.0 {
+                break;
+            }
+            edge += advance;
+            letters += 1;
+        }
+        let at = self.filter.char_indices().nth(letters);
+        let at = at.map_or(self.filter.len(), |(at, _)| at);
+        crate::field::set_caret(&self.filter, &mut self.filter_back, at);
+        self.focus = None;
+        true
     }
 
     /// What the filter found, in the page's place: each row as its own page draws it, with

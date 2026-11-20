@@ -904,14 +904,8 @@ impl Palette {
         let x = area.x as f32 + TEXT_INSET + after_icon;
         let room = f32::from(area.right().saturating_sub(2)) - x - 0.5;
         let advances = measure.advances(&self.query, font);
-        let before = self.query[..self.caret()]
-            .chars()
-            .count()
-            .min(advances.len());
-        let mut hidden = 0;
-        while advances[hidden..before].iter().sum::<f32>() > room {
-            hidden += 1;
-        }
+        let before = self.query[..self.caret()].chars().count();
+        let hidden = hidden_before(&advances, before, room);
         (x, advances, hidden)
     }
 
@@ -1547,9 +1541,12 @@ impl Palette {
         let wide = |letters: &[f32]| letters.iter().sum::<f32>();
         // Just before the hint, which starts where what's typed will, so the first letter
         // doesn't move anything; and just after the letter it follows.
-        let caret = match before {
-            0 => x - CARET_BEFORE,
-            _ => x + CARET_AFTER + wide(&advances[hidden..before]),
+        let edge = x + wide(&advances[hidden..before]);
+        let caret = match caret_nudge(&self.query, &advances, before) {
+            None => x - CARET_BEFORE,
+            // Clear of the letters either side of it, where there are pictures.
+            Some(nudge) if !measure.in_cells() => (edge + nudge).max(x - CARET_BEFORE),
+            Some(_) => edge + CARET_AFTER,
         };
         let end_of_words = x + wide(&advances[hidden..]);
         // The status keeps clear of what's typed, and gives way to it when both don't fit:
@@ -1941,13 +1938,119 @@ pub struct Input<'a> {
     pub focused: bool,
     /// The colour behind the box's rounded corners.
     pub behind: Rgb,
+    /// Where the caret stands in `text`, in bytes.
+    pub caret: usize,
+    /// Columns at the box's end that something inside it takes, as Find's switches do: the
+    /// words and the caret stop short of them.
+    pub kept: u16,
+}
+
+/// Space between a text box's edge and its text: a column.
+const INPUT_PADDING: f32 = 1.0;
+
+/// Half the caret's width, in columns: it's painted a ninth of a column wide, or 2 px.
+const CARET_HALF: f32 = 0.05;
+/// How far past the end of a letter a caret stands where a space or the text's end comes
+/// next, in columns: 2 px, clear of an "r"'s arm, which reaches nearly to its letter's end.
+const CARET_PAST: f32 = 0.12;
+
+/// Where a caret stands from the edge between the letters either side of it, in columns,
+/// where there are pictures: just past the ink of a letter it follows when a space or the
+/// text's end comes next, a little further than the palette's caret stood after what's
+/// typed, as an "r"'s arm reached it there; in the middle
+/// of a space it follows; and centred on the edge between two letters, the only room there
+/// is. At the edge less 0.1 of a column, it stood on the ink of a letter after it, a "p"'s
+/// stem 1 px from it, and ran into an "r"'s arm before it at the end. `None` before the first
+/// letter, which each box places by its placeholder. `before` counts the letters before the
+/// caret, `advances` has one for each letter.
+pub fn caret_nudge(text: &str, advances: &[f32], before: usize) -> Option<f32> {
+    let index = before.checked_sub(1)?;
+    let mut letters = text.chars().skip(index);
+    let previous = letters.next()?;
+    let next = letters.next();
+    Some(if previous.is_whitespace() {
+        -advances.get(index).copied().unwrap_or(0.0) / 2.0 - CARET_HALF
+    } else if next.is_none_or(char::is_whitespace) {
+        CARET_PAST
+    } else {
+        -CARET_HALF
+    })
+}
+
+/// How many letters of a text are out of sight before the start of a box `room` columns
+/// wide, `before` of them standing before its caret: none, unless the caret would be past
+/// the box's end, and then as few as bring it inside. A text longer than its box shows the
+/// part the caret is in.
+pub fn hidden_before(advances: &[f32], before: usize, room: f32) -> usize {
+    let before = before.min(advances.len());
+    let mut hidden = 0;
+    while hidden < before && advances[hidden..before].iter().sum::<f32>() > room {
+        hidden += 1;
+    }
+    hidden
+}
+
+/// The part of a text box's words that shows: where they start, each letter's width, how
+/// many letters are out of sight before the box's start, and how many stand before the
+/// caret. Without the keyboard a box shows its words from their start.
+struct InputShown {
+    x: f32,
+    last: f32,
+    advances: Rc<Vec<f32>>,
+    hidden: usize,
+    before: usize,
+}
+
+fn input_shown(line: Rect, field: &Input, measure: &dyn Measure) -> InputShown {
+    let font = Font {
+        size: 95,
+        ..Font::default()
+    };
+    let x = line.x as f32 + INPUT_PADDING;
+    let last = f32::from(line.right().saturating_sub(field.kept)) - INPUT_PADDING;
+    let advances = measure.advances(field.text, font);
+    let before = field
+        .text
+        .char_indices()
+        .take_while(|(at, _)| *at < field.caret)
+        .count()
+        .min(advances.len());
+    let hidden = if field.focused {
+        hidden_before(&advances, before, last - x)
+    } else {
+        0
+    };
+    InputShown {
+        x,
+        last,
+        advances,
+        hidden,
+        before,
+    }
+}
+
+/// Where a press at `x`, in columns with their fraction, puts a text box's caret: at the
+/// nearer edge of the letter there, in the part of its words that shows, as the palette's
+/// field has it. Past the words is their end.
+pub fn input_press(line: Rect, field: &Input, x: f32, measure: &dyn Measure) -> usize {
+    let shown = input_shown(line, field, measure);
+    let mut edge = shown.x;
+    let mut letters = shown.hidden;
+    for advance in shown.advances.iter().skip(shown.hidden) {
+        if x < edge + advance / 2.0 {
+            break;
+        }
+        edge += advance;
+        letters += 1;
+    }
+    let at = field.text.char_indices().nth(letters);
+    at.map_or(field.text.len(), |(at, _)| at)
 }
 
 /// A one-line text box. Text, placeholder and caret share one origin, and the caret comes
-/// from measuring the text, so it can't drift out of the box or onto the words.
+/// from measuring the text before it, so it can't drift out of the box or onto the words. A
+/// text longer than the box shows the part the caret is in.
 pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, theme: &Theme) {
-    /// Space between the box's edge and its text: a column.
-    const PADDING: f32 = 1.0;
     let style = Style {
         fg: theme.text.fg,
         bg: theme.input,
@@ -1961,29 +2064,51 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
         theme.field_line()
     };
     grid.field(line, field.behind, theme.input, border);
-    let (x, y) = (line.x as f32 + PADDING, line.y);
+    let shown = input_shown(line, field, measure);
+    let (x, y) = (shown.x, line.y);
     let first = line.x + 1;
+    // A column short of its far edge, or of what's inside it there, as it starts a column in.
+    let end = line.right().saturating_sub(field.kept).saturating_sub(1);
     let words = grid.painted_so_far();
     if field.text.is_empty() {
         let dim = Style {
             fg: theme.gutter.fg,
             ..style
         };
-        grid.label_at(x, first, y, field.hint, dim, line.right(), 95);
+        grid.label_at(x, first, y, field.hint, dim, end, 95);
     } else {
-        grid.label_at(x, first, y, field.text, style, line.right(), 95);
+        // Only the letters that fit whole: one cut through at the edge read as another ("co"
+        // as "cc").
+        let room = f32::from(end) - x;
+        let mut wide = 0.0;
+        let fit = shown.advances[shown.hidden..]
+            .iter()
+            .take_while(|advance| {
+                wide += **advance;
+                wide <= room + 0.01
+            })
+            .count();
+        let at = |letter: usize| field.text.char_indices().nth(letter).map(|(at, _)| at);
+        let from = at(shown.hidden).unwrap_or(field.text.len());
+        let to = at(shown.hidden + fit).unwrap_or(field.text.len());
+        grid.label_at(x, first, y, &field.text[from..to], style, end, 95);
     }
     grid.lift_since(words, field_lift(measure));
     if field.focused {
-        let font = Font {
-            size: 95,
-            ..Font::default()
+        let edge = x + shown.advances[shown.hidden..shown.before]
+            .iter()
+            .sum::<f32>();
+        // In cells it's the cell typing goes into. Painted, it keeps clear of the letters
+        // either side of it (`caret_nudge`), and of the first letter or the placeholder's,
+        // standing just before it.
+        let first = x - 0.1;
+        let at = match caret_nudge(field.text, &shown.advances, shown.before) {
+            _ if measure.in_cells() => edge,
+            Some(nudge) => (edge + nudge).max(first),
+            None => first,
         };
-        // Just clear of the first letter, when there's only a placeholder.
-        let end = x + measure.width(field.text, font) - 0.1;
-        let last = line.right() as f32 - PADDING;
         // In the box's middle: raised, the words stand from head to tail about it.
-        grid.set_caret(end.min(last), y, 0.62);
+        grid.set_caret(at.min(shown.last), y, 0.62);
     }
 }
 

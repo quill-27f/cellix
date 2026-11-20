@@ -243,11 +243,17 @@ impl App {
         let pressed = buttons
             .iter()
             .position(|(c, x)| on_large_button((*x, y), width(c), (at.0, at.1 + raise)));
+        let fine = at;
         let at = (at.0 as u16, (at.1 + lift) as u16);
         let segment = self
             .worktree_segments(&form)
             .iter()
             .position(|(rect, _)| rect.contains(at.0, at.1));
+        // A press in the box puts the caret at the letter pressed.
+        let (line, field) = self.worktree_field(&form);
+        if line.contains(at.0, at.1) {
+            form.caret = input_press(line, &field, fine.0, &*self.measure);
+        }
         match (pressed, segment) {
             (Some(0), _) => {}
             (Some(_), _) => self.create_worktree(form),
@@ -261,6 +267,22 @@ impl App {
             }
             (None, None) => {}
         }
+    }
+
+    /// The branch's box: its line, on the dialog's text edges, and what it shows.
+    fn worktree_field<'a>(&self, form: &'a NewWorktree) -> (Rect, Input<'a>) {
+        let area = self.new_worktree_area();
+        let (left, right) = (area.x + 2, area.right().saturating_sub(2));
+        let line = Rect::new(left, area.y + FIELD_ROW, right - left, 1);
+        let field = Input {
+            text: &form.branch,
+            hint: "Branch name",
+            focused: true,
+            behind: self.theme.popup,
+            caret: form.caret,
+            kept: 0,
+        };
+        (line, field)
     }
 
     pub(super) fn draw_new_worktree(&self, grid: &mut Grid, form: &NewWorktree) {
@@ -296,13 +318,7 @@ impl App {
         };
         let after = f32::from(left) + self.measure.width(title, bold) + 1.0;
         grid.label_at(after, end + 1, area.y + TITLE_ROW, &from, dim, right, 90);
-        let line = Rect::new(left, area.y + FIELD_ROW, right - left, 1);
-        let field = Input {
-            text: &form.branch,
-            hint: "Branch name",
-            focused: true,
-            behind: theme.popup,
-        };
+        let (line, field) = self.worktree_field(form);
         input(grid, line, &field, &*self.measure, theme);
         let note = match &form.error {
             Some(error) => (
@@ -495,6 +511,96 @@ mod tests {
     fn typed(app: &mut App, text: &str) {
         for c in text.chars() {
             app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+        }
+    }
+
+    /// The branch's box drew its caret after the last letter wherever it was, and a name
+    /// longer than the box ran to its line: it shows the part the caret is in, its caret
+    /// where it stands, and a press puts the caret at the letter pressed.
+    #[test]
+    fn a_long_branch_name_shows_the_part_its_caret_is_in() {
+        let (_dir, root) = repository();
+        let mut app = App::new(root.clone(), (120, 40));
+        app.run(Command::NewWorktree);
+        let long = "fix/the-pop-order-of-the-bounded-queue-when-a-fast-producer-outruns-it";
+        typed(&mut app, long);
+        let line = match &app.overlay {
+            Overlay::NewWorktree(form) => app.worktree_field(form).0,
+            _ => panic!("the dialog"),
+        };
+        let row = |app: &App| {
+            let grid = screen(app);
+            let cells = (line.x..line.right()).map(|x| grid.cell(x, line.y).symbol.clone());
+            (cells.collect::<String>(), grid.cursor)
+        };
+        let (shown, cursor) = row(&app);
+        assert!(
+            shown.contains("outruns-it") && !shown.contains("fix/"),
+            "{shown}"
+        );
+        assert_eq!(cursor.map(|(_, y)| y), Some(line.y));
+        // Home, then Option+F twice, as a terminal sends Option+Right: after "the".
+        app.handle(Event::Key(KeyEvent::plain(Key::Home)));
+        let alt_f = KeyEvent {
+            key: Key::Char('f'),
+            mods: Mods {
+                alt: true,
+                ..Mods::default()
+            },
+        };
+        app.handle(Event::Key(alt_f));
+        app.handle(Event::Key(alt_f));
+        let (shown, cursor) = row(&app);
+        assert!(shown.trim_start().starts_with("fix/the-pop"), "{shown}");
+        // Cut a column short of the box's far edge, which it ran to.
+        let kept = shown.trim_end().chars().count();
+        assert_eq!(kept + 1, shown.chars().count(), "{shown:?}");
+        assert_eq!(cursor, Some((line.x + 1 + 7, line.y)), "after \"fix/the\"");
+        typed(&mut app, "-whole");
+        let branch = |app: &App| match &app.overlay {
+            Overlay::NewWorktree(form) => form.branch.clone(),
+            _ => panic!("the dialog"),
+        };
+        assert!(branch(&app).starts_with("fix/the-whole-pop-order"));
+        // A press on the "p" of "pop".
+        let (_, lift) = app.worktree_lifts();
+        let x = f32::from(line.x + 1) + 14.0;
+        app.handle(Event::Mouse(MouseEvent {
+            kind: MouseKind::Left,
+            x: x as u16,
+            y: line.y,
+            fine_x: x,
+            fine_y: f32::from(line.y) - lift + 0.5,
+            mods: Mods::default(),
+        }));
+        typed(&mut app, "x");
+        assert!(
+            branch(&app).starts_with("fix/the-whole-xpop-order"),
+            "{}",
+            branch(&app)
+        );
+        // Painted, the caret stays in the box, at either end of the name.
+        app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
+        for key in [Key::End, Key::Home] {
+            app.handle(Event::Key(KeyEvent::plain(key)));
+            let grid = screen(&app);
+            let caret = grid.caret.expect("a caret").x;
+            let unit = cellix_render::units(1.0);
+            let inside = i32::from(line.x) * unit..i32::from(line.right()) * unit;
+            assert!(inside.contains(&caret), "{key:?}: {caret} in {inside:?}");
+        }
+        // On the tour's rows, typed and drawn a letter at a time.
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        let rows = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        app.set_measure(std::rc::Rc::new(rows));
+        app.run(Command::NewWorktree);
+        for c in long.chars() {
+            app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+            screen(&app);
+            assert!(
+                matches!(app.overlay, Overlay::NewWorktree(_)),
+                "closed at {c}"
+            );
         }
     }
 

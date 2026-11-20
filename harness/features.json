@@ -7558,5 +7558,47 @@
     "title": "A blinking caret on the pixel tiers costs a placement each half and no wake of its own; behind another window nothing",
     "test": "a_blinking_caret_costs_a_placement_and_no_wake_of_its_own",
     "passes": true
+  },
+  {
+    "id": "rename-tab-edits-as-a-box",
+    "milestone": 15,
+    "title": "Rename tab and every prompt edit as any text box: a caret by letter, word and line, the word and line deletes, paste at the caret, a press at a letter",
+    "test": "rename_tab_edits_its_name_as_any_text_box_does",
+    "passes": true
+  },
+  {
+    "id": "box-caret-drawn-where-it-stands",
+    "milestone": 15,
+    "title": "A text box draws its caret where it stands, clear of the letters either side, and in the cell typing goes into",
+    "test": "a_boxs_caret_is_drawn_where_it_stands",
+    "passes": true
+  },
+  {
+    "id": "box-long-text-shows-caret",
+    "milestone": 15,
+    "title": "A text longer than its box shows the part the caret is in",
+    "test": "a_long_name_shows_the_part_the_caret_is_in",
+    "passes": true
+  },
+  {
+    "id": "find-bar-edits-as-a-box",
+    "milestone": 15,
+    "title": "The Find bar's query and replacement edit as any text box, and a press in either puts the caret there",
+    "test": "the_find_bars_fields_edit_as_any_text_box_does",
+    "passes": true
+  },
+  {
+    "id": "other-boxes-edit-as-a-box",
+    "milestone": 15,
+    "title": "The Search sidebar's boxes, Settings' filter and the emoji picker's field edit as any text box; Ctrl+W takes a word in a box",
+    "test": "the_other_boxes_edit_as_any_text_box_does",
+    "passes": true
+  },
+  {
+    "id": "commit-message-edits-as-a-box",
+    "milestone": 15,
+    "title": "The commit message is written as any text box, its caret where it stands and moved by a press",
+    "test": "a_commit_message_is_written_as_any_text_box_is",
+    "passes": true
   }
 ]

@@ -11,7 +11,7 @@ pub fn key(text: &mut String, caret: &mut usize, key: KeyEvent) -> bool {
     let mods = key.mods;
     match key.key {
         // As in a shell. Elsewhere Ctrl+W closes the tab, but not while writing.
-        Key::Char('w' | 'W') if mods.ctrl => {
+        _ if takes_word(key) => {
             let to = word_left(text, *caret);
             delete(text, caret, to);
             return true;
@@ -63,11 +63,52 @@ pub fn key(text: &mut String, caret: &mut usize, key: KeyEvent) -> bool {
     true
 }
 
+/// Whether a key is Ctrl+W, which a box takes as a shell does, for the word before the caret,
+/// however else it's bound.
+pub fn takes_word(key: KeyEvent) -> bool {
+    matches!(key.key, Key::Char('w' | 'W')) && key.mods.ctrl
+}
+
 /// Puts `inserted` in at the caret and moves the caret past it.
 pub fn insert(text: &mut String, caret: &mut usize, inserted: &str) {
     *caret = on_boundary(text, *caret);
     text.insert_str(*caret, inserted);
     *caret += inserted.len();
+}
+
+/// Where a caret kept as `back`, how much of the text stands after it, is: in bytes from
+/// the text's start. A box one line tall keeps its caret that way, so one opened with words
+/// in it, or given them afresh, has its caret after them; and one given fewer words than
+/// stood after its caret has it after them too.
+pub fn caret_of(text: &str, back: usize) -> usize {
+    match text.len().checked_sub(back) {
+        Some(at) => on_boundary(text, at),
+        None => text.len(),
+    }
+}
+
+/// `key`, for a box one line tall that keeps its caret as `back` (`caret_of`). Up, Down and
+/// the page keys aren't its own: they step through what it finds, or move what it's over.
+pub fn line_key(text: &mut String, back: &mut usize, key: KeyEvent) -> bool {
+    if matches!(key.key, Key::Up | Key::Down | Key::PageUp | Key::PageDown) {
+        return false;
+    }
+    let mut caret = caret_of(text, *back);
+    let taken = self::key(text, &mut caret, key);
+    *back = text.len() - caret;
+    taken
+}
+
+/// `insert`, for a box that keeps its caret as `back`.
+pub fn line_insert(text: &mut String, back: &mut usize, inserted: &str) {
+    let mut caret = caret_of(text, *back);
+    insert(text, &mut caret, inserted);
+    *back = text.len() - caret;
+}
+
+/// Puts a caret kept as `back` at byte `caret` of the text, as a press on a letter does.
+pub fn set_caret(text: &str, back: &mut usize, caret: usize) {
+    *back = text.len() - on_boundary(text, caret);
 }
 
 /// Removes what's between the caret and `to`, either side of it, leaving the caret at the
@@ -222,6 +263,28 @@ mod tests {
         press(&mut text, &mut caret, Key::Left, Mods::default());
         press(&mut text, &mut caret, Key::Backspace, Mods::default());
         assert_eq!(text, "one thre");
+    }
+
+    #[test]
+    fn a_box_of_one_line_keeps_its_caret_from_its_end() {
+        let (mut text, mut back) = ("pricing page".to_string(), 0);
+        let press = |text: &mut String, back: &mut usize, key, mods| {
+            line_key(text, back, KeyEvent { key, mods })
+        };
+        press(&mut text, &mut back, Key::Left, ALT);
+        assert_eq!(caret_of(&text, back), 8, "before \"page\"");
+        line_insert(&mut text, &mut back, "the ");
+        assert_eq!((text.as_str(), back), ("pricing the page", 4));
+        // Up and Down are the list's, or the matches', not the box's.
+        assert!(!press(&mut text, &mut back, Key::Up, Mods::default()));
+        assert_eq!(back, 4);
+        // Words given afresh keep the caret as far from their end.
+        text = "billing".to_string();
+        assert_eq!(caret_of(&text, back), 3);
+        set_caret(&text, &mut back, 0);
+        assert_eq!(back, 7);
+        press(&mut text, &mut back, Key::Delete, Mods::default());
+        assert_eq!((text.as_str(), caret_of(&text, back)), ("illing", 0));
     }
 
     #[test]

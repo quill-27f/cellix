@@ -1117,6 +1117,11 @@ def agent_tabs(scratch):
         ("m1-agent-tab-renamed", [*start, ["right", *ON("pricing")], ["wait", 0.4],
                                    ["click", *ON("Rename")], ["wait", 0.3], ["keys", "\x7f" * 12],
                                    ["keys", "billing\r"], ["until", "bill"], ["wait", 0.3]], {}),
+        # Rename tab's box with its caret moved back a word by Option+Left, as a terminal sends
+        # it, into the middle of the name: before "page".
+        ("m1-agent-tab-rename-caret", [*start, ["right", *ON("pricing")], ["wait", 0.4],
+                                        ["click", *ON("Rename")], ["until", "Rename tab"],
+                                        ["keys", "\x1bb"], ["wait", 0.4]], {}),
         ("m1-agent-tabs", [*start, working(), *others, asking("Codex"), working("Gemini"),
                             hook("stop", "Gemini"), ["wait", 0.8]], {}),
         ("m1-agent-tabs-narrow", [*start, working(), *others, asking("Codex"), working("Gemini"),
@@ -1675,6 +1680,14 @@ with tempfile.TemporaryDirectory() as made:
                     ["keys", "\r"], ["until", "Branch name"], ["keys", "fix/pop-order"],
                     ["until", "fix-pop-order"], ["move", *ON("Create")], ["wait", 0.4]]
     shoot("14-new-worktree", new_worktree, CODE_FILE)
+    # A name longer than the box, with the caret moved back to its second word: the box shows
+    # the part the caret is in, cut short of its far edge.
+    long_name = ("fix/the-pop-order-of-the-bounded-queue-when-a-fast-producer-outruns-a-slow-consumer"
+                 "-and-the-buffer-fills-before-anyone-drains-it")
+    # The note under the box names the folder from its start, which the screen's text has;
+    # the box's own letters there are only as many as its cells.
+    shoot("14-new-worktree-long", [*new_worktree[:6], ["keys", long_name], ["until", "worktrees/fix-the-pop"],
+                                   ["keys", "\x1b[H"], ["keys", "\x1bf\x1bf"], ["wait", 0.4]], CODE_FILE)
     # A project with a worktree beside it, whose row is right-clicked: Remove Worktree… is
     # offered, and not pressed.
     shop = f"{scratch}/shop"

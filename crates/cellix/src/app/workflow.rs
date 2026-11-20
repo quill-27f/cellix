@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use cellix_input::{Key, KeyEvent, Mods};
+use cellix_input::{Command, Key, KeyEvent, Mods};
 use cellix_lang::Registry;
 
 use cellix_render::{Bounds, Grid, Rect, Style};
@@ -308,20 +308,45 @@ impl App {
             return false;
         };
         let typed = !key.mods.ctrl && !key.mods.alt;
+        // It edits as any text box does. The deletes take from it whatever has the keyboard,
+        // as letters go into it; the arrows, Home, End and the moves by word go along it
+        // while it has words and no control has the keyboard, and step through the controls
+        // otherwise. Ctrl+W closes Settings, as it closes any tab.
+        let edits = matches!(
+            cellix_input::simple_keymap(key),
+            Some(
+                Command::DeleteBackward
+                    | Command::DeleteForward
+                    | Command::DeleteWordLeft
+                    | Command::DeleteWordRight
+                    | Command::DeleteToLineStart
+                    | Command::DeleteToLineEnd
+            )
+        );
+        let moves = matches!(
+            cellix_input::simple_keymap(key),
+            Some(Command::Move(..) | Command::SelectAll)
+        ) && !matches!(key.key, Key::Up | Key::Down | Key::PageUp | Key::PageDown);
+        let has_words = !page.filter.is_empty();
         match key.key {
             Key::Char(' ') if page.focus.is_some() || page.filter.is_empty() => return false,
-            Key::Char(c) if typed => {
-                page.filter.push(c);
+            Key::Esc if has_words => {
+                page.filter.clear();
+                page.filter_back = 0;
+                page.found_top = 0;
+            }
+            _ if crate::field::takes_word(key) => return false,
+            Key::Char(_) if typed => {
+                crate::field::line_key(&mut page.filter, &mut page.filter_back, key);
                 page.found_top = 0;
                 page.focus = None;
             }
-            Key::Backspace if !page.filter.is_empty() => {
-                page.filter.pop();
+            _ if edits && has_words => {
+                crate::field::line_key(&mut page.filter, &mut page.filter_back, key);
                 page.found_top = 0;
             }
-            Key::Esc if !page.filter.is_empty() => {
-                page.filter.clear();
-                page.found_top = 0;
+            _ if moves && has_words && page.focus.is_none() => {
+                crate::field::line_key(&mut page.filter, &mut page.filter_back, key);
             }
             _ => return false,
         }

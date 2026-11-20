@@ -291,11 +291,8 @@ impl App {
                     .and_then(|p| p.task())
                     .map(|t| t.name.clone())
                     .unwrap_or_default();
-                self.overlay = Overlay::Prompt(Prompt {
-                    label: "Name this task".to_string(),
-                    input: name,
-                    action: PromptAction::RenameTask,
-                });
+                let action = PromptAction::RenameTask;
+                self.overlay = Overlay::Prompt(Prompt::new("Name this task", name, action));
             }
         }
     }

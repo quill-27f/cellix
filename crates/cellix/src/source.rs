@@ -12,7 +12,7 @@ use crate::graph::Graph;
 
 use crate::explorer::file_color;
 use crate::theme::Theme;
-use crate::threads::wrap;
+use crate::threads::wrap_spans;
 
 const SIDE: u16 = 2;
 /// Rows of the message box.
@@ -136,6 +136,8 @@ const SPIN_ROOM: f32 = 1.6;
 pub struct Source {
     pub entries: Vec<Entry>,
     pub message: String,
+    /// How much of the message stands after its caret (`field::caret_of`).
+    pub message_back: usize,
     pub focused: bool,
     pub remote: Remote,
     /// Pushing or pulling, as what to say while it does.
@@ -662,36 +664,106 @@ impl Source {
         let tall = MESSAGE_ROWS as f32 + BOX_ROOM * 2.0;
         let outline = Bounds::cells(left as f32, y as f32 - BOX_ROOM, width as f32, tall);
         grid.panel(outline, 22, Some(theme.text.bg), Some(edge));
-        let inner = width.saturating_sub(2).max(1) as f32;
         let hint = "Message (Enter to commit)";
-        let rows = if self.message.is_empty() {
-            Vec::new()
-        } else {
-            wrap(&format!("{} ", self.message), inner, measure)
-        };
         let writing = Style {
             bg: theme.text.bg,
             ..theme.text
         };
-        if rows.is_empty() {
+        if self.message.is_empty() {
             let quiet = Style {
                 fg: theme.gutter.fg,
                 ..writing
             };
             grid.label(left + 1, y, hint, quiet, frame.right());
         }
-        let shown = rows.len().saturating_sub(MESSAGE_ROWS as usize);
+        let (rows, on, shown) = self.message_rows(area, measure);
         let visible = rows.iter().skip(shown).take(MESSAGE_ROWS as usize);
-        for (offset, row) in visible.enumerate() {
+        for (offset, (start, end)) in visible.enumerate() {
+            let row = &self.message[*start..*end];
             grid.label(left + 1, y + offset as u16, row, writing, frame.right());
         }
         if self.focused {
-            let last = rows.len().saturating_sub(shown).saturating_sub(1) as u16;
-            let across = rows.last().map_or(0.0, |r| {
-                measure.width(r.trim_end_matches(' '), Font::default())
-            });
-            grid.set_caret(left as f32 + 1.0 + across, y + last, 0.62);
+            // After the letters before it on its row, spaces too, so a space moves it.
+            let caret = self.message_caret();
+            let start = rows.get(on).map_or(0, |(start, _)| *start);
+            let across = measure.width(&self.message[start..caret], Font::default());
+            let row = (on - shown) as u16;
+            grid.set_caret(left as f32 + 1.0 + across, y + row, 0.62);
         }
+    }
+
+    /// Where the caret is in the message, in bytes.
+    pub fn message_caret(&self) -> usize {
+        crate::field::caret_of(&self.message, self.message_back)
+    }
+
+    /// The message's rows as it wraps in its box, as byte ranges, with spaces kept where they
+    /// were typed; the row the caret is on; and how many rows are out of sight over the box,
+    /// which shows the rows up to the caret's.
+    fn message_rows(
+        &self,
+        area: Rect,
+        measure: &dyn Measure,
+    ) -> (Vec<(usize, usize)>, usize, usize) {
+        let width = area.w.saturating_sub(SIDE * 2);
+        let inner = width.saturating_sub(2).max(1) as f32;
+        let rows = wrap_spans(&self.message, inner, measure);
+        let caret = self.message_caret();
+        // The last row that starts at or before it: at a row's first letter, that row.
+        let on = rows
+            .iter()
+            .rposition(|(start, _)| *start <= caret)
+            .unwrap_or(0);
+        let shown = (on + 1).saturating_sub(MESSAGE_ROWS as usize);
+        (rows, on, shown)
+    }
+
+    /// A key for the message, which is written as any text box is: by letter, word and line,
+    /// with the deletes a Mac or a shell has taught. Returns whether it meant anything here.
+    pub fn message_key(&mut self, key: cellix_input::KeyEvent) -> bool {
+        let mut caret = self.message_caret();
+        let taken = crate::field::key(&mut self.message, &mut caret, key);
+        self.message_back = self.message.len() - caret;
+        taken
+    }
+
+    /// Puts what's pasted, or a line's end, in at the message's caret.
+    pub fn message_insert(&mut self, text: &str) {
+        crate::field::line_insert(&mut self.message, &mut self.message_back, text);
+    }
+
+    /// A press on the message's box at `x`, with its fraction of a column, on row `y`: the
+    /// caret goes to the nearer edge of the letter pressed, on the row pressed.
+    pub fn press_message(&mut self, area: Rect, (x, y): (f32, u16), measure: &dyn Measure) {
+        let Some(offset) = y.checked_sub(area.y) else {
+            return;
+        };
+        let lines = self.lines();
+        let row = self.line_at(&lines, offset as usize);
+        let Some(Line::Message(row)) = lines.get(row).cloned() else {
+            return;
+        };
+        let (rows, _, shown) = self.message_rows(area, measure);
+        let Some(&(start, end)) = rows.get(shown + row as usize) else {
+            self.message_back = 0;
+            return;
+        };
+        let text = &self.message[start..end];
+        let advances = measure.advances(text, Font::default());
+        let mut edge = f32::from(area.x + SIDE) + 1.0;
+        let mut at = end;
+        for ((i, _), advance) in text.char_indices().zip(advances.iter()) {
+            if x < edge + advance / 2.0 {
+                at = start + i;
+                break;
+            }
+            edge += advance;
+        }
+        // Past the end of a row that wrapped is before its trailing space, on that row.
+        if at == end && end < self.message.len() && !self.message[end..].starts_with('\n') {
+            at = self.message[..end].trim_end_matches(' ').len().max(start);
+        }
+        crate::field::set_caret(&self.message, &mut self.message_back, at);
     }
 
     /// Commit and Push or Pull. Painted, each is a chip inside its row on the sidebar's

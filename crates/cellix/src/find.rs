@@ -22,8 +22,12 @@ pub struct Find {
     pub matches: Vec<(usize, usize)>,
     pub current: usize,
     pub options: Options,
+    /// How much of the query stands after its caret: none, as it opens.
+    pub back: usize,
     /// What matches become, while the replace row shows.
     pub replace: Option<String>,
+    /// How much of that stands after its caret.
+    pub replace_back: usize,
     /// The replace field has the keyboard.
     pub in_replace: bool,
     /// Why the query can't be searched for, as a regular expression that doesn't parse.
@@ -62,12 +66,39 @@ impl Find {
         self.current = self.matches.iter().position(|m| m.0 >= from).unwrap_or(0);
     }
 
-    /// The field that has the keyboard.
-    pub fn field_mut(&mut self) -> &mut String {
+    /// The field that has the keyboard, and its caret, kept as how much of it stands after
+    /// the caret (`field::caret_of`).
+    pub fn field_mut(&mut self) -> (&mut String, &mut usize) {
         match &mut self.replace {
-            Some(with) if self.in_replace => with,
-            _ => &mut self.query,
+            Some(with) if self.in_replace => (with, &mut self.replace_back),
+            _ => (&mut self.query, &mut self.back),
         }
+    }
+
+    /// Where the caret is in the query, in bytes.
+    pub fn caret(&self) -> usize {
+        crate::field::caret_of(&self.query, self.back)
+    }
+
+    /// Where the caret is in what matches become.
+    pub fn replace_caret(&self) -> usize {
+        let with = self.replace.as_deref().unwrap_or_default();
+        crate::field::caret_of(with, self.replace_back)
+    }
+
+    /// A key for the field that has the keyboard, which edits it as any text box is edited.
+    /// Returns whether the query changed, and so is to be looked for again.
+    pub fn key(&mut self, key: cellix_input::KeyEvent) -> bool {
+        let was = self.query.clone();
+        let (text, back) = self.field_mut();
+        crate::field::line_key(text, back, key);
+        self.query != was
+    }
+
+    /// Puts what's pasted in at the caret of the field that has the keyboard.
+    pub fn paste(&mut self, pasted: &str) {
+        let (text, back) = self.field_mut();
+        crate::field::line_insert(text, back, pasted);
     }
 
     pub fn step(&mut self, delta: isize) {

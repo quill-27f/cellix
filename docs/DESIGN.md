@@ -1839,6 +1839,32 @@ uses, moves its caret and deletes by letter and by word, a press puts the caret 
 edge of the letter pressed, and a query longer than the box shows the part the caret is in. A
 press anywhere in the panel that isn't on a row to pick leaves it open.
 
+Every other box is edited the same way: a prompt's (Rename tab, Rename Symbol, Go to Line, a
+file's name, a stash's message, Save Review and the rest), the Find bar's two, the Search
+sidebar's two, Settings' filter, the New Worktree dialog's and the commit message. A box of one
+line keeps its caret as how much of its text stands after it (`field::line_key`), so one opened
+with words in it, Rename tab with the tab's name, has its caret at their end; Up and Down
+aren't its own, they step through matches or move what it's over. What's pasted goes in at the
+caret, and a press puts the caret at the nearer edge of the letter pressed
+(`palette::input_press`). `palette::input` draws the caret where it stands, and a text longer
+than its box shows the part the caret is in (`hidden_before`, shared with the palette's field),
+its words cut a column short of the box's far edge. Painted, the caret keeps clear of the
+letters either side of it (`palette::caret_nudge`, which the palette's field and Settings' filter
+share): just past the ink of the letter it follows where a space or the end comes next, in the
+middle of a space it follows, and centred on the edge between two letters, the only room there
+is. Placed 0.1 of a column before the end of the letter it followed, it stood 1 px from a "p"
+after it and ran into an "r"'s arm before it at the end ("orden", the ui-expert's review). In
+cells the caret is in the cell typing goes into. A box being written in takes Ctrl+W, as a shell and the
+comment composer do, for the word before the caret, and the tab under it stays: until 20
+November 2026 Ctrl+W closed that tab from the palette, a prompt, Find and the Search box. Ctrl+Q
+quits from anywhere. Settings' filter is the exception, since typing anywhere in Settings goes
+there without its having the keyboard: the deletes edit it whatever has the keyboard, the arrows
+and Home and End move along it only while no control has the keyboard, and Ctrl+W closes
+Settings as it closes any tab (the user's word). The emoji picker's arrows move among the emoji,
+so its field takes only the deletes, from its end. The commit message wraps in its box as a
+comment does (`threads::wrap_spans`), spaces kept where they were typed, and shows the rows up to
+the caret's.
+
 Every row to pick is drawn one way (`palette::Parts`): an icon where its kind has one, its
 words, something quieter after them at 85 percent, and something at its far end, which the
 words stop two columns short of. What's set smaller is dropped a pixel to stand on the words'

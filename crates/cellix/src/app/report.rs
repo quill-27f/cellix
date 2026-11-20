@@ -247,11 +247,8 @@ impl App {
             })
             .find(|name| !root.join(name).exists())
             .unwrap_or_default();
-        self.overlay = Overlay::Prompt(Prompt {
-            label: "Save review as".to_string(),
-            input: free,
-            action: PromptAction::SaveReview,
-        });
+        let action = PromptAction::SaveReview;
+        self.overlay = Overlay::Prompt(Prompt::new("Save review as", free, action));
     }
 
     /// The name typed: a Markdown file in the project, asked about first when it's there.
