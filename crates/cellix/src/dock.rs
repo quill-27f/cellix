@@ -13,7 +13,9 @@ use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb as TermRgb};
+use alacritty_terminal::vte::ansi::{
+    Color, CursorShape, CursorStyle, NamedColor, Processor, Rgb as TermRgb,
+};
 use cellix_input::{Key, KeyEvent, MouseKind};
 use cellix_render::{Bitmap, Bounds, Grid, Icon, Paint, Rect, Rgb, Style};
 use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
@@ -24,6 +26,19 @@ use crate::kitty::{Delete, Outcome, Piece, Protocol, Scanner, Shown};
 use crate::pdfview::PdfView;
 use crate::theme::Theme;
 use crate::threads::Draft;
+
+/// How a terminal pane starts: its cursor a block that blinks, as every caret in Cellix does,
+/// until its program asks for a steady one (DECSCUSR 2, 4 or 6, or `CSI ? 12 l`). DECSCUSR 0
+/// comes back to this.
+fn term_config() -> Config {
+    Config {
+        default_cursor_style: CursorStyle {
+            shape: CursorShape::Block,
+            blinking: true,
+        },
+        ..Config::default()
+    }
+}
 
 /// Columns the file beside the pane keeps, and the pane's own least, at the width it opens.
 const MIN_MAIN: u16 = 44;
@@ -719,7 +734,7 @@ impl Session {
             shell: name == crate::agents::SHELL.0,
             browser: name == BROWSER,
             name: name.to_string(),
-            term: Term::new(Config::default(), &dimensions, events.clone()),
+            term: Term::new(term_config(), &dimensions, events.clone()),
             parser: Processor::new(),
             events,
             writer,
@@ -1986,9 +2001,6 @@ impl Session {
             let at_cursor = show_cursor
                 && point.line == cursor.point.line
                 && point.column == cursor.point.column;
-            if at_cursor {
-                (fg, bg) = (theme.sidebar.bg, theme.text.fg);
-            }
             let style = Style {
                 fg,
                 bg,
@@ -2003,9 +2015,37 @@ impl Session {
             } else {
                 cell.c.encode_utf8(&mut text)
             };
-            if UnicodeWidthStr::width(shown) > 0 {
-                grid.put_str(area.x + x, area.y + y, shown, style, area.right());
+            if UnicodeWidthStr::width(shown) == 0 {
+                continue;
             }
+            let (column, row) = (area.x + x, area.y + y);
+            if !at_cursor {
+                grid.put_str(column, row, shown, style, area.right());
+                continue;
+            }
+            // The cursor is its cell inverted, and what draws the grid knows both looks: the
+            // half of a blink it's away shows the cell's own, and the cell tier puts the
+            // terminal's own cursor there instead, blinking as its program asked.
+            grid.put_str(column, row, shown, style, area.right());
+            let off = grid.cell(column, row).clone();
+            let inverted = Style {
+                fg: theme.sidebar.bg,
+                bg: theme.text.fg,
+                ..style
+            };
+            grid.put_str(column, row, shown, inverted, area.right());
+            let asked = self.term.cursor_style();
+            grid.term_cursors.push(cellix_render::TermCursor {
+                at: (column, row),
+                on: grid.cell(column, row).clone(),
+                off,
+                shape: match asked.shape {
+                    CursorShape::Underline => cellix_render::CursorShape::Underline,
+                    CursorShape::Beam => cellix_render::CursorShape::Bar,
+                    _ => cellix_render::CursorShape::Block,
+                },
+                blinks: asked.blinking,
+            });
         }
         // The match Find is on is ringed too where there are pixels, as in a file.
         let current = self.found_at.and_then(|at| self.found.get(at));

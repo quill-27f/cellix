@@ -620,6 +620,9 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
         ),
         "TERM_BG": background,
         "TERM_PADDING": "10x24",
+        # The caret held still, so it's in every picture of it, half a second away or not.
+        # Settings still shows Cursor blinking on, as a person's does.
+        "CELLIX_CURSOR_BLINK": "0",
         **extra,
     }
     env.pop("CLAUDE_CONFIG_DIR", None)

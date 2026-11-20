@@ -127,6 +127,57 @@ building or exporting has the status bar's item alone, as VS Code's tasks do, an
 file: "Building main.tex", "Exporting notes.pdf". A message saying "Building main.tex…" stood
 beside an item saying "Building PDF" until 18 November 2026; the item says it once now.
 
+### The caret blinks
+
+The caret blinks as VS Code's does, the user's pick on 20 November 2026: in files, on pages, in
+every text box, and in a terminal pane unless its program asks for a steady cursor. It's half a
+second shown and half away, VS Code's editor's figure (`ViewCursors.BLINK_INTERVAL`, 500 ms;
+530 ms, first thought of, is Windows' caret time), one phase for everything on screen
+(`app/blink.rs`). Any key, paste, press or drag shows it and starts it over, and so does the
+caret or a terminal's cursor being drawn anywhere else, so it's solid while typing or moving.
+While the terminal says Cellix's window is behind another it stays shown and nothing wakes for
+it (VS Code hides an unfocused editor's caret; a window beside the one typed in still says
+where it is). Settings › Editor's Cursor blinking (`cursor_blink`, on unless set false, kept in
+`~/.config/cellix/settings.json` like the other picks and read again as the window comes
+back) turns it off. Inside Claude Code's pane nothing blinks, as nothing turns there: each half
+would be its row's picture crossing again.
+
+A terminal pane starts with a blinking block (`dock::term_config`), and its program asks for a
+steady cursor as it would in any terminal, with DECSCUSR 2, 4 or 6 or `CSI ? 12 l`, which is
+kept; DECSCUSR 0 is back to blinking. Claude Code hides the terminal's cursor and draws its own,
+so there's nothing of it to blink.
+
+What it costs. On cells the terminal blinks its own cursor: it's told the cursor's shape and
+whether it blinks (DECSCUSR) once, as they change, a bar for a caret and a terminal pane's
+program's own shape there, so a blink is no wake and no byte of Cellix's, and leaving gives the
+terminal its own cursor back (`CSI 0 SP q`). So a terminal pane's cursor on cells is the
+terminal's own cursor at its cell, where it was the cell inverted; one something was drawn over
+since, as a tip or a menu, is left as that drew it (`App::finish_caret`). On the pixel tiers the
+loop takes the frame shown to the blink's other half, as a spinner's step is taken, with nothing
+laid out (`Grid::blink_to`): the caret comes and goes, and a terminal's cursor's cell shows its
+own look. A tile is a hash of its row, so once both halves of the row are in the terminal a
+blink sends no picture, only the row's placement moved from one tile to the other: 92 bytes in
+a window of 100 by 26, about 160 in one of 170 by 46.
+The tick is half a second too, so it runs at each half of the blink and not on its own time as
+well (`Pace::tick_may_come`), and a window with a caret wakes twice a second as one without
+does: run apart, they woke it 4.2 times a second, the tick a moment after each blink.
+`a_blinking_caret_costs_a_placement_and_no_wake_of_its_own` holds it to that with the real
+binary in the tour's terminal: in front, two presents a second sent, a placement's bytes and no
+tile, at no more than 2.05 wakes a second (measured 2.00); behind another window, no byte at
+the tick's 2 (1.91).
+`harness/x perf` (release builds, a page open in a window of 170 by 46, 2 rounds of 10 s)
+against 0.12.0, which has no blink:
+
+| Idle | Window | CPU | Bytes a second | Presents sent a second | Wakes a second | Tiles |
+|---|---|---|---|---|---|---|
+| 0.12.0 | in front | 0.2 % | 0 | 0 | 2.0 | 0 |
+| Blinking | in front | 0.25 % | 328 | 2 | 2.05 | 0 |
+| 0.12.0 | behind | 0.2 % | 0 | 0 | 2.0 | 0 |
+| Blinking | behind | 0.2 % | 0 | 0 | 1.95 | 0 |
+
+The tour and the harness's other pictures hold the caret still (`CELLIX_CURSOR_BLINK=0`), so a
+picture never catches it away; Settings still says Cursor blinking is on there.
+
 ### Counting what the loop does
 
 `slow-frames.log` notes frames slow enough to feel and nothing else, which is blind to a busy
@@ -176,7 +227,9 @@ or gone, how full a session's context is, a picture read, a hover) with those of
 drawn, and draws only when they differ. What the marks can't name, and what tells the time
 ("2 min ago"), the tick's heartbeat lays out every two seconds, as often as the disk is looked
 at (`pace.rs`). And a present with nothing different writes nothing at all, on pixels and on
-cells, so a heartbeat over an unchanged window sends no byte.
+cells, so a heartbeat over an unchanged window sends no byte. A caret blinking on the pixel
+tiers is the one thing an idle window in front sends: its row's placement each half second, at
+the tick's wakes ("The caret blinks"); behind another window, nothing.
 
 ### Tiles as files, where Ghostty is on this machine
 
@@ -267,7 +320,8 @@ sends and as it goes), the language servers' and highlighting's threads (`cellix
 the agents' socket and the IDE's (`cellix_agent::wake_with`), a session's end, a stop, and a
 resize, whose signal pokes it beside crossterm's own (`signal-hook-registry`). The look at the
 disk every two seconds pokes only when it saw something the last look didn't. The wait then
-ends at the soonest of the tick, a spinner's step, a frame of output waiting, a program's
+ends at the soonest of the tick, a spinner's step, the caret's next half on the pixel tiers
+(with which the tick then comes, "The caret blinks"), a frame of output waiting, a program's
 synchronized update running out, and the terminal asked its cell's size once the window
 settles, rounded up to the millisecond so it never ends just before what it waits for. What is
 timed from a moment just past and checked as the loop goes round (a question for an agent

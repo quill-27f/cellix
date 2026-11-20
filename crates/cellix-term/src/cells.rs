@@ -1,8 +1,32 @@
 use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use cellix_render::{Grid, Piece, Rect, Style};
+use cellix_render::{CursorShape, Grid, Piece, Rect, Style};
 
 use crate::Backend;
+
+/// Whether the terminal's cursor was given a shape, so it's given its own back at the end.
+static STYLED: AtomicBool = AtomicBool::new(false);
+
+/// Whether a cell tier asked the terminal for a cursor of its own shape, which leaving should
+/// undo with `CURSOR_DEFAULT`.
+pub fn cursor_styled() -> bool {
+    STYLED.load(Ordering::Relaxed)
+}
+
+/// DECSCUSR 0: the cursor the terminal's own settings give it.
+pub const CURSOR_DEFAULT: &str = "\x1b[0 q";
+
+/// DECSCUSR for a shape, blinking or steady: 1 and 2 a block, 3 and 4 an underline, 5 and 6
+/// a bar, the odd ones blinking.
+fn cursor_style(shape: CursorShape, blinks: bool) -> String {
+    let steady = match shape {
+        CursorShape::Block => 2,
+        CursorShape::Underline => 4,
+        CursorShape::Bar => 6,
+    };
+    format!("\x1b[{} q", steady - u8::from(blinks))
+}
 
 /// Styled text cells. Works everywhere, so every feature must work here.
 #[derive(Default)]
@@ -12,6 +36,9 @@ pub struct CellBackend {
     scrolled: bool,
     /// What it has done since the counters last asked: rows written count as rows.
     work: crate::Work,
+    /// The cursor's shape and blink as the terminal was last told them. The terminal blinks
+    /// its own cursor, so a blink costs Cellix nothing here: no wake, no byte.
+    told: Option<(CursorShape, bool)>,
 }
 
 fn sgr(style: Style, out: &mut Vec<u8>) {
@@ -44,10 +71,19 @@ impl Backend for CellBackend {
             Some(shown) => grid.diff(shown),
             None => grid.diff(&Grid::new(0, 0, Style::default())),
         };
+        // The cursor's shape and blink, said only when they change, and only for a cursor
+        // that shows.
+        let look = (grid.cursor_shape, grid.cursor_blinks);
+        let restyle = grid.cursor.is_some() && self.told != Some(look);
         // Nothing different, and the cursor where it was: nothing to send.
         let cursor_kept = self.shown.as_ref().is_some_and(|s| s.cursor == grid.cursor);
-        if runs.is_empty() && cursor_kept && !std::mem::take(&mut self.scrolled) {
+        if runs.is_empty() && cursor_kept && !restyle && !std::mem::take(&mut self.scrolled) {
             return Ok(());
+        }
+        if restyle {
+            bytes.extend_from_slice(cursor_style(look.0, look.1).as_bytes());
+            self.told = Some(look);
+            STYLED.store(true, Ordering::Relaxed);
         }
         self.scrolled = false;
         let mut last = None;
@@ -80,6 +116,8 @@ impl Backend for CellBackend {
 
     fn invalidate(&mut self) {
         self.shown = None;
+        // A terminal that forgot what it showed, as a multiplexer's new client, is told again.
+        self.told = None;
     }
 
     fn take_work(&mut self) -> crate::Work {
@@ -227,6 +265,58 @@ mod tests {
         let mut out = Vec::new();
         backend.present(&grid, &mut out).unwrap();
         assert!(!String::from_utf8_lossy(&out).contains("\x1b[?25h"));
+    }
+
+    /// On cells the terminal blinks its own cursor: it's told the cursor's shape and whether it
+    /// blinks (DECSCUSR) once, as they change, and a frame after that with nothing different
+    /// sends nothing, so a blink costs no wake and no byte. A bar for the caret, a terminal
+    /// pane's program's own shape, steady where the grid says so.
+    #[test]
+    fn the_terminal_is_told_to_blink_its_own_cursor_once() {
+        let mut backend = CellBackend::default();
+        let mut grid = Grid::new(20, 5, Style::default());
+        grid.cursor = Some((2, 1));
+        grid.cursor_blinks = true;
+        let mut out = Vec::new();
+        backend.present(&grid, &mut out).unwrap();
+        let text = String::from_utf8_lossy(&out).into_owned();
+        assert!(text.contains("\x1b[5 q"), "a blinking bar: {text:?}");
+        assert!(
+            cursor_styled(),
+            "so leaving gives the terminal its own back"
+        );
+        let mut again = Vec::new();
+        backend.present(&grid, &mut again).unwrap();
+        assert!(
+            again.is_empty(),
+            "told once: {:?}",
+            String::from_utf8_lossy(&again)
+        );
+        // The window behind another: steady.
+        grid.cursor_blinks = false;
+        let mut out = Vec::new();
+        backend.present(&grid, &mut out).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out),
+            "\x1b[?2026h\x1b[?25l\x1b[6 q\x1b[2;3H\x1b[?25h\x1b[?2026l"
+        );
+        // A program's block, blinking, and an underline it asked to keep still.
+        grid.cursor_shape = CursorShape::Block;
+        grid.cursor_blinks = true;
+        let mut out = Vec::new();
+        backend.present(&grid, &mut out).unwrap();
+        assert!(String::from_utf8_lossy(&out).contains("\x1b[1 q"));
+        grid.cursor_shape = CursorShape::Underline;
+        grid.cursor_blinks = false;
+        let mut out = Vec::new();
+        backend.present(&grid, &mut out).unwrap();
+        assert!(String::from_utf8_lossy(&out).contains("\x1b[4 q"));
+        // With no cursor shown, nothing is said of its shape.
+        grid.cursor = None;
+        grid.cursor_shape = CursorShape::Bar;
+        let mut out = Vec::new();
+        backend.present(&grid, &mut out).unwrap();
+        assert!(!String::from_utf8_lossy(&out).contains(" q"));
     }
 
     #[test]

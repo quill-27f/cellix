@@ -66,6 +66,7 @@ use crate::snippets::Snippet;
 use crate::source::{Hit as SourceHit, Source as SourceControl};
 
 mod available;
+mod blink;
 mod gitops;
 mod glance;
 mod links;
@@ -1511,6 +1512,8 @@ pub struct App {
     suggest_asked: bool,
     /// Running as a pane inside Claude Code.
     pub in_pane: bool,
+    /// Where the caret's blink stands.
+    pub(crate) blink: blink::Blink,
     /// Below this width the sidebar becomes a drawer. A pane beside an agent sets it higher.
     pub compact_width: u16,
     /// Why a pane should come forward, for the mod.
@@ -1983,6 +1986,7 @@ impl App {
             measure: Rc::new(CellMeasure),
             agents: Agents::default(),
             in_pane: false,
+            blink: blink::Blink::default(),
             compact_width: COMPACT_WIDTH,
             attention: None,
             suggest: None,
@@ -4993,6 +4997,7 @@ impl App {
     }
 
     pub fn handle(&mut self, event: Event) {
+        self.blink_on(&event);
         // Ticks and pointer moves aren't the user moving on, so they leave messages up.
         let passive = matches!(
             event,
@@ -12838,6 +12843,9 @@ impl App {
     /// The terminal has given this window the keys again.
     pub fn window_returned(&mut self) {
         self.follow_comment_sort();
+        // Cursor blinking as it was last set in Settings, by this Cellix or another.
+        let settings = Settings::load_with(self.settings_file.as_deref(), self.workspace.root());
+        self.settings.cursor_blink = settings.cursor_blink;
     }
 
     /// The orders the Comments pane can list in, as a menu dropped from the order's button,
@@ -17270,6 +17278,12 @@ impl App {
                 self.settings.motion = Some(on);
                 note = store("motion", on.into());
             }
+            Control::CursorBlink => {
+                let on = self.settings.cursor_blink == Some(false);
+                self.settings.cursor_blink = Some(on);
+                self.restart_blink();
+                note = store("cursor_blink", on.into());
+            }
             Control::InlayHints => {
                 let on = self.settings.inlay_hints == Some(false);
                 self.settings.inlay_hints = Some(on);
@@ -17927,6 +17941,11 @@ impl App {
     }
 
     pub fn draw(&self, grid: &mut Grid) {
+        self.draw_all(grid);
+        self.finish_caret(grid);
+    }
+
+    fn draw_all(&self, grid: &mut Grid) {
         grid.turn = self.turn();
         grid.bands = self.tile_bands();
         grid.cursor = None;
@@ -18025,6 +18044,7 @@ impl App {
                 inlay_hints,
                 format_on_save: self.settings.format_on_save == Some(true),
                 reading_width: self.settings.reading_width != Some(false),
+                cursor_blink: self.settings.cursor_blink != Some(false),
                 auto_save,
                 notify: self.settings.notify != Some(false),
             };
@@ -21968,6 +21988,8 @@ mod agent_tab_tests;
 mod agents_list_tests;
 #[cfg(test)]
 mod ask_tests;
+#[cfg(test)]
+mod blink_tests;
 #[cfg(test)]
 mod card_copy_tests;
 #[cfg(test)]

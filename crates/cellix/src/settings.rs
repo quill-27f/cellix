@@ -21,6 +21,9 @@ pub struct Settings {
     pub smooth_scroll: Option<bool>,
     /// `false` keeps what shows something under way still: a dot where a spinner would turn.
     pub motion: Option<bool>,
+    /// `false` keeps the caret still, in files, pages, text boxes and terminals. It blinks
+    /// otherwise, as VS Code's does.
+    pub cursor_blink: Option<bool>,
     /// How tall a row is where Cellix can set it: `airy` (the default), `comfortable`, or
     /// `terminal` for the terminal's own line, which is what a row is everywhere else.
     pub row_height: Option<String>,
@@ -99,6 +102,7 @@ impl Settings {
         self.theme = other.theme.or(self.theme.take());
         self.smooth_scroll = other.smooth_scroll.or(self.smooth_scroll.take());
         self.motion = other.motion.or(self.motion.take());
+        self.cursor_blink = other.cursor_blink.or(self.cursor_blink.take());
         self.row_height = other.row_height.or(self.row_height.take());
         self.minimap = other.minimap.or(self.minimap.take());
         self.inlay_hints = other.inlay_hints.or(self.inlay_hints.take());

@@ -62,6 +62,13 @@ impl Pace {
         now.duration_since(self.last_tick) >= TICK
     }
 
+    /// Whether it may come early, to keep another's time: half its time has gone by. A caret's
+    /// blink is as long as the tick, so the tick runs at each half of it and a window with a
+    /// caret wakes no more often than one without.
+    pub fn tick_may_come(&self, now: Instant) -> bool {
+        now.duration_since(self.last_tick) >= TICK / 2
+    }
+
     /// How long until it's due.
     pub fn until_tick(&self, now: Instant) -> Duration {
         TICK.saturating_sub(now.duration_since(self.last_tick))

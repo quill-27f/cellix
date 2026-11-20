@@ -1544,6 +1544,52 @@ mod tests {
         assert_eq!(count(&present(&mut b, &moved), "a=t,"), 1, "only row 1");
     }
 
+    /// The caret blinks by its row's two looks: the first hidden half is a new tile, and once
+    /// the terminal has both, a blink sends no picture, only the row's placement moved from
+    /// one tile to the other, a few dozen bytes, and the rows round it nothing. A terminal
+    /// pane's cursor, its cell inverted, blinks the same way.
+    #[test]
+    fn a_blink_sends_no_tile_once_both_looks_are_in_the_terminal() {
+        let mut b = PixelBackend::new(Flat, Placement::Direct, DEFAULT_QUOTA);
+        let mut grid = page(0);
+        grid.set_caret(1.0, 1, 0.6);
+        let inverted = Style {
+            fg: cellix_render::Rgb(0, 0, 0),
+            bg: cellix_render::Rgb(255, 255, 255),
+            ..Style::default()
+        };
+        let plain = grid.cell(6, 3).clone();
+        grid.put_str(6, 3, &plain.symbol, inverted, 7);
+        grid.blink_cell(6, 3, plain);
+        grid.cursor_blinks = true;
+        present(&mut b, &grid);
+        grid.blink_to(false);
+        let first = present(&mut b, &grid);
+        assert_eq!(
+            count(&first, "a=t,"),
+            2,
+            "the two rows' hidden halves are new"
+        );
+        for n in 0..6 {
+            grid.blink_to(n % 2 == 0);
+            let frame = present(&mut b, &grid);
+            assert_eq!(count(&frame, "a=t,"), 0, "blink {n}: no tile");
+            assert_eq!(
+                count(&frame, "a=p,"),
+                2,
+                "blink {n}: the two rows' placements"
+            );
+            assert!(frame.len() < 300, "blink {n}: {} bytes", frame.len());
+        }
+        // Shown again, it's the frame it was.
+        grid.blink_to(true);
+        let mut drawn = page(0);
+        drawn.set_caret(1.0, 1, 0.6);
+        assert_eq!(grid.caret, drawn.caret);
+        assert_eq!(grid.cursor, drawn.cursor);
+        assert_eq!(grid.cell(6, 3).style, inverted);
+    }
+
     /// A frame with nothing different sends nothing at all, not even the synchronized
     /// update around nothing: an idle window costs the terminal, tmux and a link nothing.
     #[test]

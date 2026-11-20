@@ -33,6 +33,7 @@ const AUTO_SAVES: [(&str, &str); 3] = [
 const FORMAT_ROW: u16 = 3;
 const AUTO_SAVE_ROW: u16 = 6;
 const READING_ROW: u16 = 9;
+const CURSOR_ROW: u16 = 12;
 /// The Keyboard section: the table's heading, and its first row.
 const KEYS_HEAD_ROW: u16 = 6;
 const KEYS_FIRST_ROW: u16 = 7;
@@ -68,6 +69,11 @@ const AUTO_SAVE: (&str, &str) = ("Auto save", "Saves on its own.");
 const READING: (&str, &str) = (
     "Reading width",
     "Pages keep their text to 88 columns, in the middle of a wider pane.",
+);
+/// VS Code's Cursor Blinking, on or off: its blink, half a second each way.
+const CURSOR_BLINK: (&str, &str) = (
+    "Cursor blinking",
+    "The cursor blinks in files, pages, text boxes and terminals. Off, it stays still.",
 );
 const KEYMAP: (&str, &str) = ("Keymap", "Standard works as in VS Code.");
 const ROW_HEIGHT: (&str, &str) = ("Row height", "How much air each row has.");
@@ -121,8 +127,9 @@ const NOTE_SIZE: u8 = 90;
 /// The size of what heads a column or a category, as a section's heading is anywhere.
 const HEADING_SIZE: u8 = 80;
 const RADIUS: u8 = 30;
-/// Where the servers' rows start, from the top of the page.
-const SERVERS_ROW: u16 = 13;
+/// Where the servers' rows start, from the top of the page: a heading's row under the last
+/// switch and the air under it.
+const SERVERS_ROW: u16 = CURSOR_ROW + 4;
 /// The thumb at a page's edge when there's more of it than is in view: the least it's tall,
 /// in rows, and how wide it is, in columns, as a palette's is.
 const THUMB: f32 = 1.2;
@@ -174,6 +181,7 @@ pub enum Control {
     FormatOnSave,
     AutoSave(&'static str),
     ReadingWidth,
+    CursorBlink,
     /// Empties the filter.
     ClearFilter,
     /// A command's keys, by its place in `shortcuts`: a click records new ones.
@@ -206,6 +214,7 @@ pub struct Values<'a> {
     pub inlay_hints: bool,
     pub format_on_save: bool,
     pub reading_width: bool,
+    pub cursor_blink: bool,
     pub auto_save: &'a str,
     pub notify: bool,
 }
@@ -305,7 +314,9 @@ impl Row {
     fn section(self) -> Section {
         match self {
             Row::Theme | Row::Height => Section::Appearance,
-            Row::Switch(Control::FormatOnSave | Control::ReadingWidth) => Section::Editor,
+            Row::Switch(Control::FormatOnSave | Control::ReadingWidth | Control::CursorBlink) => {
+                Section::Editor
+            }
             Row::Switch(_) => Section::Appearance,
             Row::AutoSave | Row::Server(_) => Section::Editor,
             Row::Block(_) => Section::Integrations,
@@ -324,7 +335,7 @@ impl Row {
 }
 
 /// Every switch in Settings, in the order its pages have them, with its words.
-const SWITCHES: [(Control, (&str, &str)); 10] = [
+const SWITCHES: [(Control, (&str, &str)); 11] = [
     (Control::SmoothScroll, SMOOTH),
     (Control::Motion, MOTION),
     (Control::Minimap, MINIMAP),
@@ -335,6 +346,7 @@ const SWITCHES: [(Control, (&str, &str)); 10] = [
     (Control::Notify, NOTIFY),
     (Control::FormatOnSave, FORMAT),
     (Control::ReadingWidth, READING),
+    (Control::CursorBlink, CURSOR_BLINK),
 ];
 const WORD_WRAP: (&str, &str) = (
     "Word wrap",
@@ -366,6 +378,7 @@ fn switch_on(control: Control, values: &Values) -> bool {
         Control::Notify => values.notify,
         Control::FormatOnSave => values.format_on_save,
         Control::ReadingWidth => values.reading_width,
+        Control::CursorBlink => values.cursor_blink,
         _ => false,
     }
 }
@@ -562,6 +575,9 @@ impl SettingsPage {
         }
         if pair(READING) {
             rows.push(Row::Switch(Control::ReadingWidth));
+        }
+        if pair(CURSOR_BLINK) {
+            rows.push(Row::Switch(Control::CursorBlink));
         }
         for (index, server) in SERVERS.iter().enumerate() {
             if fits(server.languages) || fits(&[server.command[0]]) {
@@ -918,6 +934,8 @@ impl SettingsPage {
                 }
                 let reading = Rect::new(page.x, page.y + READING_ROW, page.w, 2);
                 spots.push((reading, Control::ReadingWidth));
+                let cursor = Rect::new(page.x, page.y + CURSOR_ROW, page.w, 2);
+                spots.push((cursor, Control::CursorBlink));
                 for (row, index) in self.server_rows(page).into_iter().enumerate() {
                     if let Some((control, width)) = self.found.server_control(index) {
                         let x = page.right().saturating_sub(width);
@@ -1703,7 +1721,7 @@ impl SettingsPage {
             grid,
             page,
             "Editor",
-            "How files save, how pages are set, and the languages.",
+            "How files save, how pages are set, the cursor, and the languages.",
             theme,
         );
         draw_toggle(
@@ -1739,6 +1757,9 @@ impl SettingsPage {
         let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
         draw_toggle(grid, page, y, READING, values.reading_width, theme);
+        // Its line over it is the toggle's own.
+        let y = page.y + CURSOR_ROW;
+        draw_toggle(grid, page, y, CURSOR_BLINK, values.cursor_blink, theme);
         let line_y = page.y + SERVERS_ROW - 1;
         let above = Bounds::cells(page.x as f32, line_y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
@@ -2405,6 +2426,7 @@ mod tests {
             inlay_hints: false,
             format_on_save: false,
             reading_width: false,
+            cursor_blink: false,
             auto_save: "off",
             notify: false,
         };

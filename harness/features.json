@@ -7502,5 +7502,61 @@
     "title": "Claude Code's sessions/<pid>.json leads to the conversation it holds and its transcript",
     "test": "claude_codes_word_on_its_process_leads_to_its_transcript",
     "passes": true
+  },
+  {
+    "id": "caret-blinks",
+    "milestone": 15,
+    "title": "The caret blinks half a second each way, VS Code's, and a key, a click or a move shows it and starts it over",
+    "test": "the_caret_blinks_and_a_key_or_a_click_brings_it_back",
+    "passes": true
+  },
+  {
+    "id": "caret-still-behind",
+    "milestone": 15,
+    "title": "Behind another window, and inside Claude Code's pane, the caret stays shown and nothing wakes for it",
+    "test": "the_caret_stays_shown_behind_another_window",
+    "passes": true
+  },
+  {
+    "id": "cursor-blink-setting",
+    "milestone": 15,
+    "title": "Cursor blinking is a switch on Settings' Editor page, kept for the machine and followed as the window comes back",
+    "test": "cursor_blinking_is_a_switch_in_settings",
+    "passes": true
+  },
+  {
+    "id": "terminal-cursor-blinks",
+    "milestone": 15,
+    "title": "A terminal pane's cursor blinks unless its program asks for a steady one, and on cells is the terminal's own",
+    "test": "a_terminal_panes_cursor_blinks_unless_its_program_asks_for_a_steady_one",
+    "passes": true
+  },
+  {
+    "id": "cells-cursor-told-once",
+    "milestone": 15,
+    "title": "On cells the terminal is told once to blink its own cursor, so a blink costs Cellix nothing",
+    "test": "the_terminal_is_told_to_blink_its_own_cursor_once",
+    "passes": true
+  },
+  {
+    "id": "cells-caret-no-wakes",
+    "milestone": 15,
+    "title": "On cells the caret shows always and asks for no wake: the terminal blinks it",
+    "test": "on_cells_the_terminal_blinks_its_own_cursor",
+    "passes": true
+  },
+  {
+    "id": "blink-sends-placement",
+    "milestone": 15,
+    "title": "A blink sends no tile once both looks of its row are in the terminal, only a placement",
+    "test": "a_blink_sends_no_tile_once_both_looks_are_in_the_terminal",
+    "passes": true
+  },
+  {
+    "id": "blink-no-own-wake",
+    "milestone": 15,
+    "title": "A blinking caret on the pixel tiers costs a placement each half and no wake of its own; behind another window nothing",
+    "test": "a_blinking_caret_costs_a_placement_and_no_wake_of_its_own",
+    "passes": true
   }
 ]

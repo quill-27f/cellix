@@ -147,6 +147,10 @@ impl Workspaces {
     /// The terminal said Cellix came to the front, or went behind another window.
     pub fn set_focused(&mut self, focused: bool) {
         self.focused = focused;
+        // Behind another window, a caret stays shown and nothing wakes for its blink.
+        for workspace in &mut self.list {
+            workspace.app.set_window_focused(focused);
+        }
         // Back in front, what wasn't told yet can be seen.
         if focused {
             self.notifier.clear();
@@ -268,7 +272,8 @@ impl Workspaces {
         if self.bar && !cfg!(test) {
             crate::hold::remember_open(&root);
         }
-        let workspace = (self.start)(root, size);
+        let mut workspace = (self.start)(root, size);
+        workspace.app.set_window_focused(self.focused);
         self.list.push(workspace);
         self.fit();
         self.list.len() - 1

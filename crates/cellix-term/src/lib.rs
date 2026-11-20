@@ -9,7 +9,7 @@ mod pixels;
 mod probe;
 pub mod replies;
 
-pub use cells::CellBackend;
+pub use cells::{CURSOR_DEFAULT, CellBackend, cursor_styled};
 pub use detect::{background, background_in, cell_size, detect};
 pub use files::TileFiles;
 pub use notify::{Notice, sequence as notification, terminal_names};

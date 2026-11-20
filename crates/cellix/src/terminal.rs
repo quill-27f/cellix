@@ -128,6 +128,9 @@ fn catch_stops(left: Left) {
         // In case the terminal is still there after all, it gets itself back.
         let _ = disable_raw_mode();
         let _ = write!(io::stdout(), "\x1b[?1049l\x1b[?25h");
+        if cellix_term::cursor_styled() {
+            let _ = write!(io::stdout(), "{}", cellix_term::CURSOR_DEFAULT);
+        }
         let _ = io::stdout().flush();
         let paths = left.lock().map(|l| l.clone()).unwrap_or_default();
         for path in paths {
@@ -202,6 +205,11 @@ fn start_workspace(
     wait: bool,
 ) -> Workspace {
     let mut app = App::new(root, size);
+    // The loop keeps the caret's blink: the harness's tour holds it still, for pictures that
+    // don't change from one take to the next.
+    if std::env::var("CELLIX_CURSOR_BLINK").as_deref() != Ok("0") {
+        app.keep_blink_time();
+    }
     // As an editor for another program, only the file it asked for opens.
     if !wait {
         app.restore_state();
@@ -397,6 +405,12 @@ impl Drop for Session {
         );
         let _ = execute!(
             io::stdout(),
+            // The cursor the terminal's own settings give it, if the cell tier gave it one.
+            Print(if cellix_term::cursor_styled() {
+                cellix_term::CURSOR_DEFAULT
+            } else {
+                ""
+            }),
             Print("\x1b[?1016l"),
             Print(cellix_term::clipboard::PASTE_EVENTS_OFF),
             Print(if std::env::var_os("TMUX").is_some() {
@@ -1183,6 +1197,8 @@ pub fn run(options: Options) -> io::Result<()> {
     let mut shown: Option<Grid> = None;
     // When something on screen turns, when its next step is due.
     let mut turning: Option<Instant> = None;
+    // When the caret shown comes to the other half of its blink, on the pixel tiers.
+    let mut blinking: Option<Instant> = None;
     // How far below its own place each row at the foot was last drawn. See `on_the_foot`.
     let mut foot: Vec<usize> = Vec::new();
     let ghostty = std::env::var("TERM").is_ok_and(|t| t.contains("ghostty"));
@@ -1342,6 +1358,22 @@ pub fn run(options: Options) -> io::Result<()> {
                 }
                 turning = next_turn(grid, Instant::now());
             }
+            // Only the caret's blink due: the frame shown, in its other half, as a spinner's
+            // step is. Its row's two tiles are in the terminal after the first time round,
+            // so this sends a placement.
+            let blinked = frame != Frame::Whole && blinking.is_some_and(|at| Instant::now() >= at);
+            if let (true, Some(grid)) = (blinked, shown.as_mut()) {
+                if backend.gliding().is_none() {
+                    grid.blink_to(spaces.app().blink_shown());
+                    let mark = out.total();
+                    backend.present(grid, &mut out)?;
+                    out.flush()?;
+                    if let Some(prof) = &mut prof {
+                        prof.presented(out.total() - mark);
+                    }
+                }
+                blinking = spaces.app().next_blink(grid);
+            }
             if frame == Frame::Whole {
                 let (width, height) = spaces.size();
                 let mut grid = Grid::new(width, height, spaces.app().background());
@@ -1377,6 +1409,7 @@ pub fn run(options: Options) -> io::Result<()> {
                 phases = crate::slow::Phases::default();
                 foot = backend.foot_drops(grid.height(), grid.foot);
                 turning = next_turn(&grid, Instant::now());
+                blinking = spaces.app().next_blink(&grid);
                 if let Some(path) = &screen_text {
                     // Where its rows stand first, so whoever reads the text can press on what
                     // it says: only where rows are Cellix's own, and can stand off their places.
@@ -1419,8 +1452,13 @@ pub fn run(options: Options) -> io::Result<()> {
             };
             // And no longer than the tick, which runs on its time.
             let now = Instant::now();
-            let mut wait =
-                wait_for(rest, backend.gliding(), turning, now).min(pace.until_tick(now));
+            let mut wait = wait_for(rest, backend.gliding(), turning, now);
+            // A blink just shown has the tick run as this wait ends, at the next half or the
+            // next key: waiting for the tick on its own time as well woke the loop twice a
+            // half, the tick a moment after each blink.
+            if !blinked {
+                wait = wait.min(pace.until_tick(now));
+            }
             // A program's synchronized update left open is ended when its time is up, and the
             // terminal is asked its cell's size once the window has settled.
             for deadline in [spaces.update_deadline(), cell_asked].into_iter().flatten() {
@@ -1429,6 +1467,10 @@ pub fn run(options: Options) -> io::Result<()> {
             // Output waiting for its frame is drawn when the frame's time comes.
             if let Some(left) = pace.until_output(Instant::now()) {
                 wait = wait.min(left);
+            }
+            // And the caret's blink, at the other half's time.
+            if let Some(at) = blinking {
+                wait = wait.min(at.saturating_duration_since(Instant::now()));
             }
             // A signal interrupts the wait; the loop goes round and sees it.
             // With output already waiting for its frame, more of it has nothing to wake the
@@ -1602,8 +1644,10 @@ pub fn run(options: Options) -> io::Result<()> {
                 causes.add(Cause::Input);
             }
             // On its time whatever comes in: with every pointer move reported, a hand on the
-            // mouse used to hold the tick off, and with it the look at the disk.
-            if pace.tick_due(Instant::now()) {
+            // mouse used to hold the tick off, and with it the look at the disk. And with a
+            // blink, as it's blinking: the two are each half a second, so the tick keeps the
+            // blink's time and a window with a caret wakes as often as one without.
+            if pace.tick_due(Instant::now()) || (blinked && pace.tick_may_come(Instant::now())) {
                 let started = Instant::now();
                 spaces.handle(Event::Tick);
                 // Only what it changed is drawn, and its heartbeat, which sends nothing

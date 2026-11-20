@@ -2436,6 +2436,9 @@ fn headless(dir: &Path, steps: &[String], env: &[(&str, &Path)]) -> String {
     command
         .env("CELLIX_MACHINE", "dev-box")
         .env("SHELL", "/bin/sh")
+        // The caret held still, as the tour holds it: pictures of one screen compared are
+        // the same only if both caught the caret in the same half of its blink.
+        .env("CELLIX_CURSOR_BLINK", "0")
         .env("TERM_SIZE", "100x26")
         .env("TERM_ROW", "50")
         .env("CELLIX_ROW_FIT", "0");
@@ -2543,6 +2546,107 @@ fn tiles_go_as_files_to_ghostty_here_and_look_the_same_for_fewer_bytes() {
     assert_eq!(ours.len(), 1, "{ours:?}");
     let left: Vec<_> = std::fs::read_dir(&ours[0]).unwrap().collect();
     assert!(left.is_empty(), "left in {:?}: {left:?}", ours[0]);
+}
+
+/// The caret blinks on the pixel tiers for a placement each half second and no wake of its
+/// own: the tick keeps the blink's time, so a window with a caret in front wakes twice a
+/// second, as one with none does, and once the row's two looks are in the terminal a blink
+/// sends no picture. Behind another window it stays shown, and Cellix sends nothing at all.
+/// The real binary in the headless terminal the tour uses, which takes pictures as Ghostty
+/// does, counted by its own profile (`CELLIX_PROF`) a second at a time.
+#[test]
+#[cfg(unix)]
+fn a_blinking_caret_costs_a_placement_and_no_wake_of_its_own() {
+    let dir = project();
+    let scratch = tempfile::tempdir().unwrap();
+    let prof = scratch.path().join("prof.log");
+    let cache = scratch.path().join("cache");
+    let text = scratch.path().join("screen.txt");
+    // How many lines the profile has, at each of four moments.
+    let mark = |n: usize| scratch.path().join(format!("mark{n}"));
+    let at = |n: usize| {
+        let command = format!("wc -l < {:?} > {:?}", prof, mark(n));
+        format!(r#"["run", {command:?}]"#)
+    };
+    let steps = [
+        r#"["until", "hello from a file"]"#.to_string(),
+        r#"["wait", 3]"#.to_string(),
+        at(1),
+        r#"["bytes", "settled"]"#.to_string(),
+        r#"["wait", 5]"#.to_string(),
+        r#"["bytes", "in front"]"#.to_string(),
+        at(2),
+        // The terminal says the window went behind another.
+        r#"["keys", "\\e[O"]"#.to_string(),
+        r#"["wait", 1.5]"#.to_string(),
+        at(3),
+        r#"["bytes", "left"]"#.to_string(),
+        r#"["wait", 5]"#.to_string(),
+        r#"["bytes", "behind"]"#.to_string(),
+        at(4),
+    ];
+    let env = [
+        ("CELLIX_CURSOR_BLINK", Path::new("1")),
+        ("CELLIX_PROF", prof.as_path()),
+        ("XDG_CACHE_HOME", cache.as_path()),
+        ("CELLIX_SCREEN_TEXT", text.as_path()),
+    ];
+    let printed = headless(dir.path(), &steps, &env);
+    let lines: Vec<String> = std::fs::read_to_string(&prof)
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    let marked = |n: usize| -> usize {
+        let said = std::fs::read_to_string(mark(n)).unwrap();
+        said.trim().parse().unwrap()
+    };
+    let field = |line: &str, key: &str| -> u64 {
+        let word = line
+            .split(' ')
+            .find_map(|w| w.strip_prefix(&format!("{key}=")));
+        word.and_then(|w| w.parse().ok()).unwrap_or(u64::MAX)
+    };
+    // Whole lines only, from the one after a mark to the mark after it.
+    let span = |from: usize, to: usize| &lines[marked(from) + 1..marked(to)];
+    let sum = |lines: &[String], key: &str| lines.iter().map(|l| field(l, key)).sum::<u64>();
+    let rate = |lines: &[String]| sum(lines, "wakes") as f64 * 1000.0 / sum(lines, "ms") as f64;
+    let front = span(1, 2);
+    let behind = span(3, 4);
+    assert!(front.len() >= 3 && behind.len() >= 3, "{lines:#?}");
+    // In front: a present each half, a placement's few dozen bytes, and no picture.
+    let (bytes, files, _) = counted(&printed, "in front");
+    eprintln!(
+        "in front: {:.2} wakes a second, {} presents sent, {bytes} bytes in five seconds; \
+         behind: {:.2} wakes a second, {} bytes",
+        rate(front),
+        sum(front, "sent"),
+        rate(behind),
+        sum(behind, "bytes")
+    );
+    assert!(
+        sum(front, "sent") >= 2 * front.len() as u64 - 1,
+        "{front:#?}"
+    );
+    assert_eq!(sum(front, "tiles"), 0, "no tile: {front:#?}");
+    assert_eq!(files, 0, "{printed}");
+    assert!(
+        bytes > 0 && bytes < 5 * 2 * 200,
+        "{bytes} bytes in five seconds"
+    );
+    assert!(
+        rate(front) <= 2.05,
+        "{:.2} wakes a second: {front:#?}",
+        rate(front)
+    );
+    // Behind: nothing sent, and the tick's wakes alone.
+    assert_eq!(counted(&printed, "behind").0, 0, "{printed}");
+    assert_eq!(sum(behind, "bytes"), 0, "{behind:#?}");
+    assert!(
+        rate(behind) <= 2.01,
+        "{:.2} wakes a second: {behind:#?}",
+        rate(behind)
+    );
 }
 
 /// `cellix reply <id> --done "…"`, as an agent runs it, with the real binary on both ends: the

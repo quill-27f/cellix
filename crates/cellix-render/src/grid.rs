@@ -80,6 +80,39 @@ pub struct Cell {
     pub style: Style,
 }
 
+/// The shape a terminal's own cursor takes on the cell tier: a bar between letters for the
+/// caret in a file or a box, as an editor's, and for a program in a terminal pane what it
+/// asked for (DECSCUSR), a block unless it asked.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CursorShape {
+    #[default]
+    Bar,
+    Block,
+    Underline,
+}
+
+/// A terminal pane's cursor as its session drew it: its cell inverted (`on`), and that cell's
+/// own look (`off`), which is what shows in the half of a blink the cursor is away, and on the
+/// cell tier, where the terminal's own cursor stands there instead. `blinks` is whether its
+/// program left it blinking: DECSCUSR 2, 4 or 6, or `CSI ? 12 l`, asks for a steady one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TermCursor {
+    pub at: (u16, u16),
+    pub on: Cell,
+    pub off: Cell,
+    pub shape: CursorShape,
+    pub blinks: bool,
+}
+
+/// What a blink takes away while it's in its hidden half, to put back: the caret and the
+/// cursor's cell, and the cells that show another look, each with the look they had.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Blinked {
+    caret: Option<Bounds>,
+    cursor: Option<(u16, u16)>,
+    cells: Vec<(u16, u16, Cell)>,
+}
+
 /// Copies a run of cells within the grid's own cells. `Cell` isn't `Copy`, so this clones.
 trait CopyCells {
     fn copy_within_cells(&mut self, from: std::ops::Range<usize>, to: usize);
@@ -173,6 +206,19 @@ pub struct Grid {
     /// rows. A list scrolled in a pane paints its cards whole, and the part of one that's
     /// past the pane's edge mustn't land on the bar beside it.
     kept: Vec<((usize, usize), (u16, u16))>,
+    /// The shape of the terminal's own cursor where the cell tier shows it at `cursor`.
+    pub cursor_shape: CursorShape,
+    /// Whether the caret or cursor shown here blinks: on the cell tier the terminal is asked
+    /// to blink its own cursor (DECSCUSR), and on the pixel tiers whatever shows the grid
+    /// takes it through its two halves (`blink_to`). What draws says so.
+    pub cursor_blinks: bool,
+    /// The terminal panes' cursors drawn, for what draws to place as its tier shows them.
+    pub term_cursors: Vec<TermCursor>,
+    /// Cells with another look while a blink is in its hidden half, as (column, row, that
+    /// look, the look drawn): a terminal pane's cursor, which is its cell inverted.
+    blinking: Vec<(u16, u16, Cell, Cell)>,
+    /// What the blink took away, while it's in its hidden half.
+    blinked: Option<Blinked>,
 }
 
 impl Grid {
@@ -234,7 +280,70 @@ impl Grid {
             spinning: false,
             turning: Vec::new(),
             kept: Vec::new(),
+            cursor_shape: CursorShape::Bar,
+            cursor_blinks: false,
+            term_cursors: Vec::new(),
+            blinking: Vec::new(),
+            blinked: None,
         }
+    }
+
+    /// Has a cell show `off` in the half of a blink the caret is away, while it still shows
+    /// what it does now: a terminal pane's cursor, its cell inverted, on the pixel tiers.
+    pub fn blink_cell(&mut self, x: u16, y: u16, off: Cell) {
+        if x < self.width && y < self.height {
+            let on = self.cell(x, y).clone();
+            self.blinking.push((x, y, off, on));
+        }
+    }
+
+    /// Whether anything shown here comes and goes with the blink: a caret, a cursor's cell,
+    /// or a cell with another look for it.
+    pub fn blinks(&self) -> bool {
+        self.cursor_blinks
+            && (self.caret.is_some()
+                || self.cursor.is_some()
+                || self.blinked.is_some()
+                || !self.blinking.is_empty())
+    }
+
+    /// Whether the blink is in the half that shows the caret.
+    pub fn caret_shown(&self) -> bool {
+        self.blinked.is_none()
+    }
+
+    /// Takes the caret to one half of its blink, as drawing it again in that half would:
+    /// away, there's no caret and no cursor's cell, and a terminal's cursor shows its cell's
+    /// own look; shown, they're back. A cell something drawn later stands in keeps that. A
+    /// tile is a hash of its row, so once both halves of a row are in the terminal, a blink
+    /// sends nothing but its placement. Nothing that doesn't blink changes.
+    pub fn blink_to(&mut self, shown: bool) {
+        if shown == self.caret_shown() || (!shown && !self.blinks()) {
+            return;
+        }
+        if shown {
+            let blinked = self.blinked.take().unwrap_or_default();
+            self.caret = blinked.caret;
+            self.cursor = blinked.cursor;
+            for (x, y, on) in blinked.cells {
+                let at = self.index(x, y);
+                self.cells[at] = on;
+            }
+            return;
+        }
+        let mut cells = Vec::new();
+        for (x, y, off, on) in &self.blinking {
+            let at = self.index(*x, *y);
+            if self.cells[at] == *on {
+                self.cells[at] = off.clone();
+                cells.push((*x, *y, on.clone()));
+            }
+        }
+        self.blinked = Some(Blinked {
+            caret: self.caret.take(),
+            cursor: self.cursor.take(),
+            cells,
+        });
     }
 
     /// Something under way, in the colour of what it means: a faint ring with a quarter of it

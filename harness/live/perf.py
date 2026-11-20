@@ -14,7 +14,9 @@ other order, so a machine getting busier halfway doesn't favour one binary. A wr
 printed less than most of what it should is a failed run: back-pressure that slowed the
 program would otherwise read as a saving.
 
-    idle      a file open, nothing happening: no frames, no bytes
+    idle      a file open, nothing happening: no frames and no bytes but the caret's blink, a
+              placement each half second once its row's two looks are in the terminal
+    behind    the same with the window behind another (a focus-out sent): nothing at all
     visible   a shell in the side pane printing a line in place 30 times a second
     hidden    four shells in tabs behind the one in front, each printing 60 times a second
 
@@ -28,7 +30,7 @@ PRODUCER = os.path.join(HERE, "perf_producer.py")
 COLS, ROWS, CW, CH = 170, 46, 17, 36
 SECONDS = float(os.environ.get("PERF_SECONDS", "10"))
 WARMUP = float(os.environ.get("PERF_WARMUP", "3"))
-CASES = os.environ.get("PERF_CASES", "idle,visible,hidden").split(",")
+CASES = os.environ.get("PERF_CASES", "idle,behind,visible,hidden").split(",")
 ROUNDS = int(os.environ.get("PERF_ROUNDS", "2"))
 OUT = os.environ.get("PERF_OUT", "target/perf")
 CTRL_J = b"\n"
@@ -213,6 +215,9 @@ def run_case(binary, case, scratch):
                     return True
             return False
 
+        if case == "behind":
+            # The terminal says the window went behind another, as one does with focus events.
+            term.keys(b"\x1b[O")
         if case == "visible":
             term.keys(CTRL_J)
             if not answers(1):
