@@ -159,6 +159,10 @@ fn mermaid(source: &str, dark: bool) -> Result<String, String> {
     };
     theme.pie_colors = slices.map(String::from);
     theme.pie_section_text_color = words.to_string();
+    // Whole, as their swatches are: at the theme's 0.7 to 0.85 the slices were paler than the
+    // swatches beside their names, (91,131,221) for "Writing"'s (63,111,216), and nearer the
+    // page (0.12.0's release review, finding 11).
+    theme.pie_opacity = 1.0;
     let options = RenderOptions {
         theme,
         ..RenderOptions::default()
@@ -327,6 +331,29 @@ mod tests {
             for colour in slices {
                 assert!(contrast(colour, page) >= 3.0, "{colour} on {page}");
                 assert!(contrast(colour, words) >= 3.0, "{words} on {colour}");
+            }
+        }
+    }
+
+    /// A pie's slices are drawn in their colours whole, as the swatches beside their names are,
+    /// so each slice is its swatch's colour on the page: at the theme's opacity, "Writing"'s
+    /// slice was (91,131,221) beside its swatch's (63,111,216) (0.12.0's release review, finding
+    /// 11, 67-sample-charts).
+    #[test]
+    fn a_pies_slices_are_their_swatches_colours() {
+        let source = "pie title Share\n  \"A\" : 40\n  \"B\" : 35\n  \"C\" : 25\n";
+        for (dark, slices) in [(false, PIE_LIGHT), (true, PIE_DARK)] {
+            let svg = svg(Kind::Mermaid, source, dark).unwrap();
+            let picture = rasterize(&svg, 2.0, 1600).unwrap();
+            for colour in &slices[..3] {
+                let hex = |at: usize| u8::from_str_radix(&colour[at..at + 2], 16).unwrap();
+                let whole = [hex(1), hex(3), hex(5), 255];
+                let count = (picture.rgba.chunks(4)).filter(|p| *p == whole).count();
+                // A slice's thousands of pixels, not a swatch's few hundred.
+                assert!(
+                    count > 5000,
+                    "{colour} whole in {count} pixels, dark: {dark}"
+                );
             }
         }
     }

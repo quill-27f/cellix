@@ -6778,15 +6778,15 @@
   {
     "id": "submenu-over-its-menu",
     "milestone": 15,
-    "title": "A submenu stands 4 px over its menu's edge with no shadow on it",
-    "test": "a_submenu_overlaps_its_menu_with_no_shadow_on_it",
+    "title": "A submenu stands right against its menu's edge, covering and shadowing none of it",
+    "test": "a_submenu_stands_against_its_menu_with_nothing_of_it_covered",
     "passes": true
   },
   {
     "id": "note-tint-air",
     "milestone": 15,
-    "title": "A reviewer's note's tint keeps 8 px either side on every row it runs on",
-    "test": "a_reviewers_notes_tint_keeps_its_air_on_every_row",
+    "title": "A reviewer's note's tint keeps 8 px at its ends and wraps flush, on the text's column",
+    "test": "a_reviewers_notes_tint_keeps_its_air_at_its_ends_and_wraps_flush",
     "passes": true
   },
   {
@@ -7186,6 +7186,69 @@
     "milestone": 15,
     "title": "The real binary answers a side question on a card from a stand-in agent's command line",
     "test": "pty_ask_answers_a_side_question_on_a_card",
+    "passes": true
+  },
+  {
+    "id": "abort-on-words-baseline",
+    "milestone": 15,
+    "title": "Abort stands on the baseline of the words beside it",
+    "test": "abort_stands_on_the_baseline_of_the_words_beside_it",
+    "passes": true
+  },
+  {
+    "id": "selection-bar-off-a-label",
+    "milestone": 15,
+    "title": "With a label of something else over a selection, its buttons stand under or beside it",
+    "test": "the_selection_bar_keeps_off_a_label_over_its_selection",
+    "passes": true
+  },
+  {
+    "id": "selection-bar-twelve-in-a-small-gap",
+    "milestone": 15,
+    "title": "A selection's buttons stand 12 px from it wherever 8 px stays on the gap's other side",
+    "test": "the_selection_bar_stands_twelve_pixels_from_its_selection_under_a_title",
+    "passes": true
+  },
+  {
+    "id": "output-bar-ends-with-selection",
+    "milestone": 15,
+    "title": "The buttons by selected terminal output end where the selection is painted to",
+    "test": "the_buttons_by_selected_output_end_where_it_ends",
+    "passes": true
+  },
+  {
+    "id": "pie-slices-whole",
+    "milestone": 15,
+    "title": "A pie's slices are drawn whole, in their swatches' colours",
+    "test": "a_pies_slices_are_their_swatches_colours",
+    "passes": true
+  },
+  {
+    "id": "code-thumb-clear-of-border",
+    "milestone": 15,
+    "title": "A code box's sideways thumb stands 8 px clear of its border and of the code over it",
+    "test": "a_drawings_note_stands_clear_under_its_box_and_thumb",
+    "passes": true
+  },
+  {
+    "id": "table-spelling-dots-in-cell",
+    "milestone": 15,
+    "title": "A misspelt word in a table's cell keeps its dots inside the cell, off its line",
+    "test": "a_misspelt_word_in_a_tables_cell_keeps_its_dots_off_the_cells_line",
+    "passes": true
+  },
+  {
+    "id": "table-cut-right-hides-cell",
+    "milestone": 15,
+    "title": "A table cell the page's right edge cuts shows none of its words",
+    "test": "a_table_cut_at_the_pages_right_edge_shows_no_part_of_a_cells_words",
+    "passes": true
+  },
+  {
+    "id": "wide-code-box-thumb-room",
+    "milestone": 15,
+    "title": "A box of code wider than the page reaches further under it, so its thumb keeps 8 px from its code",
+    "test": "a_wide_code_boxs_thumb_keeps_clear_of_its_border_and_its_code",
     "passes": true
   }
 ]

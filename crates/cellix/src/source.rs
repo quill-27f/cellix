@@ -869,7 +869,11 @@ impl Source {
             fg: theme.text.fg,
             ..theme.sidebar
         };
+        // On the baseline of the words it stands beside, box and words moved down together:
+        // it rode 3 px over "Merging…" (86, 89). Nothing else is near enough for 8 px.
+        let from = grid.paint.len();
         grid.button(abort, y, &cells, "Abort", fill, word);
+        grid.beside_words(from);
     }
 
     fn draw_stash(

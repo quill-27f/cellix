@@ -867,6 +867,90 @@ mod tests {
         assert!(screen(&app).text().contains("No conflicts left"));
     }
 
+    /// Abort stands on the baseline of "Merging …" beside it, its box gone down with its
+    /// words, as a button in a row of words does: its words rode 3 px over the row's (0.12.0's
+    /// release review, finding 5, 86 and 89). Measured in the tour's pixels: columns of 17,
+    /// rows of 50, words sized for 36.
+    #[test]
+    fn abort_stands_on_the_baseline_of_the_words_beside_it() {
+        use cellix_render::{Rasterizer, SoftwareRasterizer};
+        let (_dir, mut app) = merging();
+        let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        app.set_measure(std::rc::Rc::new(measure));
+        let grid = screen(&app);
+        let (_, y) = find(&grid, "Abort");
+        let (from, _) = find(&grid, "Merging");
+        // The box's sides, in pixels: the panel painted just before its words.
+        let label = (grid.paint.iter())
+            .position(|p| matches!(p, Paint::Text { text, .. } if text == "Abort"))
+            .expect("Abort's words");
+        let (left, right) = (grid.paint[..label].iter().rev())
+            .find_map(|p| match p {
+                Paint::Panel { bounds, .. } => Some(bounds.x..bounds.x + bounds.w),
+                _ => None,
+            })
+            .map(|r| {
+                let px = |u: i32| (u as f32 * 17.0 / cellix_render::UNIT as f32) as usize;
+                (px(r.start), px(r.end))
+            })
+            .expect("Abort's box");
+        let mut raster = SoftwareRasterizer::new(17, 50)
+            .expect("fonts are in the binary")
+            .with_type_row(36);
+        let image = raster.row(&grid, y);
+        let at = |x: usize, y: usize| {
+            let i = (y * image.width + x) * 3;
+            Rgb(image.rgb[i], image.rgb[i + 1], image.rgb[i + 2])
+        };
+        let apart = |a: Rgb, b: Rgb| {
+            let d = |p: u8, q: u8| p.abs_diff(q) > 40;
+            d(a.0, b.0) || d(a.1, b.1) || d(a.2, b.2)
+        };
+        // The box, down a column inside it and clear of its corners and words, in its colour.
+        let side = left + 10;
+        let fill = at(side, image.height / 2);
+        let chip: Vec<usize> = (0..image.height).filter(|y| at(side, *y) == fill).collect();
+        let (top, foot) = (chip[0], *chip.last().expect("Abort's box"));
+        // The row the most of a stretch's inked columns end on: its words' baseline.
+        let baseline = |(left, right): (usize, usize), ground: Rgb| {
+            let mut feet = std::collections::HashMap::new();
+            for x in left..right {
+                let inked = (0..image.height).rev().find(|y| apart(at(x, *y), ground));
+                if let Some(foot) = inked {
+                    *feet.entry(foot).or_insert(0) += 1;
+                }
+            }
+            feet.into_iter().max_by_key(|(_, n)| *n).expect("words").0
+        };
+        // The row's ground, before its words.
+        let ground = at(usize::from(from) * 17 - 4, image.height / 2);
+        let words = baseline((usize::from(from) * 17, usize::from(from + 6) * 17), ground);
+        let inside = (top + 2..foot - 1).filter(|y| at(side, *y) == fill);
+        let (label_top, label_foot) = (inside.clone().min().unwrap(), inside.max().unwrap());
+        let label = {
+            let mut feet = std::collections::HashMap::new();
+            for x in left + 12..right - 12 {
+                let inked = (label_top..=label_foot)
+                    .rev()
+                    .find(|y| apart(at(x, *y), fill));
+                if let Some(foot) = inked {
+                    *feet.entry(foot).or_insert(0) += 1;
+                }
+            }
+            feet.into_iter()
+                .max_by_key(|(_, n)| *n)
+                .expect("its label")
+                .0
+        };
+        assert!(
+            label.abs_diff(words) <= 1,
+            "Abort's baseline at {label}, the words' at {words}"
+        );
+        // Its box went down with its words, from the row's middle.
+        let under = image.height - 1 - foot;
+        assert!(top > under, "{top} px over it, {under} under");
+    }
+
     #[test]
     fn a_merge_can_be_abandoned_from_the_panel() {
         let (dir, mut app) = merging();

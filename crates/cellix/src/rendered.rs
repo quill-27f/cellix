@@ -215,6 +215,9 @@ pub struct Row {
     pub tall: bool,
     /// How far its words stand lowered in the row, in rows: a note under a box, clear of it.
     pub drop: f32,
+    /// The last row of a box of code wider than the page, whose box reaches `THUMB_ROOM`
+    /// further under it to hold its sideways thumb clear of the code and of the box's border.
+    pub thumb_room: bool,
     /// The column of a task checkbox, and the source position of its mark.
     pub checkbox: Option<(f32, usize)>,
     /// Where each table cell starts in the source.
@@ -253,6 +256,7 @@ impl Row {
             heading: 0,
             tall: false,
             drop: 0.0,
+            thumb_room: false,
             checkbox: None,
             cells: Vec::new(),
             cell_ends: Vec::new(),
@@ -1994,6 +1998,40 @@ fn cell_outputs(
 
 /// How far a code box reaches under its last row, in rows.
 pub(crate) const BOX_UNDER: f32 = 0.12;
+/// How much further one wider than the page reaches, in rows: 5 px of a row of 50, so its
+/// sideways thumb stands 8 px clear of the border under it and of the code over it. In
+/// `BOX_UNDER` alone it stood 6 px under a "$$" (46-formula-open).
+pub(crate) const THUMB_ROOM: f32 = 0.1;
+
+/// Gives a box of code wider than a page `width` columns wide the room its thumb needs under
+/// its last row, and lowers what's under the box, a note or a picture, as far, so it keeps its
+/// air from the box. Where text is drawn in pixels only: cells have no thumb in a box.
+fn room_for_thumbs(rows: &mut [Row], width: f32) {
+    let code = |r: &Row| r.shaded && r.table.is_none();
+    let mut index = 0;
+    while index < rows.len() {
+        if !code(&rows[index]) {
+            index += 1;
+            continue;
+        }
+        let end = (index..rows.len())
+            .find(|at| !code(&rows[*at]))
+            .unwrap_or(rows.len());
+        // As far as the editor reckons a block's reach (`blocks_of`), past which it moves.
+        let lead = rows[index].lead;
+        let reach = (rows[index..end].iter())
+            .flat_map(|r| r.glyphs.iter().map(|g| g.x + g.advance))
+            .fold(0.0, f32::max)
+            + lead;
+        if reach > width {
+            rows[end - 1].thumb_room = true;
+            if let Some(next) = rows.get_mut(end).filter(|r| r.drop > 0.0) {
+                next.drop += THUMB_ROOM;
+            }
+        }
+        index = end;
+    }
+}
 /// Pixels between a box's foot and the capitals of a note about it under it, and how large
 /// the note's words are.
 const NOTE_UNDER_BOX: f32 = 16.0;
@@ -2068,6 +2106,20 @@ pub fn layout(text: &str, width: usize, measure: &dyn Measure, registry: &Regist
 
 /// Lays a document out, with its formulas and images.
 pub fn layout_with(
+    text: &str,
+    width: usize,
+    measure: &dyn Measure,
+    registry: &Registry,
+    extras: &Extras,
+) -> Vec<Row> {
+    let mut rows = lay_out_text(text, width, measure, registry, extras);
+    if !measure.in_cells() {
+        room_for_thumbs(&mut rows, width as f32);
+    }
+    rows
+}
+
+fn lay_out_text(
     text: &str,
     width: usize,
     measure: &dyn Measure,

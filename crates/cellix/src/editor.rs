@@ -99,9 +99,14 @@ impl Ink {
 }
 
 /// How far a line of words reaches up from its middle and down from it, in the size of its
-/// letters: their tallest letters' tops and their tails, with a pixel or two to spare.
-pub const ASCENT: f32 = 0.45;
-pub const DESCENT: f32 = 0.6;
+/// letters: their tallest letters' tops and their tails, with about a pixel to spare. Capitals
+/// start 9 px over the middle of a line of 36, an "l" a pixel higher, and tails end 13 px under
+/// it (`measures::CAPS`, `TAILS`); at 0.45 and 0.6, 11 and 15 px, a title's tails were
+/// reckoned 4 px past its ink, and the buttons under it stood 9 px over the selection they're
+/// for, not 12 (50-comment-glance-open). Both are taken in alike, so a bar in the middle of a
+/// gap stays in the middle of its pixels.
+pub const ASCENT: f32 = 0.40;
+pub const DESCENT: f32 = 0.55;
 
 /// A page's rows, its figures, and where its formulas and images are.
 type LaidOut = (
@@ -4843,7 +4848,14 @@ impl Editor {
                 // Its box reaches a little over and under its rows, and no further than
                 // the page's own: it lay over the line under the bar, and under the sheet.
                 let (over, under) = (area.y as f32, area.bottom() as f32);
-                let foot = top + height + rendered::BOX_UNDER;
+                // One wider than the page reaches further, so its thumb keeps clear of the
+                // code over it as of the border under it.
+                let room = if rows[end - 1].thumb_room {
+                    rendered::THUMB_ROOM
+                } else {
+                    0.0
+                };
+                let foot = top + height + rendered::BOX_UNDER + room;
                 let (from, to) = ((top - 0.08).max(over), foot.min(under));
                 let bounds = Bounds::cells(left, from, edge - left, to - from);
                 grid.panel(bounds, 22, Some(theme.code_bg), Some(theme.border));
@@ -4855,7 +4867,7 @@ impl Editor {
                     // As far in from the box's sides as over its foot: its end lay on the
                     // box's left line.
                     let side = (self.measure.cell_pixels())
-                        .map_or(0.0, |(wide, _)| THUMB_INSIDE / wide.max(1) as f32);
+                        .map_or(0.0, |(wide, row)| thumb_clear(row) / wide.max(1) as f32);
                     let ends = (left + side, edge - side, y);
                     self.draw_block_thumb(grid, ends, (moved, most), theme);
                 }
@@ -4971,15 +4983,23 @@ impl Editor {
     }
 
     /// Where a sideways thumb inside a box whose foot is at `foot` (rows) stands, its top in
-    /// rows: its ink `THUMB_INSIDE` px over the box's foot. Shorter than a row, it's painted
-    /// the height it has on the terminal's line, in the middle of its place (`stood`).
+    /// rows: its ink `THUMB_INSIDE` px over the box's border at its foot (`thumb_clear`).
+    /// Shorter than a row, it's painted the height it has on the terminal's line, in the middle
+    /// of its place (`stood`).
     fn thumb_inside(&self, foot: f32) -> f32 {
-        let (row, line) = self.measure.cell_pixels().map_or((1.0, 1.0), |(_, row)| {
-            let row = row.max(1) as f32;
-            (row, row / self.measure.row_air().max(1.0))
-        });
+        let (row, line, clear) = self
+            .measure
+            .cell_pixels()
+            .map_or((1.0, 1.0, 0.0), |(_, row)| {
+                let tall = row.max(1) as f32;
+                (
+                    tall,
+                    tall / self.measure.row_air().max(1.0),
+                    thumb_clear(row),
+                )
+            });
         let ink = THUMB_THICK * line.min(row);
-        foot - THUMB_INSIDE / row - (THUMB_THICK * row + ink) / 2.0 / row
+        foot - clear / row - (THUMB_THICK * row + ink) / 2.0 / row
     }
 
     fn draw_page(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool, marks: &Marks) {
@@ -5064,7 +5084,15 @@ impl Editor {
             if !(proportional && row.tall && y + 2 >= area.bottom()) {
                 let moved = self.row_shift(area, index);
                 let cut = self.row_is_cut(area, index);
-                self.draw_page_row(grid, row, (left, y, moved, cut), area, bg, theme);
+                // Whether a reviewer's note at this row's end runs on to the next row.
+                let runs_on = !row.last
+                    && row.glyphs.last().is_some_and(|g| g.tone == Tone::Note)
+                    && rows.get(index + 1).is_some_and(|next| {
+                        let first = next.glyphs.iter().find(|g| !g.ch.is_whitespace());
+                        first.is_some_and(|g| g.tone == Tone::Note)
+                    });
+                let place = (left, y, moved, cut, runs_on);
+                self.draw_page_row(grid, row, place, area, bg, theme);
             }
         }
         let moved = self.row_shift(area, caret_row);
@@ -5153,7 +5181,7 @@ impl Editor {
         &self,
         grid: &mut Grid,
         row: &Row,
-        (left, y, moved, cut): (u16, u16, f32, bool),
+        (left, y, moved, cut, runs_on): (u16, u16, f32, bool, bool),
         area: Rect,
         bg: Rgb,
         theme: &Theme,
@@ -5178,9 +5206,19 @@ impl Editor {
             let columns = row.table.as_ref().map_or(&[][..], |t| &t.columns[..]);
             columns.iter().rposition(|start| *start <= x)
         };
+        // So does one its right edge cuts, the pane's or the reading column's: its first
+        // letters stood there sliced, "cc", "1.1" (160, 161).
+        // On cells, a letter shows up to the column before the "›" that says there's more.
+        let shown_to = if proportional {
+            right
+        } else {
+            f32::from(page_end) - 1.0 + 0.01
+        };
+        let cut_right = |g: &Glyph| cut && origin + g.x + g.advance > shown_to;
         let cut_cells: Vec<usize> = (row.glyphs.iter())
-            .filter(|g| moved > 0.0 && row.table.is_some() && !g.ch.is_whitespace())
-            .filter(|g| g.tone != Tone::TableLine && g.x - moved < EDGE_AIR)
+            .filter(|g| row.table.is_some() && !g.ch.is_whitespace())
+            .filter(|g| g.tone != Tone::TableLine)
+            .filter(|g| (moved > 0.0 && g.x - moved < EDGE_AIR) || cut_right(g))
             .filter_map(|g| cell_of(g.x))
             .collect();
         let cut_cell = |g: &Glyph| {
@@ -5385,9 +5423,11 @@ impl Editor {
             let end = (index..row.glyphs.len())
                 .find(|at| !shown(&row.glyphs[*at]))
                 .unwrap_or(row.glyphs.len());
-            // `LINE_AIR` either side of what it holds on each row, its spaces at either end
-            // left out: it had 6 px before the ◆, 11 after a space at a row's end, and 1 px
-            // where it ran on to the next row, stopped at the text's edge (69 to 71).
+            // `LINE_AIR` before the ◆ and after the note's last letter, its spaces at either
+            // end left out: it had 6 px before the ◆ and 11 after (69 to 71). Where it wraps
+            // it's cut flush, as a browser slices an inline box: a row it runs on to starts on
+            // the text's column, where air reached 8 px into the margin, and a row it runs on
+            // from ends at its last letter.
             let glyphs = &row.glyphs[index..end];
             let ((lead, before), (trail, after)) = spaces_at_ends(glyphs);
             if lead + trail < glyphs.len() {
@@ -5395,11 +5435,15 @@ impl Editor {
                 let air = (self.measure.cell_pixels()).map_or(0.25, |(wide, _)| {
                     crate::measures::LINE_AIR / wide.max(1) as f32
                 });
-                let from = glyphs[0].x + before - air;
+                let starts = glyphs[lead].tone == Tone::NoteMark;
+                let ends = !(runs_on && end == row.glyphs.len());
+                let (left_air, right_air) =
+                    (if starts { air } else { 0.0 }, if ends { air } else { 0.0 });
+                let from = glyphs[0].x + before - left_air;
                 let pill = Bounds::cells(
                     origin + from,
                     text_y + 0.05,
-                    width - before - after + air * 2.0,
+                    width - before - after + left_air + right_air,
                     0.9,
                 );
                 grid.panel(pill, 8, Some(theme.tint), None);
@@ -5433,8 +5477,18 @@ impl Editor {
             // Dots, since a solid line means a link, or text a change added.
             const DOT: f32 = 0.18;
             const STEP: f32 = 0.4;
+            const HIGH: f32 = 0.07;
+            // In a table's cell, up under its words' tails, inside the cell: at the row's foot
+            // they lay on the cell's line under it (160, 161).
+            let top = if row.table.is_some() {
+                let size = row.glyphs.iter().map(|g| g.font.size).max().unwrap_or(100);
+                let (_, down) = self.reach(size);
+                (text_y + 0.5 + down - HIGH - 0.01).min(text_y + 0.9)
+            } else {
+                text_y + 0.9
+            };
             for dot in 0..(width / STEP).ceil() as usize {
-                let spot = Bounds::cells(x + dot as f32 * STEP, text_y + 0.9, DOT, 0.07);
+                let spot = Bounds::cells(x + dot as f32 * STEP, top, DOT, HIGH);
                 grid.panel(spot, 0, Some(colour), None);
             }
         }
@@ -5552,6 +5606,22 @@ impl Editor {
     /// The rows of the screen this text is drawn in, in the editor's `full` area.
     pub fn text_bounds(&self, full: Rect) -> Rect {
         self.text_area(full)
+    }
+
+    /// Whether screen row `y` of a page, in the editor's `full` area, holds words that aren't
+    /// text the caret stops on: a label such as a paper's "Abstract", or a note under a box.
+    /// They're something of their own, not part of the block under or over them, as a code
+    /// box's language over its first line and a table's rules are.
+    pub fn row_is_label(&self, full: Rect, y: u16) -> bool {
+        let area = self.text_area(full);
+        if !self.rendered || y < area.y || y >= area.bottom() {
+            return false;
+        }
+        let index = self.top + usize::from(y - area.y);
+        let of_a_block = |row: &Row| row.shaded || row.table.is_some();
+        (self.page(area).get(index)).is_some_and(|row| {
+            !row.stop && !of_a_block(row) && row.glyphs.iter().any(|g| !g.ch.is_whitespace())
+        })
     }
 
     /// What's drawn about screen row `y` of this text, in the editor's `full` area, for a bar
@@ -5982,10 +6052,18 @@ fn problem_span(chars: &[char], column: usize) -> Option<(usize, usize)> {
 }
 
 /// How thick a block's sideways thumb is, in rows; how far under a table it stands, about
-/// 9 px; and how far its ink stands over the foot of a code box it's inside, in pixels.
+/// 9 px; and how far its ink stands inside the border of a code box it's in, from the border
+/// at its foot and at its sides, in pixels. 4 px from the box's edge put it 2 px from the
+/// border (0.12.0's release review, 160, 161, 46-formula-open).
 const THUMB_THICK: f32 = 0.12;
 const THUMB_UNDER: f32 = 0.25;
-const THUMB_INSIDE: f32 = 4.0;
+const THUMB_INSIDE: f32 = crate::measures::LINE_AIR;
+
+/// Pixels from a code box's edge to a thumb inside it, on rows `row` px tall: `THUMB_INSIDE`
+/// clear of the box's border, which the painter draws a thirtieth of a row thick inside it.
+fn thumb_clear(row: u32) -> f32 {
+    THUMB_INSIDE + (row as f32 / 30.0).max(1.0)
+}
 
 /// How many of a run's glyphs are spaces at its start and at its end, each with how far they
 /// reach, in cells. A line under or through the run keeps to its letters, from the first to

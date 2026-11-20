@@ -431,7 +431,10 @@ a line in the interface font and 88 on cells, and in a pane wider than that it s
 middle. Tables wrap their cells to that width and blocks of code end with it, so the page has
 one right edge; what's still wider (a table with too many columns, a long line of code) moves
 sideways inside the page, and a letter that would be cut in half at its edge is left out, as are
-all of a table's cell's words once its left edge cuts them: "col06" showed as "l06".
+all of a table's cell's words once either edge cuts them, its box and fill kept: "col06" showed
+as "l06" at the left, and "cc" and "1.1" at the right (0.12.0's release review). A misspelt word in
+a table's cell has its dots up under its words' tails, inside the cell, where at the row's foot
+they lay on the cell's line.
 The middle is that of the columns the page has: the pane's, less its minimap's when one is
 showing, so a long page isn't pushed against its minimap. A page is laid out before that's
 decided, so its first frame is where it stays. A pane no wider than the page sets it as
@@ -716,9 +719,14 @@ out of view. Over or under, it's the gap next to the block the line is in, never
 whatever comes after that: under a paragraph with a table after it they stood under the table,
 11 px over the next paragraph. In the gap they stand in, their foot is 12 px over what they're for, or their top 12 px
 under it where they stand under the last line (`measures::SELECTION_BAR_AIR`); where that would
-leave less on the gap's other side, they stand in its middle, and so they do past the rest of the
-line's block, a paragraph's other rows or a label over it, which they aren't for: 12 px over a
-paper's "Abstract" label they read as its own. Their left edge is at the selection's
+leave less than `LINE_AIR` on the gap's other side, they stand in its middle (in the middle of any gap
+too small for 12 px both sides, they stood 9 px over a selection under a title, 0.12.0's release
+review), and so they do past the rest of the line's block, a paragraph's other rows, which they
+aren't for. A label of something else right
+over the first line, a paper's "Abstract", sends them under the last line first, 12 px under it
+in the gap right under it, and with words there too, a table's caption, beside the line's end;
+only then past what's in the way: in the gap over the label they stood 54 px from the selection
+and read as the label's (0.12.0's release review). Their left edge is at the selection's
 start, or at the text column's with the start out of view. In 0.11.0 they leaned no more than a
 fifth of a row from their row's middle, which put them 5 to 45 px from the selection scene by
 scene, and at the caret's column with the start out of view (its release check, P1). Lifted so,
@@ -744,7 +752,8 @@ behind that place, so it stays put through every rebuild.
 
 Output is seen too, so a failing run needs no copy and paste. A selection in a terminal tab gets the
 same two buttons, where they cover none of the output: on the row above the selection when its text
-ends before them, else on the row below, their right edge on the selection's, and failing both after
+ends before them, else on the row below, their right edge on the selection's as both are painted
+(it stood 4 px short, at the chip's side inside its cells), and failing both after
 the end of the selection's last row, each as a page's are, `LINE_AIR` clear of the output and the
 selection over and under them, and as far from the selection as a page's: their foot 12 px over it,
 or their top 12 px under it, or the middle of a smaller gap. Only output with no such room has them
@@ -906,9 +915,12 @@ callouts such as `> [!NOTE]`, and CriticMarkup for tracked changes. All of it is
 the file, and it reaches the web page and the PDF. A reviewer's note in the text (`{>>note<<}`) is
 shown as a comment is, three spaces after the words before it (two on cells), after the comment's
 ◆ and on a comment's tint, in the small words; until 0.11.0's review it stood against the period
-before it in small grey words and read as a typo. The tint keeps `LINE_AIR` either side of what it
-holds on every row it runs on, its spaces at either end left out, past the text's edge on a row
-it runs on to; it had 6 px before the ◆, 11 after a row's last space and 1 px on the next row. A
+before it in small grey words and read as a typo. The tint keeps `LINE_AIR` before the ◆ and after
+the note's last letter, its spaces at either end left out; it had 6 px before the ◆ and 11 after a
+row's last space. Where the note wraps, the tint is cut flush there, as a browser slices an inline
+box: a row it runs on to starts its tint on the text's column, and a row it runs on from ends it
+at its last letter. With 8 px on every row, the row it ran on to put its tint 8 px into the page's
+margin, where nothing else goes (0.12.0's release review). A
 line under words, as an insertion's, or through them, as a deletion's, runs from the first letter
 to the last: under the space at an insertion's end it ran on under the next word. A horizontal rule is one hairline across the text's column, as
 wide as its words are set; its dashes are the cell tier's (in 0.11.0 they were drawn over a shorter
@@ -964,13 +976,19 @@ Diagrams are text in the document. A fenced `mermaid`, `dot` or `svg` block stan
 a picture, and opens to its source with the picture under it while it's written, 16 px under the
 source's box as a drawing's note is: a formula's numerator touched the box (46). A pie's slices
 and swatches take colours 3:1 or more from the page in both themes, where the renderer's first was
-white on white (67). They are drawn by
+white on white (67), and the slices are drawn whole, as the swatches are: at the renderer's 0.7 to
+0.85 opacity no slice was its swatch's colour. They are drawn by
 pure Rust (`mermaid-rs-renderer`, `layout-rs`, `resvg`), so nothing needs a browser or Node, and
 the web page and PDF export carry them too. What only LaTeX can draw (TikZ, `tikzcd`, `forest`,
 `circuitikz`, `algorithm`) is built alone in the background with the paper's own engine and setup,
 and kept by its content in the cache folder, so typing never waits. Until it's drawn its source
 stands in its box, with "Drawing with LaTeX…" 16 px under the box and a thumb for its width inside
-the box, 4 px in from its sides and over its foot, where the thumb ran through the note (0.11.0's release check, P4).
+the box, 8 px clear of the box's border at its sides and its foot and of the code over it, where
+the thumb ran through the note (0.11.0's release check, P4), then stood 2 px from the border 4 px
+inside the box's edge (0.12.0's release review). A box wider than the page reaches 5 px further
+under its last line to hold it (`THUMB_ROOM`, laid out with the page so what's under the box keeps
+its air), where it stood 6 px under a "$$". A code box's or a formula's source's is the same; a
+table, which has no box, keeps its thumb under it.
 LaTeX that gives no answer in a minute (`snippets::LIMIT`) is stopped, with whatever it started,
 and the note says so where it waited for ever; what held it up may pass, as a first fetch of
 packages does, so each session asks once more. With no LaTeX installed the note says that. Line art becomes ink in the
@@ -1502,10 +1520,12 @@ menu that opens on the row under a tab row starts 8 px down it and
 takes another row where it needs one (`Menu::hang`), and one dropped from a button stands on
 the button's left edge 8 px under its foot (`Menu::under`), the Comments pane's order menu
 too, in a menu's colour as every menu is; a submenu's first row is level with the row that
-opened it, with every menu's air over and under its rows (`Menu::level`), and its panel stands 4 px
-over that menu's edge and casts its shadow down and away from it, not onto it: side by side, their
-borders merged into one line and its shadow darkened 10 px of the other (0.11.0's release review,
-B7); a floating panel,
+opened it, with every menu's air over and under its rows (`Menu::level`), and its panel stands
+right against that menu's edge, its border touching the other's, and casts its shadow down and
+away from it, not onto it: nothing of the menu, its border, its round corner or its ground, is
+covered. With its shadow on the menu, its shadow darkened 10 px of the other (0.11.0's release
+review, B7); 4 px over the menu's edge, it covered the menu's border and cut off its round corner,
+and the two read as one shape (0.12.0's release review); a floating panel,
 a menu, a palette or a tip, keeps both its sides 8 px or more from the sheets' upright lines,
 moving a column along where it would stand on one (`measures::clear_of_lines`): Go to Symbol
 and a tab's menu had their left line on the file's sheet's; the Find bar over the side pane

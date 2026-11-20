@@ -1501,10 +1501,105 @@ fn an_open_formulas_picture_stands_clear_under_its_source() {
     assert!((gap - 16.0).abs() <= 1.0, "{gap} px under the box");
 }
 
-/// A drawing's source, wider than the page, keeps its sideways thumb inside its box, 4 px over
-/// its foot, and "Drawing with LaTeX…" stands 16 px under the box, the first thing under it.
-/// The thumb ran 14 px under the box, through the note, which stood 10 px under the box and
-/// read as its caption (0.11.0's release check, P4, 82-paper-changes-row).
+/// Where a box of code wider than the page has its sideways thumb, measured in its picture as
+/// the reviews measure, from one's last inked row or column to the other's first: from the
+/// thumb to the border under it, from the box's side to the thumb, and from the code over it to
+/// the thumb. Asserts 8 to 10 px for the first two and 8 or more for the last, and gives the
+/// box's foot in pixels.
+fn thumb_air(app: &App, grid: &Grid) -> f32 {
+    let theme = app.theme;
+    let code = panels(grid)
+        .into_iter()
+        .find(|(_, fill, border, _)| *fill == Some(theme.code_bg) && *border == Some(theme.border))
+        .expect("the source's box");
+    let (top, height) = tall(code.0);
+    let foot = top + height;
+    let thumb = panels(grid)
+        .into_iter()
+        .find(|(_, fill, ..)| *fill == Some(theme.scrollbar))
+        .expect("a sideways thumb: the source is wider than the page");
+    let (thumb_top, _) = tall(thumb.0);
+    assert!(thumb_top > top, "inside the box");
+    // In the picture of the box's last two rows and the one under them.
+    let last = ((foot - 1.0) / ROW) as u16;
+    let rows = picture(grid, last - 2..last + 1);
+    let ground = theme.code_bg;
+    // Anything not the box's ground, a letter's or a line's faintest edge too.
+    let seen = |p: Rgb| {
+        let d = |a: u8, b: u8| a.abs_diff(b) > 10;
+        d(p.0, ground.0) || d(p.1, ground.1) || d(p.2, ground.2)
+    };
+    let box_left = px(code.0.x) as usize;
+    let (thumb_from, thumb_to) = (px(thumb.0.x) as usize, px(thumb.0.x + thumb.0.w) as usize);
+    // The border at the box's foot, down a column past the thumb's end.
+    let column = thumb_to + 12;
+    let start = (foot - row_top(last - 2) - 20.0) as usize;
+    let border = (start..rows.len())
+        .find(|y| seen(rows[*y][column]))
+        .expect("the box's border");
+    // Up from it, down a column through the thumb: the thumb, and the code's ink over it.
+    let through = thumb_from + 20;
+    let thumb_foot = (0..border)
+        .rev()
+        .find(|y| seen(rows[*y][through]))
+        .expect("the thumb");
+    let thumb_head = (0..thumb_foot)
+        .rev()
+        .find(|y| !seen(rows[*y][through]))
+        .expect("over the thumb")
+        + 1;
+    let under = border - thumb_foot;
+    assert!(
+        (8..=10).contains(&under),
+        "{under} px over the box's border"
+    );
+    let inside = box_left + 4..column;
+    let words = (0..thumb_head)
+        .rev()
+        .find(|y| inside.clone().any(|x| seen(rows[*y][x])))
+        .expect("the code over it");
+    let over = thumb_head - words;
+    assert!(over >= 8, "{over} px under the code");
+    // Along its row from the box's side: the border, the box's ground, then the thumb.
+    let row = &rows[(thumb_head + thumb_foot) / 2];
+    let edge = (box_left..through)
+        .find(|x| seen(row[*x]) && !seen(row[*x + 1]))
+        .expect("the box's side");
+    let thumb_start = (edge + 1..through)
+        .find(|x| seen(row[*x]))
+        .expect("the thumb's end");
+    let side = thumb_start - edge;
+    assert!(
+        (8..=10).contains(&side),
+        "{side} px in from the box's border"
+    );
+    foot
+}
+
+/// A box of code wider than the page reaches further under its last line, so its sideways
+/// thumb stands 8 px clear of the border under it and at its sides and of the code over it,
+/// tails and all: in the box's usual room it stood 6 px under a "$$" (0.12.0's release review,
+/// 46-formula-open).
+#[test]
+fn a_wide_code_boxs_thumb_keeps_clear_of_its_border_and_its_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let long = "let quality = weigh(gathering_everything, by_query, (yet_more, pq), \
+        and_again, typography_long_enough_to_run_past_the_page, and_beyond(gp, qy));";
+    let text = format!("Before it.\n\n```rust\n{long}\n{long}\n```\n\nAfter the code.\n");
+    fs::write(dir.path().join("note.md"), text).unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.open(&dir.path().join("note.md")).unwrap();
+    let grid = screen(&app);
+    thumb_air(&app, &grid);
+}
+
+/// A drawing's source, wider than the page, keeps its sideways thumb inside its box, 8 px clear
+/// of the box's border at its foot and its sides and of the code over it, and "Drawing with
+/// LaTeX…" stands 16 px under the box, the first thing under it. The thumb ran 14 px under the
+/// box, through the note, which stood 10 px under the box and read as its caption (0.11.0's
+/// release check, P4, 82-paper-changes-row); then, 4 px inside the box's edge, it stood 2 px
+/// from its border (0.12.0's release review, finding 3 of its first half, 160, 161, 46).
 #[test]
 fn a_drawings_note_stands_clear_under_its_box_and_thumb() {
     let dir = tempfile::tempdir().unwrap();
@@ -1519,26 +1614,7 @@ fn a_drawings_note_stands_clear_under_its_box_and_thumb() {
     app.open(&dir.path().join("note.md")).unwrap();
     let grid = screen(&app);
     let theme = app.theme;
-    let code = panels(&grid)
-        .into_iter()
-        .find(|(_, fill, border, _)| *fill == Some(theme.code_bg) && *border == Some(theme.border))
-        .expect("the source's box");
-    let (top, height) = tall(code.0);
-    let foot = top + height;
-    let thumb = panels(&grid)
-        .into_iter()
-        .find(|(_, fill, ..)| *fill == Some(theme.scrollbar))
-        .expect("a sideways thumb: the source is wider than the page");
-    let (thumb_top, thumb_tall) = tall(thumb.0);
-    assert!(thumb_top > top, "inside the box");
-    let (box_left, thumb_left) = (px(code.0.x), px(thumb.0.x));
-    assert!(
-        (thumb_left - box_left - 4.0).abs() <= 0.5,
-        "{} px in from the box's side",
-        thumb_left - box_left
-    );
-    let over = foot - (thumb_top + thumb_tall);
-    assert!((over - 4.0).abs() <= 0.5, "{over} px over the box's foot");
+    let foot = thumb_air(&app, &grid);
     // The note, the first ink under the box across its words.
     let note = grid
         .paint
@@ -1564,4 +1640,69 @@ fn a_drawings_note_stands_clear_under_its_box_and_thumb() {
         .expect("the note's words");
     let under = ink - foot;
     assert!((under - 16.0).abs() <= 1.5, "{under} px under the box");
+}
+
+/// A misspelt word in a table's cell has its dots inside the cell, 8 px or more over the
+/// line under it: at the row's foot they lay on the cell's line (0.12.0's release review,
+/// finding 4 of its first half, "Minimap" in 160 and 161).
+#[test]
+fn a_misspelt_word_in_a_tables_cell_keeps_its_dots_off_the_cells_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = "Before it.\n\n| Setting | Value |\n|---------|-------|\n| Minimapp | on |\n\n\
+        After it.\n";
+    fs::write(dir.path().join("note.md"), text).unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.open(&dir.path().join("note.md")).unwrap();
+    let start = text.find("Minimapp").unwrap();
+    let editor = &mut app.editors[0];
+    let issue = cellix_doc::prose::Issue {
+        start,
+        end: start + "Minimapp".len(),
+        message: "Unknown word".to_string(),
+        fixes: Vec::new(),
+        spelling: true,
+    };
+    editor.issues = (editor.buffer.revision(), vec![issue]);
+    let grid = screen(&app);
+    let theme = app.theme;
+    let (word, y) = (grid.paint.iter())
+        .find_map(|p| match p {
+            Paint::Text { x, y, text, .. } if text.starts_with("Minimapp") => {
+                Some((px(*x) as usize, (*y / UNIT) as u16))
+            }
+            _ => None,
+        })
+        .expect("the cell's word");
+    let rows = picture(&grid, y..y + 2);
+    let red = theme.deleted();
+    let near = |p: Rgb, q: Rgb| {
+        p.0.abs_diff(q.0) <= 30 && p.1.abs_diff(q.1) <= 30 && p.2.abs_diff(q.2) <= 30
+    };
+    let wide = app.measure.width("Minimapp", Font::default()) * CELL;
+    let across = word..word + wide as usize;
+    let reddish = |line: usize| across.clone().any(|x| near(rows[line][x], red));
+    let dots: Vec<usize> = (0..rows.len()).filter(|line| reddish(*line)).collect();
+    let (first, last) = (dots[0], *dots.last().expect("its dots"));
+    // The line under the cell: a row of pixels all across the word that isn't the ground.
+    let ground = theme.text.bg;
+    let line = (last + 1..rows.len())
+        .find(|line| across.clone().all(|x| apart(rows[*line][x], ground)))
+        .expect("the cell's line");
+    assert!(
+        line <= ROW as usize + 2,
+        "the line under the cell's own row: {line}"
+    );
+    assert!(line - last >= 8, "{} px over the cell's line", line - last);
+    // Under the word, not through its letters' middle.
+    let inked = |line: usize| {
+        (across.clone()).any(|x| apart(rows[line][x], ground) && !near(rows[line][x], red))
+    };
+    let ink: Vec<usize> = (0..first).filter(|line| inked(*line)).collect();
+    assert!(!ink.is_empty(), "the word over its dots");
+    let middle = (ink[0] + ink[ink.len() - 1]) / 2;
+    assert!(
+        first > middle,
+        "its dots at {first}, the word's middle at {middle}"
+    );
 }

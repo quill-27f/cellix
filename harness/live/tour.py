@@ -106,7 +106,9 @@ EXPECT = {
     "13-source-staged": "STAGED CHANGES",
     "13-stacked-pane": "WORKTREES",
     "130-run-task": "Select the task",
-    "131-task-failed": "make build",
+    # What the task printed as it stopped: "make build" is in the task picker too, so a scene
+    # whose Enter never ran it passed with the picker open.
+    "131-task-failed": "exited with code",
     "132-task-problems": "undeclared identifier",
     "132-task-problem-hover": "Ask Agent",
     "133-open-recent": "recent folder",
@@ -661,16 +663,19 @@ def workspaces(scratch):
             f.write(f"# {name}\n")
     terminal = [["keys", CTRL("j")], ["wait", 1.0]]
     claude = [*command("Open Claude Code", F1), ["until", "stand-in"], ["wait", 0.4]]
+    # Each waits for what its terminal was told before going on, so one whose keys never
+    # landed fails rather than leave a picture of the welcome page: w0-infra's did once, and
+    # passed.
     # Notes had a terminal when the machine went down.
     shoot("w0-notes", [*terminal, ["keys", "echo building the index\r"], ["wait", 0.5]],
-          cwd=others["notes"], **space)
+          cwd=others["notes"], expect="building the index", **space)
     subprocess.run(["pkill", "-9", "-f", cache])
     # api-server's terminal is busy, beside its agent; infra's is back at its prompt, beside
     # the agent that's about to finish its turn.
-    shoot("w0-api-server", [*terminal, ["keys", "sleep 300\r"], ["wait", 0.5], *claude],
-          cwd=others["api-server"], **space)
-    shoot("w0-infra", [*terminal, ["keys", "echo deployed\r"], ["wait", 0.5], *claude],
-          cwd=others["infra"], **space)
+    shoot("w0-api-server", [*terminal, ["keys", "sleep 300\r"], ["until", "sleep 300"], ["wait", 0.5],
+                            *claude], cwd=others["api-server"], **space)
+    shoot("w0-infra", [*terminal, ["keys", "echo deployed\r"], ["until", "deployed"], ["wait", 0.5],
+                       *claude], cwd=others["infra"], **space)
 
     def hook(kind, root, **fields):
         stdin = json.dumps({"session_id": "s1", "cwd": root, **fields})

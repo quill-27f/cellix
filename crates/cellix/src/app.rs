@@ -5412,10 +5412,10 @@ impl App {
     /// row (`inks`, measured from its top): its top, in rows from the row's top, keeping
     /// `LINE_AIR` from every word, line and selection it would stand over or under. None where
     /// something is in its way. A bar for what `serves` it, on one side, stands
-    /// `SELECTION_BAR_AIR` from that, or in the middle of the gap where that would leave less on
-    /// the other side, reaching into the row by its own if it must (`on_selection_bar` takes a
-    /// click where it's painted). Any other stands as near its row's middle as the air allows,
-    /// leaning no further from it than `SELECTION_CHIP.0`.
+    /// `SELECTION_BAR_AIR` from that, or in the middle of the gap where that would leave less
+    /// than `LINE_AIR` on the other side, reaching into the row by its own if it must
+    /// (`on_selection_bar` takes a click where it's painted). Any other stands as near its
+    /// row's middle as the air allows, leaning no further from it than `SELECTION_CHIP.0`.
     fn bar_top(
         &self,
         inks: &[editor::Ink],
@@ -5448,12 +5448,16 @@ impl App {
         let top = match serves.filter(|_| air_y > 0.0) {
             None => ((over + under) / 2.0).clamp(middle - lean, middle + lean),
             Some(side) => {
+                // `SELECTION_BAR_AIR` from what it serves wherever that keeps `LINE_AIR` from
+                // what's on its other side; only where it doesn't, in the gap's middle. In the
+                // middle of any gap too small for 12 px both sides, it stood 9 px over its
+                // selection with 13 under a heading (50-comment-glance-open).
                 let centred = (above + below - tall) / 2.0;
                 let air = self.bar_air();
                 let wanted = match side {
-                    Serves::Under => (below - air - tall).max(centred),
-                    Serves::Over => (above + air).min(centred),
-                    Serves::Between => centred,
+                    Serves::Under if below - air - tall >= over => below - air - tall,
+                    Serves::Over if above + air <= under => above + air,
+                    _ => centred,
                 };
                 // Some of it on its own row, whatever's asked.
                 wanted.clamp(0.2 - tall, 0.8)
@@ -5492,7 +5496,9 @@ impl App {
     /// or nothing but blocks over it, the same under the last selected line; failing both,
     /// beside the end of that line, and then over it. Until then they stood on the row over
     /// the first line whatever was there, lifted toward words over it, or under the last when
-    /// the first was out of view, on a table's lines or over their own selection.
+    /// the first was out of view, on a table's lines or over their own selection. Where a label
+    /// of something else stands over the first line, a paper's "Abstract", they stand right
+    /// under the last line, or beside its end, before anywhere past what's in the way.
     fn selection_bar_at(&self) -> Option<(Rect, Rect, (f32, f32))> {
         let idle = matches!(self.overlay, Overlay::None) && self.drag != Drag::Text;
         let plain = self.review.is_none() && self.settings_page.is_none();
@@ -5556,13 +5562,13 @@ impl App {
             })
         };
         // Past the rest of the block, they're for neither what's over them nor what's under,
-        // and stand in the middle of the gap: 12 px over a paper's "Abstract" label, which
-        // isn't selected, they read as its own (s1-paper-shift-select).
-        let in_the_gap = |rows: &mut dyn Iterator<Item = u16>, serves: Serves| {
+        // and stand in the middle of the gap: 12 px over what's past it, they read as its own.
+        // Next to it, `strict`, they stand in a gap right by its line or not at all.
+        let in_the_gap = |rows: &mut dyn Iterator<Item = u16>, serves: Serves, strict: bool| {
             let (mut gap, mut past) = (false, false);
             for row in rows {
                 if words_across(row) {
-                    if gap {
+                    if gap || strict {
                         return None;
                     }
                     past = true;
@@ -5578,11 +5584,26 @@ impl App {
         };
         let over = || {
             let (_, y) = first?;
-            in_the_gap(&mut (text.y..y).rev(), Serves::Under)
+            in_the_gap(&mut (text.y..y).rev(), Serves::Under, false)
         };
         let under = || {
             let (_, y) = last?;
-            in_the_gap(&mut (y + 1..text.bottom()), Serves::Over)
+            in_the_gap(&mut (y + 1..text.bottom()), Serves::Over, false)
+        };
+        let right_under = || {
+            let (_, y) = last?;
+            in_the_gap(&mut (y + 1..text.bottom()), Serves::Over, true)
+        };
+        // Words of something else between the first line and the gap over it, a paper's
+        // "Abstract" over its first line: there they read as that's, 54 px from what they're
+        // for (0.12.0's release review, finding 10, s1-paper-shift-select).
+        let something_else_over = || {
+            let Some((_, y)) = first else {
+                return false;
+            };
+            ((text.y..y).rev())
+                .take_while(|row| words_across(*row))
+                .any(|row| editor.row_is_label(area, row))
         };
         // After the end of the last line's words, or of the block it's in.
         let beside = || {
@@ -5600,11 +5621,22 @@ impl App {
         // keeps them by what's selected.
         let over_last = || {
             let (_, y) = last?;
-            in_the_gap(&mut (text.y..y).rev(), Serves::Under)
+            in_the_gap(&mut (text.y..y).rev(), Serves::Under, false)
         };
         let (tall, _) = self.bar_room();
         let lift = |top: f32| (1.0 - tall) / 2.0 - top;
-        let found = over().or_else(under).or_else(beside).or_else(over_last);
+        let found = if something_else_over() {
+            // Under the last line, 12 px from it, as on a page with the page's end under it;
+            // with words right under that too, beside its end; and only then past what's in
+            // the way.
+            (right_under())
+                .or_else(beside)
+                .or_else(under)
+                .or_else(over)
+                .or_else(over_last)
+        } else {
+            over().or_else(under).or_else(beside).or_else(over_last)
+        };
         let (x, y, lift) = match found {
             Some((x, y, top)) => (x, y, lift(top)),
             // Nowhere clear in view: over the first line in view, as before.
@@ -5786,8 +5818,9 @@ impl App {
 
     /// The same, with how far they're lifted in their row: as a page's, `LINE_AIR` clear of
     /// the output and the selection over and under them, which they stood 0 to 5 px over with
-    /// their shadow on it (108-terminal-ask).
-    fn output_bar_at(&self) -> Option<(Rect, Rect, f32)> {
+    /// their shadow on it (108-terminal-ask); and how far along their cells they're painted, so
+    /// a box that ends where the selection does ends where it's painted to, not 4 px short.
+    fn output_bar_at(&self) -> Option<(Rect, Rect, (f32, f32))> {
         let idle = matches!(self.overlay, Overlay::None) && self.drag != Drag::Session;
         // A terminal keeps its selection after a click elsewhere, as terminals do, but the
         // buttons go with the focus, so they don't stand over the pane while the file is worked on.
@@ -5904,10 +5937,18 @@ impl App {
             }
         };
         let y = screen.y + row;
+        // At the selection's end, the box's edge is the end of its cells, where the
+        // selection's is, and not the chip's side inside them.
+        let at_end = x == wanted && (from.1 != to.1 || wanted > screen.x);
+        let along = if at_end && !self.measure.in_cells() {
+            CHIP_SIDE
+        } else {
+            0.0
+        };
         Some((
             Rect::new(x, y, COMMENT_WIDTH, 1),
             Rect::new(x + COMMENT_WIDTH, y, ASK_WIDTH, 1),
-            lift,
+            (lift, along),
         ))
     }
 
@@ -6254,10 +6295,11 @@ impl App {
         // Two side by side, as Reject and Accept are, so edged with no shadow: theirs met in
         // the 8 px between them, a band of grey on white with a hard edge 7 px under their
         // tops, and stood out 10 px left of Comment.
-        if let Some((comment, ask, lift)) = self.output_bar_at() {
+        if let Some((comment, ask, (lift, along))) = self.output_bar_at() {
             let lift = (lift, SELECTION_CHIP.1);
-            self.draw_chip_as(grid, comment, "Comment", lift, (false, false));
-            self.draw_chip_as(grid, ask, side::ASK, lift, (false, false));
+            let quiet = (false, false);
+            self.draw_chip_along(grid, comment, "Comment", lift, quiet, along);
+            self.draw_chip_along(grid, ask, side::ASK, lift, quiet, along);
         }
         if let Some((comment, ask, (lift, along))) = self.selection_bar_at() {
             let (comment_says, ask_says) = self.selection_labels();
@@ -32645,6 +32687,74 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             moved |= !grid.text().contains("name01");
         }
         assert!(moved, "it moved past its first column");
+    }
+
+    /// So does a cell the page's right edge cuts, on cells and in pixels: there its first
+    /// letters showed, "cc", "1.1" (0.12.0's release review, finding 5 of its first half,
+    /// 160, 161). The cell's box and fill stay.
+    #[test]
+    fn a_table_cut_at_the_pages_right_edge_shows_no_part_of_a_cells_words() {
+        let names: Vec<String> = (1..=40).map(|n| format!("name{n:02}")).collect();
+        let row = |cells: &[String]| format!("| {} |\n", cells.join(" | "));
+        let rule: Vec<String> = names.iter().map(|_| "---".to_string()).collect();
+        let values: Vec<String> = (1..=40).map(|n| format!("value{n:02}")).collect();
+        let source = format!(
+            "Before it.\n\n{}{}{}\nAfter it.\n",
+            row(&names),
+            row(&rule),
+            row(&values)
+        );
+        let whole: Vec<&str> = names.iter().chain(&values).map(String::as_str).collect();
+        let cut = |word: &str| whole.iter().any(|w| w.starts_with(word) && *w != word);
+        let apart = |c: char| c == '│' || c == '›' || c == '‹' || c.is_whitespace();
+        for pixels in [false, true] {
+            let (_dir, mut app) = page_app(&source);
+            if pixels {
+                let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+                app.set_measure(Rc::new(measure));
+            }
+            // The table's rows, by its lines between cells.
+            let grid = screen(&app);
+            let rows: Vec<u16> = (0..grid.height())
+                .filter(|y| grid.row_text(*y).contains('│'))
+                .collect();
+            assert!(rows.len() >= 2, "the table:\n{}", grid.text());
+            let (x, y) = (grid.row_text(rows[0]).find('│').unwrap() as u16, rows[0]);
+            for step in 0..4 {
+                let grid = screen(&app);
+                let mut shown: Vec<String> = rows.iter().map(|line| grid.row_text(*line)).collect();
+                if pixels {
+                    let unit = cellix_render::UNIT;
+                    shown = (grid.paint.iter())
+                        .filter_map(|p| match p {
+                            Paint::Text { y: at, text, .. }
+                                if rows.contains(&((*at / unit) as u16)) =>
+                            {
+                                Some(text.clone())
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    assert!(!shown.is_empty(), "the table's words are painted");
+                }
+                for text in &shown {
+                    for word in text.split(apart).filter(|w| !w.is_empty()) {
+                        assert!(
+                            !cut(word),
+                            "a cut cell's first letters, pixels {pixels}, step {step}: {word:?} in {text}"
+                        );
+                    }
+                }
+                app.handle(Event::Mouse(MouseEvent {
+                    kind: MouseKind::ScrollRight,
+                    x: x + 8,
+                    y,
+                    fine_x: f32::from(x + 8),
+                    fine_y: f32::from(y) + 0.5,
+                    mods: Mods::default(),
+                }));
+            }
+        }
     }
 
     #[test]

@@ -777,9 +777,11 @@ fn the_selection_bar_stands_twelve_pixels_from_its_selection() {
     }
 
     // Its start out of view and its end on the paragraph under "Tables", one row with too
-    // little room after its words and a table under it: over the end's line, in a gap too
-    // small for 12 px and 12 (s1-page-shift-select-scrolled, 5 px under the heading and 16 over
-    // the paragraph).
+    // little room after its words and a table under it: over the end's line, 12 px over it
+    // with 8 px or more under the heading (s1-page-shift-select-scrolled, 5 px under the
+    // heading and 16 over the paragraph). Until 0.12.0's release review it stood in the
+    // middle of any gap too small for 12 px both sides, 9 px over its selection under a
+    // title (50-comment-glance-open).
     let start = at(&app, "Plain words");
     click(&mut app, start, false);
     let end = after(&app, "Right-click a cell");
@@ -799,9 +801,8 @@ fn the_selection_bar_stands_twelve_pixels_from_its_selection() {
         air.under
     );
     assert!(
-        // Within 2 px: the words over it are reckoned to their tallest letters' reach.
-        air.under < 12.0 + 12.0 && (air.over - air.under).abs() <= 2.0,
-        "in the middle of the gap: {} px over, {} under",
+        near(air.under, 12.0) && air.over >= 8.0,
+        "12 px over it: {} px over, {} under",
         air.over,
         air.under
     );
@@ -832,6 +833,84 @@ fn the_selection_bar_stands_twelve_pixels_from_its_selection() {
         "on the text column, {column} px, not {}",
         air.left
     );
+}
+
+/// Under a title, in a gap too small for 12 px either side, the buttons stand 12 px over the
+/// selection with 8 px or more under the title: in the gap's middle they stood 9 px over it
+/// and 13 under the title's tails (0.12.0's release review, finding 10 of its first half,
+/// 50-comment-glance-open).
+#[test]
+fn the_selection_bar_stands_twelve_pixels_from_its_selection_under_a_title() {
+    let page = "# Attention Is a Weighted Average\n\nWe study a model where each output is a \
+        weighted sum of its inputs and the weights sum to one, for inputs of any number of \
+        tokens.\n";
+    let (_dir, mut app) = open_airy("title.md", page, (150, 44));
+    let (from, to) = (at(&app, "the weights sum"), after(&app, "tokens"));
+    click(&mut app, from, false);
+    click(&mut app, to, true);
+    assert_eq!(selected(&app), source(&app, from, to));
+    let (_, line) = spot(&app, from).unwrap();
+    let bar = app.selection_bar().expect("the buttons");
+    assert!(bar.0.y < line, "over it");
+    let air = air_about(&screen(&app), bar);
+    assert!(
+        (air.under - 12.0).abs() <= 1.5 && air.over >= 8.0,
+        "{} px over it, {} under the title",
+        air.under,
+        air.over
+    );
+}
+
+/// With a label of something else right over the selection, a paper's "Abstract", the buttons
+/// stand right under its last line, 12 px from it, as on a page; with words right under that
+/// too, a table's caption, beside its end. In the gap over the label they stood 54 px from
+/// the selection, with "Abstract" between, and read as its (0.12.0's release review, finding
+/// 10, s1-paper-shift-select).
+#[test]
+fn the_selection_bar_keeps_off_a_label_over_its_selection() {
+    let paper = "\\documentclass{article}\n\\begin{document}\n\
+        \\begin{abstract}\nWe show that the method works, and measure what that costs.\n\
+        \\end{abstract}\n\n\
+        \\section{Results}\n\nAccuracy improves by a few points.\n\n\
+        \\begin{table}\n\\begin{tabular}{lr}\nModel & Accuracy \\\\\nBaseline & 91.2 \\\\\n\
+        Attention & 94.8 \\\\\n\\end{tabular}\n\\caption{Accuracy on the test set.}\n\
+        \\end{table}\n\n\\end{document}\n";
+    let (_dir, mut app) = open_airy("paper.tex", paper, (150, 40));
+    let start = at(&app, "We show");
+    let (_, line) = spot(&app, start).expect("the abstract in view");
+    let unit = cellix_render::units(1.0);
+    let label = (screen(&app).paint.iter())
+        .find_map(|paint| match paint {
+            Paint::Text { y, text, .. } if text == "Abstract" => Some((*y / unit) as u16),
+            _ => None,
+        })
+        .expect("the label");
+    assert_eq!(label, line - 1, "the label right over it");
+    // The abstract's line: 12 px under it, not over the label.
+    let end = after(&app, "what that costs.");
+    click(&mut app, start, false);
+    click(&mut app, end, true);
+    assert_eq!(selected(&app), source(&app, start, end));
+    let bar = app.selection_bar().expect("the buttons");
+    assert!(bar.0.y > line, "under it: row {}, it on {line}", bar.0.y);
+    let air = air_about(&screen(&app), bar);
+    assert!((air.over - 12.0).abs() <= 1.5, "{} px under it", air.over);
+    assert!(air.round >= AIR, "{} px from the buttons", air.round);
+    // On to a cell of the table, with its caption right under: beside the cell's row, after
+    // the table, on neither the label nor the caption.
+    let end = after(&app, "94.8");
+    click(&mut app, start, false);
+    click(&mut app, end, true);
+    let (x, last) = spot(&app, end).expect("the end in view");
+    let bar = app.selection_bar().expect("the buttons");
+    assert_eq!(bar.0.y, last, "beside the last line");
+    assert!(
+        f32::from(bar.0.x) > x,
+        "after the cell, at {x}: {}",
+        bar.0.x
+    );
+    let air = air_about(&screen(&app), bar);
+    assert!(air.round >= AIR, "{} px from the buttons", air.round);
 }
 
 /// Under or over, the buttons stand in the gap next to the block the selection's line is in,
@@ -1292,6 +1371,74 @@ mod terminal {
             let gap = f32::from(y) * 50.0 - output_bar_foot(&app);
             assert!((gap - 12.0).abs() <= 1.0, "{words}: {gap} px over it");
         }
+    }
+
+    /// The buttons by output selected in a terminal end where the selection ends, as painted:
+    /// at its last letter on one row, and at its rows' end across several. Their box stood
+    /// 4 px short of it, inside the cells it's placed by (0.12.0's release review, finding 10
+    /// of its first half, 108-terminal-ask).
+    #[test]
+    fn the_buttons_by_selected_output_end_where_it_ends() {
+        let (_dir, mut app) = open_airy("a.md", "# A page\n", (160, 40));
+        app.run(Command::ListAgents);
+        let width = usize::from(app.dock_screen().unwrap().w) - 2;
+        let script = format!(
+            "printf 'ready\\n\\n\\n\\nThe line to ask about\\n{}\\n'; sleep 30",
+            "a".repeat(width)
+        );
+        run(&mut app, &script);
+        let selection = app.theme.selection;
+        // Where the box is painted to, and the selection on a row, in pixels.
+        let bar_right = |app: &App| {
+            let (comment, ask) = app.output_bar().expect("the buttons by the output");
+            let edge = crate::theme::Theme::default().popup_border;
+            let unit = cellix_render::units(1.0);
+            (screen(app).paint.iter())
+                .filter_map(|paint| match paint {
+                    Paint::Panel {
+                        bounds,
+                        border: Some(border),
+                        ..
+                    } if *border == edge
+                        && (bounds.y / unit - i32::from(comment.y)).abs() <= 1
+                        && bounds.x / unit >= i32::from(comment.x) - 1
+                        && bounds.x / unit < i32::from(ask.right()) =>
+                    {
+                        Some((bounds.x + bounds.w) as f32 * CELL.0 as f32 / unit as f32)
+                    }
+                    _ => None,
+                })
+                .fold(f32::MIN, f32::max)
+        };
+        let selected_to = |app: &App, y: u16| {
+            let grid = screen(app);
+            let last = (0..grid.width())
+                .rfind(|x| grid.cell(*x, y).style.bg == selection)
+                .expect("the selection on its row");
+            f32::from(last + 1) * CELL.0 as f32
+        };
+        // Part of one row, ending far along it.
+        let (x, y) = find(&app, "aaaa").expect("the output");
+        let (from, to) = ((x + 40, y), (x + 70, y));
+        press(&mut app, MouseKind::Left, from, false);
+        press(&mut app, MouseKind::Drag, to, false);
+        press(&mut app, MouseKind::Up, to, false);
+        let (right, end) = (bar_right(&app), selected_to(&app, y));
+        assert!(
+            (right - end).abs() <= 1.0,
+            "one row: to {right} px, it to {end}"
+        );
+        // Several rows, whole to their end.
+        let (x, y) = find(&app, "The line to ask about").expect("the output");
+        let (_, last) = find(&app, "aaaa").expect("the output");
+        press(&mut app, MouseKind::Left, (x, y), false);
+        press(&mut app, MouseKind::Drag, (x + 60, last), false);
+        press(&mut app, MouseKind::Up, (x + 60, last), false);
+        let (right, end) = (bar_right(&app), selected_to(&app, y));
+        assert!(
+            (right - end).abs() <= 1.0,
+            "rows: to {right} px, they to {end}"
+        );
     }
 
     #[test]
