@@ -2098,9 +2098,16 @@ fn a_long_name_in_front_is_cut_before_a_tab_goes_into_the_list() {
         start_agent(dir.path(), &mut app, "✳ Claude Code");
     }
     app.dock.sessions[0].topic = Some("Refund route for unpaid orders".into());
-    app.dock.sessions[1].asked =
-        Some("Fix the login redirect after a password reset, and add a test for it".into());
-    app.dock.sessions[2].asked = Some("Fix the login redirect after a password change".into());
+    // What was asked names a tab while it holds the conversation it was asked in.
+    let asked = [
+        "Fix the login redirect after a password reset, and add a test for it",
+        "Fix the login redirect after a password change",
+    ];
+    for (index, asked) in [(1, asked[0]), (2, asked[1])] {
+        let id = format!("s{index}");
+        app.dock.sessions[index].agent_session = Some(id.clone());
+        app.dock.sessions[index].asked = Some((id, asked.into()));
+    }
     for session in app.dock.sessions.iter_mut() {
         session.doing = Doing::Working;
     }

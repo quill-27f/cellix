@@ -38,6 +38,35 @@ pub fn program_name(_pid: u32) -> Option<String> {
     None
 }
 
+/// The process group in front of the terminal `pid` runs in, the one its keys go to, by its
+/// leader's number: what a held shell runs at its prompt, read from the shell's own process,
+/// so a host of any version can be asked. None where the system doesn't say.
+#[cfg(target_os = "linux")]
+pub fn front_group(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // `pid (name) state ppid pgrp session tty_nr tpgid ...`, and the name can hold brackets.
+    let (_, rest) = stat.rsplit_once(')')?;
+    let group: i64 = rest.split_whitespace().nth(5)?.parse().ok()?;
+    u32::try_from(group).ok().filter(|group| *group > 0)
+}
+
+#[cfg(target_os = "macos")]
+pub fn front_group(pid: u32) -> Option<u32> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    // SAFETY: an all-zero proc_bsdinfo is a valid value of it, and proc_pidinfo writes at most
+    // the size it's given into it, saying how much it did.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let into = (&raw mut info).cast();
+    let read = unsafe { libc::proc_pidinfo(pid, libc::PROC_PIDTBSDINFO, 0, into, size) };
+    (read == size && info.e_tpgid > 0).then_some(info.e_tpgid)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub fn front_group(_pid: u32) -> Option<u32> {
+    None
+}
+
 /// Where a held program's output goes: a channel, or a session's feed, which wakes Cellix's
 /// loop as it comes (`wake.rs`).
 pub trait Sink: Send + 'static {

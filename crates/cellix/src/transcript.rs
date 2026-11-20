@@ -508,6 +508,14 @@ fn parse_claude(text: &str) -> Transcript {
     transcript
 }
 
+/// Whether what Codex gave the model as the user's is its own setup: its instructions and
+/// surroundings, which it hands over as user text.
+fn codex_setup(said: &str) -> bool {
+    said.starts_with("<environment_context>")
+        || said.starts_with("<user_instructions>")
+        || said.starts_with("# AGENTS.md")
+}
+
 fn parse_codex(text: &str) -> Transcript {
     let mut transcript = Transcript {
         agent: "Codex".to_string(),
@@ -540,11 +548,7 @@ fn parse_codex(text: &str) -> Transcript {
                 match payload["role"].as_str() {
                     Some("user") => {
                         let said = typed(&said);
-                        // Codex hands the model its instructions and surroundings as user text.
-                        let setup = said.starts_with("<environment_context>")
-                            || said.starts_with("<user_instructions>")
-                            || said.starts_with("# AGENTS.md");
-                        if !said.is_empty() && !setup {
+                        if !said.is_empty() && !codex_setup(&said) {
                             turns.push(Turn {
                                 prompt: said,
                                 ..Turn::default()
@@ -1015,6 +1019,121 @@ pub fn find(agent: &str, session: &str) -> Option<PathBuf> {
     }
 }
 
+/// Claude Code's own folder: `CLAUDE_CONFIG_DIR`, or `.claude` in the home folder.
+pub fn claude_home() -> Option<PathBuf> {
+    let var = |name: &str| {
+        let value = std::env::var_os(name).filter(|value| !value.is_empty());
+        value.map(PathBuf::from)
+    };
+    let home = || var("HOME").or_else(|| var("USERPROFILE"));
+    var("CLAUDE_CONFIG_DIR").or_else(|| Some(home()?.join(".claude")))
+}
+
+/// What Claude Code says of one of its processes, in the file it keeps for each one running
+/// (`sessions/<pid>.json` in its own folder) and rewrites as things change: the conversation
+/// it holds now, which /clear and /resume change, where that conversation's transcript is
+/// once it has one, and a name the person gave it. Read whatever version of Cellix's hooks
+/// it runs, or none.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Registered {
+    pub session: String,
+    pub cwd: String,
+    pub transcript: Option<PathBuf>,
+    /// A name the person gave it (/rename, or one it was started with), not one made from
+    /// its folder's.
+    pub name: Option<String>,
+}
+
+/// What Claude Code calls a project's folder of transcripts: its path with everything but
+/// letters and digits as `-`, one for each of JavaScript's letters. A path over 200 has a hash
+/// after its first 200, which isn't worked out here: its transcript is looked for by the
+/// session instead.
+pub(crate) fn project_folder(cwd: &str) -> String {
+    let mut folder = String::with_capacity(cwd.len());
+    for c in cwd.chars() {
+        if c.is_ascii_alphanumeric() {
+            folder.push(c);
+        } else {
+            folder.extend(std::iter::repeat_n('-', c.len_utf16()));
+        }
+    }
+    folder
+}
+
+/// Where Claude Code keeps a conversation's transcript: in its project's folder, or another
+/// one, as when its folder was named from where it started and it has moved since.
+fn claude_transcript(home: &Path, cwd: &str, session: &str) -> Option<PathBuf> {
+    let projects = home.join("projects");
+    let wanted = format!("{session}.jsonl");
+    let first = (!cwd.is_empty()).then(|| projects.join(project_folder(cwd)).join(&wanted));
+    if let Some(first) = first.filter(|path| path.is_file()) {
+        return Some(first);
+    }
+    let folders = std::fs::read_dir(&projects).ok()?.flatten();
+    (folders.map(|folder| folder.path().join(&wanted))).find(|path| path.is_file())
+}
+
+/// Reads the file Claude Code keeps for process `pid`.
+fn registered(home: &Path, file: &Path, pid: u32) -> Option<Registered> {
+    let entry: Value = serde_json::from_slice(&std::fs::read(file).ok()?).ok()?;
+    // One left by a process that ended without taking it away, its number since another's.
+    if entry["pid"].as_u64() != Some(u64::from(pid)) {
+        return None;
+    }
+    let session = entry["sessionId"].as_str().filter(|id| !id.is_empty())?;
+    let cwd = entry["cwd"].as_str().unwrap_or("").to_string();
+    let given = entry["nameSource"].as_str() != Some("derived");
+    let name = entry["name"]
+        .as_str()
+        .map(str::trim)
+        .filter(|n| given && !n.is_empty());
+    Some(Registered {
+        session: session.to_string(),
+        transcript: claude_transcript(home, &cwd, session),
+        cwd,
+        name: name.map(str::to_string),
+    })
+}
+
+/// Follows what Claude Code says of the processes asked about, each one's file read again only
+/// once it has changed; until its conversation has a transcript, only that is looked for.
+#[derive(Debug, Default)]
+pub struct Sessions {
+    seen: HashMap<u32, (std::time::SystemTime, Option<Registered>)>,
+}
+
+impl Sessions {
+    /// What Claude Code last said of process `pid`, if it's one of its own.
+    pub fn get(&self, pid: u32) -> Option<&Registered> {
+        self.seen.get(&pid)?.1.as_ref()
+    }
+
+    /// Looks again at what `home` says of `pids`, and forgets the others.
+    pub fn refresh(&mut self, home: &Path, pids: &[u32]) {
+        self.seen.retain(|pid, _| pids.contains(pid));
+        for &pid in pids {
+            let file = home.join("sessions").join(format!("{pid}.json"));
+            let Ok(changed) = std::fs::metadata(&file).and_then(|m| m.modified()) else {
+                self.seen.remove(&pid);
+                continue;
+            };
+            match self.seen.get_mut(&pid) {
+                Some((at, found)) if *at == changed => {
+                    if let Some(found) = found.as_mut().filter(|f| f.transcript.is_none()) {
+                        let wanted = format!("{}.jsonl", found.session);
+                        let path = home.join("projects").join(project_folder(&found.cwd));
+                        found.transcript = Some(path.join(wanted)).filter(|p| p.is_file());
+                    }
+                }
+                _ => {
+                    let found = registered(home, &file, pid);
+                    self.seen.insert(pid, (changed, found));
+                }
+            }
+        }
+    }
+}
+
 /// Looks through a folder `depth` deep, newest names first, until `found` says stop.
 fn walk(folder: &Path, depth: usize, found: &mut dyn FnMut(&Path) -> bool) -> bool {
     let Ok(entries) = std::fs::read_dir(folder) else {
@@ -1054,6 +1173,9 @@ pub struct Meter {
     custom_title: Option<String>,
     ai_title: Option<String>,
     summary: Option<String>,
+    /// The first thing the person asked in it, as its tab can be named by: read from the
+    /// transcript itself, so it's known whatever the hooks that reported it could say.
+    first_prompt: Option<String>,
 }
 
 impl Meter {
@@ -1104,6 +1226,60 @@ impl Meter {
             .or(self.summary.as_deref())
     }
 
+    /// The first thing the person asked in the conversation, its first line made one, as a
+    /// prompt hook says it (`cellix_agent::hook::asked`).
+    pub fn asked(&self) -> Option<&str> {
+        self.first_prompt.as_deref()
+    }
+
+    /// Notes the first prompt the person typed, while none is known: not what Claude Code or
+    /// Codex wrote as the user's for themselves, a tool's result, a helper's prompt, or a
+    /// command such as /clear.
+    fn take_prompt(&mut self, line: &str, codex: bool) {
+        let user = if codex {
+            line.contains("\"role\":\"user\"")
+        } else {
+            line.contains("\"type\":\"user\"")
+        };
+        if !user || line.contains("\"isSidechain\":true") || line.contains("\"tool_result\"") {
+            return;
+        }
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            return;
+        };
+        let said = if codex {
+            let payload = &entry["payload"];
+            let message = entry["type"] == "response_item" && payload["type"] == "message";
+            if !message || payload["role"] != "user" {
+                return;
+            }
+            let blocks = payload["content"].as_array().into_iter().flatten();
+            let text: Vec<&str> = blocks.filter_map(|b| b["text"].as_str()).collect();
+            let said = typed(&text.join("\n"));
+            if codex_setup(&said) {
+                return;
+            }
+            said
+        } else {
+            if entry["type"] != "user" || written_by_claude_code(&entry) {
+                return;
+            }
+            let content = &entry["message"]["content"];
+            let first_text = || {
+                let blocks = content.as_array().into_iter().flatten();
+                let text = blocks
+                    .filter(|b| b["type"] == "text")
+                    .find_map(|b| b["text"].as_str());
+                typed(text.unwrap_or(""))
+            };
+            content.as_str().map_or_else(first_text, typed)
+        };
+        let asked = cellix_agent::hook::asked(&said);
+        if !asked.is_empty() {
+            self.first_prompt = Some(asked);
+        }
+    }
+
     /// Notes a line that titles the conversation: `custom-title`, `ai-title` or `summary`,
     /// each with its words in a field of its own.
     fn take_title(&mut self, line: &str) -> bool {
@@ -1145,6 +1321,9 @@ impl Meter {
         let codex = *self
             .codex
             .get_or_insert_with(|| line.contains("\"payload\""));
+        if self.first_prompt.is_none() {
+            self.take_prompt(line, codex);
+        }
         if codex {
             if !line.contains("token_count") && !line.contains("turn_context") {
                 return;
@@ -1459,6 +1638,121 @@ pub mod tests {
         assert!(shell.failed);
         assert_eq!(t.usage.window, 272_000);
         assert_eq!(t.usage.percent(), Some(2));
+    }
+
+    /// The meter keeps the first thing the person asked, as a tab is named by it: not what
+    /// Claude Code wrote for itself, a command such as /clear, a tool's result or a helper's
+    /// prompt, and in Codex's log not its setup. Later prompts don't replace it.
+    #[test]
+    fn the_meter_reads_the_first_thing_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = |name: &str, text: &str| {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            let mut meter = Meter::new(path);
+            meter.refresh();
+            meter.asked().map(str::to_string)
+        };
+        let before = [
+            r#"{"type":"user","isMeta":true,"message":{"role":"user","content":"<local-command-caveat>Caveat: not typed.</local-command-caveat>"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>\n<command-message>clear</command-message>"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":"<local-command-stdout></local-command-stdout>"}}"#,
+            r#"{"type":"user","isSidechain":true,"message":{"role":"user","content":"a helper's prompt"}}"#,
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t0","content":"output"}]}}"#,
+        ];
+        let claude = format!(
+            "{}\n{}",
+            before.join("\n"),
+            &CLAUDE[CLAUDE.find('\n').unwrap() + 1..]
+        );
+        assert_eq!(
+            first("c.jsonl", &claude).as_deref(),
+            Some("Add a refund route, and a test."),
+            "its first prompt, the reminder taken off"
+        );
+        let blocks = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Fix the  login\nredirect"},{"type":"image"}]}}"#;
+        assert_eq!(
+            first("b.jsonl", &format!("{blocks}\n")).as_deref(),
+            Some("Fix the login"),
+            "its first line, spaces made single"
+        );
+        let codex = r#"{"timestamp":"t","type":"session_meta","payload":{"id":"c-1","cwd":"/work/shop"}}
+{"timestamp":"t","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"}]}}
+{"timestamp":"t","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Run the tests"}]}}
+{"timestamp":"t","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"And the docs"}]}}
+"#;
+        assert_eq!(first("x.jsonl", codex).as_deref(), Some("Run the tests"));
+        assert_eq!(first("n.jsonl", &format!("{}\n", before[1])), None);
+    }
+
+    /// What Claude Code says of a process leads to the conversation it holds and that
+    /// conversation's transcript: in its project's folder, or another where it was started.
+    /// A file left by an ended process whose number is another's now says nothing, and a name
+    /// made from the folder is no title. A transcript written later is found without the
+    /// record changing; a record taken away is forgotten.
+    #[test]
+    fn claude_codes_word_on_its_process_leads_to_its_transcript() {
+        assert_eq!(project_folder("/work/my shop.v2"), "-work-my-shop-v2");
+        assert_eq!(
+            project_folder("/w/é😀"),
+            "-w----",
+            "one for each of JavaScript's"
+        );
+        let home = tempfile::tempdir().unwrap();
+        let home = home.path();
+        let sessions = home.join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        let record = |pid: u32, said: Value| {
+            std::fs::write(sessions.join(format!("{pid}.json")), said.to_string()).unwrap();
+        };
+        let projects = home.join("projects");
+        let transcript = |folder: &str, id: &str| {
+            let folder = projects.join(folder);
+            std::fs::create_dir_all(&folder).unwrap();
+            let path = folder.join(format!("{id}.jsonl"));
+            std::fs::write(&path, "{}\n").unwrap();
+            path
+        };
+        let shop = transcript("-work-shop", "conv-1");
+        record(
+            41,
+            serde_json::json!({"pid": 41, "sessionId": "conv-1", "cwd": "/work/shop",
+                "name": "shop", "nameSource": "derived"}),
+        );
+        // Moved into a folder of its own since it started there.
+        let moved = transcript("-work", "conv-2");
+        record(
+            42,
+            serde_json::json!({"pid": 42, "sessionId": "conv-2", "cwd": "/work/shop/api",
+                "name": "refunds", "nameSource": "user"}),
+        );
+        record(
+            43,
+            serde_json::json!({"pid": 99, "sessionId": "conv-3", "cwd": "/work/shop"}),
+        );
+        record(
+            44,
+            serde_json::json!({"pid": 44, "sessionId": "conv-4", "cwd": "/work/shop"}),
+        );
+        let mut seen = Sessions::default();
+        seen.refresh(home, &[41, 42, 43, 44, 45]);
+        let found = seen.get(41).expect("its record");
+        assert_eq!(found.session, "conv-1");
+        assert_eq!(found.transcript.as_deref(), Some(shop.as_path()));
+        assert_eq!(found.name, None, "a folder's name isn't a title");
+        let found = seen.get(42).expect("its record");
+        assert_eq!(found.transcript.as_deref(), Some(moved.as_path()));
+        assert_eq!(found.name.as_deref(), Some("refunds"));
+        assert_eq!(seen.get(43), None, "another process's record");
+        assert_eq!(seen.get(45), None, "none at all");
+        assert_eq!(seen.get(44).unwrap().transcript, None, "not written yet");
+        let later = transcript("-work-shop", "conv-4");
+        seen.refresh(home, &[41, 42, 44]);
+        assert_eq!(seen.get(44).unwrap().transcript, Some(later));
+        std::fs::remove_file(sessions.join("41.json")).unwrap();
+        seen.refresh(home, &[41, 42, 44]);
+        assert_eq!(seen.get(41), None, "it ended");
+        assert!(seen.get(42).is_some());
     }
 
     #[test]

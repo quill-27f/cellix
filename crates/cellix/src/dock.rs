@@ -351,13 +351,18 @@ pub struct Session {
     pub title: Option<String>,
     /// What the person named its tab, which outranks anything the program says.
     pub renamed: Option<String>,
-    /// Its agent's own title for the conversation, as its transcript keeps it: what Claude
-    /// Code's /resume lists it by. Its tab goes by it when its terminal's title is only the
-    /// program's name.
+    /// Its agent's own title for the conversation it holds now, as its transcript keeps it:
+    /// what Claude Code's /resume lists it by, or a name the person gave it there. Its tab goes
+    /// by it when its terminal's title is only the program's name.
     pub topic: Option<String>,
-    /// The first thing the person asked it, as its prompt hook said: its tab's name when it
-    /// has neither a title of its own nor a topic.
-    pub asked: Option<String>,
+    /// The first thing the person asked in that conversation, as its transcript has it.
+    pub first_asked: Option<String>,
+    /// The first thing the person asked it, as its prompt hook said, with the conversation it
+    /// was asked in: it names the tab only while the tab holds that conversation.
+    pub asked: Option<(String, String)>,
+    /// What Claude Code itself says of the conversation its process holds (`sessions/<pid>
+    /// .json`): an agent's tab's own process, or the command in front of a shell.
+    pub registered: Option<crate::transcript::Registered>,
     /// What the program in it called itself (OSC 7501's `app`), until it takes that back: the
     /// name the Agents list and the inbox know it by, which its tab goes by too.
     pub reported: Option<String>,
@@ -488,6 +493,13 @@ pub fn own_name(title: &str) -> Option<String> {
     };
     let name = rest.trim();
     (!name.is_empty()).then(|| name.to_string())
+}
+
+/// Whether a title starts with the glyph an agent puts before its name, which a shell's own
+/// title, as `user@host: ~/shop` or the command it runs, never has.
+fn busy_marked(title: &str) -> bool {
+    let first = title.trim_start().chars().next();
+    first.is_some_and(|c| ('\u{2800}'..='\u{28ff}').contains(&c) || TITLE_MARKS.contains(&c))
 }
 
 /// The most letters an agent's tab's name has when it comes from its conversation's title or
@@ -741,7 +753,9 @@ impl Session {
             title: None,
             renamed: None,
             topic: None,
+            first_asked: None,
             asked: None,
+            registered: None,
             reported: None,
             doing: Doing::Idle,
             done_unseen: false,
@@ -773,32 +787,151 @@ impl Session {
     }
 
     /// Its tab's name whole, and whether it's one an agent with no title of its own goes by,
-    /// its topic or what was first asked, which is cut short on the tab.
+    /// its topic or what was first asked, which is cut short on the tab. An agent typed at a
+    /// shell's prompt is named as an agent's tab is, by its display name and not its command:
+    /// a Terminal tab running `claude` stayed "claude" (the user, 20 November: "Claude code
+    /// titles are not changing automatically").
     fn named(&self) -> (String, bool) {
         if let Some(name) = self.renamed.as_ref().or(self.reported.as_ref()) {
             return (name.clone(), false);
         }
+        let in_front = self.agent_in_front();
         // A shell's is the program running in it, as VS Code names a terminal's tab.
-        if let Some(program) = self.running_program() {
+        if let Some(program) = self.running_program().filter(|_| in_front.is_none()) {
             return (program.to_string(), false);
         }
-        if self.shell || self.browser {
+        if (self.shell && in_front.is_none()) || self.browser {
             return (self.name.clone(), false);
         }
-        let own = self.title.as_deref().and_then(own_name);
-        if let Some(own) = own.filter(|name| !only_program(name, &self.name)) {
+        let program = in_front.unwrap_or(&self.name);
+        // A shell's own title isn't its agent's: only one with an agent's busy mark before it,
+        // as Claude Code's has, is one the agent gave.
+        let title = self
+            .title
+            .as_deref()
+            .filter(|t| !self.shell || busy_marked(t));
+        let own = title.and_then(own_name);
+        if let Some(own) = own.filter(|name| !only_program(name, program)) {
             return (own, false);
         }
-        match self.topic.clone().or_else(|| self.asked.clone()) {
+        let asked = (self.asked.as_ref())
+            .filter(|(id, _)| self.agent_session.as_deref() == Some(id.as_str()))
+            .map(|(_, asked)| asked.clone());
+        let fallback = (self.topic.clone())
+            .or_else(|| self.first_asked.clone())
+            .or(asked);
+        match fallback {
             Some(fallback) => (fallback, true),
-            None => (self.name.clone(), false),
+            None => (program.to_string(), false),
         }
     }
 
     /// Whether two tabs whose names read alike are told apart by a number: an agent's are,
-    /// unless the person named it so; a shell's and the browser's are not.
+    /// an agent's in front of a shell too, unless the person named it so; a shell's and the
+    /// browser's are not.
     pub fn numbered(&self) -> bool {
-        self.renamed.is_none() && !self.shell && !self.browser && self.reported.is_none()
+        let agent = !self.shell || self.agent_in_front().is_some();
+        self.renamed.is_none() && agent && !self.browser && self.reported.is_none()
+    }
+
+    /// The agent in front of a shell, by its display name, once it has run a moment: one of
+    /// `AGENTS` by its command, or a program Claude Code says is one of its own, whatever its
+    /// process is called (an installed `claude` can run as `node`).
+    pub fn agent_in_front(&self) -> Option<&'static str> {
+        if !self.shell || self.exited {
+            return None;
+        }
+        let program = self.running_program()?;
+        if self.registered.is_some() {
+            return Some("Claude Code");
+        }
+        let mut known = crate::agents::AGENTS.iter();
+        known
+            .find(|(_, command)| *command == program)
+            .map(|(name, _)| *name)
+    }
+
+    /// The process its agent runs as: an agent's tab's own program, or the command in front
+    /// of a shell, which is the leader of the process group in front of its terminal.
+    pub fn agent_pid(&self) -> Option<u32> {
+        if self.exited || self.browser {
+            return None;
+        }
+        if self.shell {
+            return self.front_pid();
+        }
+        self.program_pid()
+    }
+
+    /// The leader of the process group in front of a shell, while it isn't the shell itself:
+    /// the command typed at its prompt.
+    fn front_pid(&self) -> Option<u32> {
+        let shell = self.program_pid()?;
+        let front = match &self.link {
+            #[cfg(unix)]
+            Link::Own { master, .. } => {
+                let leader = master.process_group_leader()?;
+                u32::try_from(leader).ok()
+            }
+            #[cfg(unix)]
+            Link::Held(_) => crate::hold::front_group(shell),
+            _ => None,
+        };
+        front.filter(|front| *front != shell)
+    }
+
+    /// Notes the conversation its agent holds now, by its id, as its hooks or Claude Code
+    /// itself say it. A new one, as /clear, /resume or a new session in the same tab make, is
+    /// named afresh: what named the last one doesn't name it.
+    pub fn hold_conversation(&mut self, id: &str) {
+        if self.agent_session.as_deref() == Some(id) {
+            return;
+        }
+        if self.agent_session.is_some() {
+            self.topic = None;
+            self.first_asked = None;
+            self.usage = None;
+        }
+        self.agent_session = Some(id.to_string());
+    }
+
+    /// Takes in what Claude Code says of its process now. A conversation it changed to is the
+    /// one the tab holds, but only once it says so: what it said before, read again, doesn't
+    /// take the tab back from one its hooks have just reported.
+    pub fn take_registered(&mut self, now: Option<crate::transcript::Registered>) {
+        let id = |found: &Option<crate::transcript::Registered>| {
+            found.as_ref().map(|found| found.session.clone())
+        };
+        if id(&now) != id(&self.registered)
+            && let Some(session) = id(&now)
+        {
+            self.hold_conversation(&session);
+        }
+        self.registered = now;
+    }
+
+    /// Whether the agent in it has been heard from by its hooks, so its tab's mark says what
+    /// they said. An agent in front of a shell that never reports turns as any program does.
+    pub fn heard(&self) -> bool {
+        self.agent_session.is_some() && (!self.shell || self.agent_in_front().is_some())
+    }
+
+    /// What an agent in front of a shell left when it went: the shell is at its prompt again
+    /// or runs something else, which is named and marked afresh.
+    fn forget_agent(&mut self) {
+        if !self.shell {
+            return;
+        }
+        self.agent_session = None;
+        self.asked = None;
+        self.topic = None;
+        self.first_asked = None;
+        self.transcript = None;
+        self.usage = None;
+        self.registered = None;
+        self.doing = Doing::Idle;
+        self.done_unseen = false;
+        self.title = None;
     }
 
     /// The order it started in, among the pane's tabs.
@@ -823,8 +956,11 @@ impl Session {
         match self.doing {
             Doing::Working => Some(TabMark::Working),
             Doing::NeedsYou => Some(TabMark::NeedsYou),
-            // A shell running a command turns, as an agent at work does.
-            Doing::Idle if self.running_program().is_some() => Some(TabMark::Working),
+            // A shell running a command turns, as an agent at work does; an agent in front of
+            // it that its hooks report for says what they say.
+            Doing::Idle if self.running_program().is_some() && !self.heard() => {
+                Some(TabMark::Working)
+            }
             Doing::Idle => self.done_unseen.then_some(TabMark::Done),
         }
     }
@@ -879,8 +1015,13 @@ impl Session {
         } else {
             let now = self.foreground();
             if now.is_empty() {
-                self.running = None;
+                if self.running.take().is_some() {
+                    self.forget_agent();
+                }
             } else if self.running.as_ref().is_none_or(|(name, _)| *name != now) {
+                if self.running.is_some() {
+                    self.forget_agent();
+                }
                 self.running = Some((now, std::time::Instant::now()));
             }
         }
@@ -903,8 +1044,12 @@ impl Session {
     }
 
     /// Cellix's own mark for its program, as its tab and the Agents list show it: a task's
-    /// is a shell's prompt, since it's a command run as one is.
+    /// is a shell's prompt, since it's a command run as one is; an agent's in front of a
+    /// shell is that agent's.
     pub fn icon(&self) -> Icon {
+        if let Some(agent) = self.agent_in_front() {
+            return program_icon(agent, false, false);
+        }
         program_icon(&self.name, self.shell || self.task(), self.browser)
     }
 
@@ -4473,6 +4618,71 @@ mod tests {
         assert!(only_program("claude", "Claude Code"));
         assert!(only_program("Gemini", "Gemini CLI"));
         assert!(!only_program("pricing page", "Claude Code"));
+    }
+
+    /// An agent in front of a shell, known by its command or by what Claude Code says of its
+    /// process, names the shell's tab as an agent's tab is named: its display name, its own
+    /// title when it has one, though not the shell's title, and its mark; two alike are told
+    /// apart. Anything else in front is named by its command, and once the agent goes, what it
+    /// held goes with it.
+    #[test]
+    #[cfg(unix)]
+    fn an_agent_in_front_of_a_shell_names_its_tab() {
+        let dir = tempfile::tempdir().unwrap();
+        let argv = ["sh".to_string(), "-c".to_string(), "sleep 5".to_string()];
+        let mut shell =
+            Session::start("Terminal", &argv, &[], dir.path(), (80, 24), (10, 20)).unwrap();
+        assert!(shell.shell);
+        let a_while = std::time::Instant::now() - std::time::Duration::from_secs(2);
+        let front = |shell: &mut Session, program: &str| {
+            shell.running = Some((program.to_string(), a_while));
+        };
+        front(&mut shell, "vim");
+        assert_eq!(shell.label(), "vim");
+        assert_eq!(shell.icon(), Icon::Terminal);
+        assert!(!shell.numbered());
+
+        front(&mut shell, "codex");
+        assert_eq!(shell.agent_in_front(), Some("Codex"));
+        assert_eq!(shell.label(), "Codex", "its display name, not its command");
+        assert_eq!(shell.icon(), Icon::AgentCodex);
+        assert!(shell.numbered(), "told apart from another Codex");
+        // The shell's own title, as one that names what it runs, isn't the agent's.
+        shell.title = Some("dev@box: codex --full-auto".into());
+        assert_eq!(shell.label(), "Codex");
+        shell.title = Some("⠙ og tags".into());
+        assert_eq!(shell.label(), "og tags", "the agent's own title");
+        // What it was first asked, in the conversation it holds.
+        shell.title = None;
+        shell.hold_conversation("c1");
+        shell.asked = Some(("c1".into(), "Add og tags to every page".into()));
+        assert_eq!(shell.label(), "Add og tags to every page");
+        shell.hold_conversation("c2");
+        assert_eq!(
+            shell.label(),
+            "Codex",
+            "a new conversation isn't named by the last"
+        );
+
+        // A process Claude Code says is its own is Claude Code, whatever it runs as.
+        front(&mut shell, "node");
+        assert_eq!(shell.label(), "node");
+        shell.take_registered(Some(crate::transcript::Registered {
+            session: "conv-1".into(),
+            ..Default::default()
+        }));
+        assert_eq!(shell.label(), "Claude Code");
+        assert_eq!(shell.icon(), Icon::AgentClaude);
+        assert_eq!(shell.agent_session.as_deref(), Some("conv-1"));
+        shell.topic = Some("Refund route".into());
+        assert_eq!(shell.label(), "Refund route");
+
+        // Gone back to its prompt: a Terminal again, holding nothing of the agent's.
+        shell.forget_agent();
+        shell.running = None;
+        assert_eq!(shell.label(), "Terminal");
+        assert!(shell.agent_session.is_none() && shell.topic.is_none());
+        assert!(shell.registered.is_none() && shell.asked.is_none());
     }
     use cellix_input::Mods;
     #[cfg(unix)]

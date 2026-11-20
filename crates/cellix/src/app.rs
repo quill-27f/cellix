@@ -1770,6 +1770,11 @@ pub struct App {
     meters: Arc<std::sync::Mutex<HashMap<PathBuf, crate::transcript::Meter>>>,
     /// Set while transcripts are being read, so one read runs at a time.
     metering: Arc<AtomicBool>,
+    /// What Claude Code says of the processes its tabs run, read with the transcripts.
+    claude_sessions: Arc<std::sync::Mutex<crate::transcript::Sessions>>,
+    /// Claude Code's own folder, where it says what each of its processes holds. None in
+    /// tests unless one gives a folder of its own, so none reads the person's.
+    pub(crate) claude_home: Option<PathBuf>,
     /// Each transcript page made, by its file: the transcript it shows, and how long that was
     /// when the page was last written.
     transcript_pages: crate::transcript::Sources,
@@ -1933,6 +1938,8 @@ impl App {
             behind: false,
             meters: Arc::default(),
             metering: Arc::default(),
+            claude_sessions: Arc::default(),
+            claude_home: crate::transcript::claude_home().filter(|_| !cfg!(test)),
             transcript_pages: HashMap::new(),
             #[cfg(test)]
             agent_program: None,
@@ -9781,13 +9788,32 @@ impl App {
     }
 
     /// What an agent in the side pane has said of itself: its name, its own session's id, and
-    /// where its transcript is when its hooks said. A held agent's hooks leave this beside its
-    /// host's socket. One Cellix runs itself is known by its hooks' reports, when no other tab
-    /// of that agent could have sent them.
+    /// where its transcript is when its hooks said. Claude Code says it of its process, read
+    /// whatever its hooks are; a held agent's hooks leave it beside its host's socket. One
+    /// Cellix runs itself is known by its hooks' reports, when no other tab of that agent could
+    /// have sent them. An agent typed at a shell's prompt is known by what Claude Code says and
+    /// by its hooks' news, which found its tab by its process.
     fn agent_word(&self, index: usize) -> Option<(String, String, String)> {
         let session = self.dock.sessions.get(index)?;
-        if session.shell || session.browser {
+        let in_front = session.agent_in_front();
+        if session.browser || (session.shell && in_front.is_none()) {
             return None;
+        }
+        if let Some(found) = session.registered.as_ref().filter(|_| !session.exited) {
+            let transcript = found.transcript.as_deref().map(Path::display);
+            let transcript = transcript.map_or_else(String::new, |path| path.to_string());
+            return Some(("Claude Code".into(), found.session.clone(), transcript));
+        }
+        if session.shell {
+            let id = session.agent_session.as_deref()?;
+            let mut running = self.agents.running.iter().rev().filter(|e| e.session == id);
+            let mut said = running.clone().filter(|e| !e.transcript.is_empty());
+            let event = said.next().or_else(|| running.next())?;
+            return Some((
+                event.agent.clone(),
+                event.session.clone(),
+                event.transcript.clone(),
+            ));
         }
         let stopped = session.stopped.as_ref().and_then(|s| s.agent.clone());
         let held = || {
@@ -9826,16 +9852,23 @@ impl App {
 
     /// Where an agent's transcript is: where its hooks said, or where that agent keeps them.
     /// Found once for each of its sessions.
+    /// A conversation the tab didn't hold before, as after /clear, leaves the last one's
+    /// transcript behind even before its own is written.
     fn resolve_transcript(&mut self, index: usize) -> Option<PathBuf> {
         let (agent, id, said) = self.agent_word(index)?;
-        if let Some((known, path)) = &self.dock.sessions[index].transcript
+        let session = &mut self.dock.sessions[index];
+        if let Some((known, path)) = &session.transcript
             && *known == id
         {
             return Some(path.clone());
         }
+        session.transcript = None;
         let said = PathBuf::from(said);
+        // Claude Code's own word was looked for away from the screen, everywhere it could be.
         let path = if said.is_file() {
             said
+        } else if session.registered.is_some() {
+            return None;
         } else {
             crate::transcript::find(&agent, &id)?
         };
@@ -9846,6 +9879,22 @@ impl App {
     /// Keeps each agent's tab saying how full its context is, and each transcript page up to
     /// date with its transcript. Both are read away from the screen, a little at a time.
     fn follow_transcripts(&mut self) {
+        // Claude Code's own word on the conversation each of its processes here holds: an
+        // agent's tab's, and whatever is in front of a shell, which Claude Code may be.
+        let pids: Vec<Option<u32>> = (self.dock.sessions.iter())
+            .map(|session| {
+                let claude = session.shell || session.name == "Claude Code";
+                session
+                    .agent_pid()
+                    .filter(|_| claude && self.claude_home.is_some())
+            })
+            .collect();
+        if let Ok(found) = self.claude_sessions.try_lock() {
+            for (session, pid) in self.dock.sessions.iter_mut().zip(&pids) {
+                session.take_registered(pid.and_then(|pid| found.get(pid)).cloned());
+            }
+        }
+        let pids: Vec<u32> = pids.into_iter().flatten().collect();
         let mut paths = Vec::new();
         for index in 0..self.dock.sessions.len() {
             if let Some(path) = self.resolve_transcript(index) {
@@ -9860,10 +9909,16 @@ impl App {
                     .map(|m| m.usage.clone())
                     .filter(|usage| usage.percent().is_some());
                 // Its conversation's title, which names its tab while its terminal's says only
-                // which program it is.
-                if let Some(title) = meter.and_then(crate::transcript::Meter::title) {
-                    session.topic = Some(title.to_string());
+                // which program it is, and the first thing asked in it, from the conversation
+                // it holds now. One that has ended keeps the name it had.
+                if session.exited && meter.is_none() {
+                    continue;
                 }
+                let given = session.registered.as_ref().and_then(|r| r.name.clone());
+                let title = meter.and_then(crate::transcript::Meter::title);
+                session.topic = title.map(str::to_string).or(given);
+                let asked = meter.and_then(crate::transcript::Meter::asked);
+                session.first_asked = asked.map(str::to_string);
             }
         }
         // Open pages whose transcripts grew are written again, and read again from disk.
@@ -9876,7 +9931,8 @@ impl App {
                 stale.push((page.clone(), source.clone(), now));
             }
         }
-        if (paths.is_empty() && stale.is_empty()) || self.metering.swap(true, Ordering::SeqCst) {
+        let nothing = paths.is_empty() && stale.is_empty() && pids.is_empty();
+        if nothing || self.metering.swap(true, Ordering::SeqCst) {
             return;
         }
         for (page, _, now) in &stale {
@@ -9885,7 +9941,11 @@ impl App {
             }
         }
         let (meters, busy) = (self.meters.clone(), self.metering.clone());
+        let (claude, home) = (self.claude_sessions.clone(), self.claude_home.clone());
         std::thread::spawn(move || {
+            if let (Some(home), Ok(mut claude)) = (home, claude.lock()) {
+                claude.refresh(&home, &pids);
+            }
             if let Ok(mut meters) = meters.lock() {
                 meters.retain(|path, _| paths.contains(path));
                 for path in paths {
@@ -10981,8 +11041,8 @@ impl App {
             a.state == cellix_agent::AgentState::Working && self.agent_tab(&a.session).is_some()
         });
         // A shell running a command is working too, and any tab that turns. An agent with no
-        // plugin can't say.
-        let shell_busy = self.dock.sessions.iter().any(|s| s.shell && s.busy());
+        // plugin can't say; one in front of a shell whose hooks report says what they say.
+        let shell_busy = (self.dock.sessions.iter()).any(|s| s.shell && s.busy() && !s.heard());
         let turning = (self.dock.sessions.iter()).any(|s| s.mark() == Some(TabMark::Working));
         if working || shell_busy || turning {
             return TileState::Working;
@@ -14225,12 +14285,21 @@ impl App {
         {
             return Some(index);
         }
+        // The tab its agent runs in, by its process: an agent's tab's own program, or the
+        // command in front of a shell, as `claude` typed at a Terminal's prompt is.
+        if let Some(index) = event
+            .pid
+            .and_then(|pid| sessions.iter().position(|s| s.agent_pid() == Some(pid)))
+        {
+            return Some(index);
+        }
         let by_id = (0..sessions.len()).find(|&index| {
             self.agent_word(index)
                 .is_some_and(|(_, id, _)| !id.is_empty() && id == event.session)
         });
         by_id.or_else(|| {
-            let alike = |s: &&Session| s.name == event.agent && !s.exited;
+            // One whose conversation Claude Code names is known not to be this one.
+            let alike = |s: &&Session| s.name == event.agent && !s.exited && s.registered.is_none();
             let mut found = sessions.iter().enumerate().filter(|(_, s)| alike(s));
             let first = found.next()?.0;
             found.next().is_none().then_some(first)
@@ -14248,10 +14317,12 @@ impl App {
         let front =
             self.dock.open && self.dock.front == Front::Session && self.dock.active == Some(index);
         let session = &mut self.dock.sessions[index];
-        session.agent_session = Some(event.session.clone());
-        // The first thing asked of it names its tab while it has no title of its own.
-        if session.asked.is_none() && !event.prompt.is_empty() {
-            session.asked = Some(event.prompt.clone());
+        session.hold_conversation(&event.session);
+        // The first thing asked in the conversation names its tab while it has no title of its
+        // own; a new conversation's first prompt names it afresh.
+        let asked_here = (session.asked.as_ref()).is_some_and(|(id, _)| *id == event.session);
+        if !asked_here && !event.prompt.is_empty() {
+            session.asked = Some((event.session.clone(), event.prompt.clone()));
         }
         let doing = match event.state {
             AgentState::Working => crate::dock::Doing::Working,
@@ -14382,9 +14453,10 @@ impl App {
                     (None, _) => Urgency::Idle,
                 };
                 let icon = crate::dock::program_icon(&event.agent, false, false);
-                // An agent goes by its tab's name; what runs in a shell, by its own; a helper
-                // by the name the agent that started it gave it.
-                let named = tab.filter(|s| !s.shell);
+                // An agent goes by its tab's name, one typed at a shell's prompt too; anything
+                // else in a shell, by its own; a helper by the name the agent that started it
+                // gave it.
+                let named = tab.filter(|s| !s.shell || s.agent_in_front().is_some());
                 let index = (self.dock.sessions.iter())
                     .position(|s| named.is_some_and(|t| std::ptr::eq(s, t)));
                 let name = match (parent.as_ref(), tab.and_then(Session::called)) {
@@ -21888,6 +21960,8 @@ pub(crate) fn machine_name() -> String {
     }
     std::env::var("COMPUTERNAME").unwrap_or_else(|_| "this machine".to_string())
 }
+#[cfg(test)]
+mod agent_name_tests;
 #[cfg(test)]
 mod agent_tab_tests;
 #[cfg(test)]

@@ -7460,5 +7460,47 @@
     "title": "The side pane's maximize button stays beside a terminal and Claude Code, the name in front cut first",
     "test": "a_terminal_and_claude_code_keep_the_button",
     "passes": true
+  },
+  {
+    "id": "agent-tab-named-by-claude-process",
+    "milestone": 15,
+    "title": "An agent's tab is named from what Claude Code says of its process, whatever its hooks send",
+    "test": "an_agents_tab_is_named_from_what_claude_code_says_of_its_process",
+    "passes": true
+  },
+  {
+    "id": "agent-tab-new-conversation-named-afresh",
+    "milestone": 15,
+    "title": "A new conversation in a tab (/clear, /resume) is named afresh, not by the last one's title or prompt",
+    "test": "a_new_conversation_in_a_tab_is_named_afresh",
+    "passes": true
+  },
+  {
+    "id": "agent-in-shell-named-as-agent",
+    "milestone": 15,
+    "title": "An agent typed at a Terminal's prompt is named and marked as an agent's tab, by its conversation",
+    "test": "an_agent_typed_at_a_shells_prompt_is_named_by_its_conversation",
+    "passes": true
+  },
+  {
+    "id": "agent-in-front-of-shell-names-tab",
+    "milestone": 15,
+    "title": "An agent in front of a shell names its tab by its display name, its own title or its conversation",
+    "test": "an_agent_in_front_of_a_shell_names_its_tab",
+    "passes": true
+  },
+  {
+    "id": "meter-first-prompt",
+    "milestone": 15,
+    "title": "The transcript's first prompt names a tab when the hooks didn't say it",
+    "test": "the_meter_reads_the_first_thing_asked",
+    "passes": true
+  },
+  {
+    "id": "claude-sessions-registry",
+    "milestone": 15,
+    "title": "Claude Code's sessions/<pid>.json leads to the conversation it holds and its transcript",
+    "test": "claude_codes_word_on_its_process_leads_to_its_transcript",
+    "passes": true
   }
 ]

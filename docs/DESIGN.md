@@ -2852,8 +2852,43 @@ machine and the folder. Rename… on the tab's menu, or Agent: Rename Pane Tab, 
 kept with the pane in the folder's `state.json`, by the session's host's socket, so the tab has
 it again when the next run joins the session, and named nothing it takes its own name again.
 What a tab's mark says comes from the agent's hooks, through the tab whose agent has that
-session's id, or else the one running tab of that agent, and from a program's own OSC 7501
-reports for its tab; hooks win there as everywhere.
+session's id, or whose agent is the hooks' process (the `pid` their news carries), or else the
+one running tab of that agent, and from a program's own OSC 7501 reports for its tab; hooks win
+there as everywhere.
+
+Naming doesn't depend on which `cellix` the hooks run. On a machine with an older `cellix`
+first on the PATH, the hooks sent state, so spinners turned, but no prompt and maybe no
+transcript, and Claude Code's tabs stayed "Claude Code" (the user, 20 November 2026, on Amazon
+Linux: "Claude code titles are not changing automatically"). So Cellix also asks Claude Code:
+it keeps a file for each process it runs, `sessions/<pid>.json` in its folder
+(`CLAUDE_CONFIG_DIR`, or `~/.claude`), rewritten as things change, with the conversation's
+`sessionId` and its `cwd`. The pid is the tab's own program for an agent's tab (a held one's
+host writes it beside its socket) and, for a shell, the leader of the process group in front of
+its terminal (`tcgetpgrp` on a PTY Cellix holds, and for a held shell the shell process's
+`tpgid`, from `/proc/<pid>/stat` or `proc_pidinfo`, so a host of any version can be asked).
+The transcript is `projects/<cwd with every character but letters and digits as ->/<id>.jsonl`,
+or that name in another project's folder, as when the agent moved after starting there
+(`transcript::Sessions`). The file and the transcript are read with the context meters, away
+from the screen, every couple of seconds, the file again only when its time changes. The
+transcript also gives the first prompt, which names the tab after its title and before the
+prompt hook's word; a name the person gave in the file (`nameSource` other than `derived`,
+which is the folder's) counts as a title. Each name belongs to a conversation: when the id a tab
+holds changes, by its hooks or by Claude Code's file (/clear, /resume, a new session in the same
+tab), its title and first prompt start over from the new conversation's transcript, and the
+prompt hook's words name it only while it holds the conversation they were asked in. Claude
+Code's file is taken only when it changes, so a read from before a /clear doesn't take the tab
+back from the conversation its hooks have just reported.
+
+An agent typed at a shell's prompt (`claude` in a Terminal tab) is named and marked as an
+agent's tab is: its program is one of `AGENTS` by its command, or a process Claude Code says is
+its own, whatever the system calls it (a real `claude` can run as `node`, or as its version's
+file on macOS). Its tab says "Claude Code" with Claude Code's mark rather than `claude`, then
+its title, its conversation's title or first prompt; only a title with an agent's busy glyph
+first is its own there, not the shell's (`user@host: claude`). Its hooks' news finds the tab by
+its process, its mark says what they say rather than turning as a command does, its transcript
+gives its context meter, and the Agents list calls it what its tab does. It's still a shell:
+comments never go to it. When the shell is back at its prompt, or runs something else, what the
+agent held goes, and the tab is a Terminal again.
 
 A shell's tab is named after the program running in it, as VS Code names a terminal's tab:
 `cargo` while `cargo test` runs, with a shell's mark (`>_`, `>` on cells) before the name and

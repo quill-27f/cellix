@@ -165,6 +165,9 @@ EXPECT = {
     "m1-agent-names-tip": "Fix the login",
     "m1-agent-names-list": "Refund route",
     "m1-agent-names-light": "Fix the login",
+    "m1-agent-in-terminal": "Refund route",
+    "m1-agent-in-terminal-light": "Refund route",
+    "m1-agent-in-terminal-cells": "Refund route",
     "50-plan-versions": "yours",
     "57-flow-dock": "Addressed",
     "50-flow-next": "Comment 2 of",
@@ -1186,6 +1189,58 @@ def agent_names(scratch):
         shutil.rmtree(cache, ignore_errors=True)
 
 
+def agent_in_terminal(scratch):
+    """`claude` typed at a Terminal tab's prompt: the tab is named and marked as an agent's
+    tab is, by what Claude Code says of its process. The stand-in writes what Claude Code
+    writes, the file for its process (`sessions/<pid>.json`) and its conversation's transcript,
+    titled, in the stand-in home; titles its terminal as Claude Code does before it has a title;
+    says it has finished through Cellix's real hook, run through a shell from its own process
+    as Claude Code runs it; and waits, as `sleep`, which isn't Claude Code's name."""
+    tools = f"{scratch}/terminal-bin"
+    os.makedirs(tools)
+    lines = [{"type": "user", "message": {"role": "user", "content": "Add a refund route for unpaid orders"}},
+             {"type": "ai-title", "aiTitle": "Refund route for unpaid orders", "sessionId": "term-1"}]
+    with open(f"{tools}/term-1.jsonl", "w") as f:
+        f.write("".join(json.dumps(line) + "\n" for line in lines))
+    with open(f"{tools}/stop.json", "w") as f:
+        f.write(json.dumps({"session_id": "term-1", "cwd": ROOT, "hook_event_name": "Stop"}))
+    record = ('{"pid":%s,"sessionId":"term-1","cwd":"%s","kind":"interactive","entrypoint":"cli",'
+              '"name":"queue","nameSource":"derived","status":"idle"}')
+    with open(f"{tools}/claude", "w") as f:
+        f.write("#!/bin/sh\n"
+                'home="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"\n'
+                "folder=$(printf '%s' \"$PWD\" | tr -c 'a-zA-Z0-9' '-')\n"
+                'mkdir -p "$home/sessions" "$home/projects/$folder"\n'
+                f"cp '{tools}/term-1.jsonl' \"$home/projects/$folder/term-1.jsonl\"\n"
+                f"printf '{record}' $$ \"$PWD\" > \"$home/sessions/$$.json\"\n"
+                "printf '\\033]0;\\342\\234\\263 Claude Code\\007'\n"
+                "printf 'Claude Code (stand-in)\\n'\n"
+                # A list, as Claude Code's hook command is, so the shell runs the hook as a
+                # child and the hook finds the agent as that shell's parent.
+                f"sh -c \"'{binary}' hook stop < '{tools}/stop.json' || true\"\n"
+                "exec sleep 300\n")
+    os.chmod(f"{tools}/claude", 0o755)
+    typed = [*command("New Terminal", F1), ["wait", 1.5], ["keys", "claude\r"], ["until", "stand-in"],
+             ["until", "Refund route"], ["wait", 0.6]]
+    scenes = [
+        ("m1-agent-in-terminal", {}),
+        ("m1-agent-in-terminal-light", {"background": "eff1f5"}),
+        ("m1-agent-in-terminal-cells", {"CELLIX_TIER": "cells"}),
+    ]
+    folder = "".join(c if c.isascii() and c.isalnum() else "-" for c in ROOT)
+    for name, extra in scenes:
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        background = extra.pop("background", DARK)
+        env.update(extra)
+        shoot(name, typed, CODE_FILE, size="150x44", env=env, background=background)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+        # What the stand-in wrote as Claude Code's goes with it.
+        shutil.rmtree(f"{HOME}/.claude/sessions", ignore_errors=True)
+        shutil.rmtree(f"{HOME}/.claude/projects/{folder}", ignore_errors=True)
+
+
 def team_scenes(scratch):
     """An agent starting another: the card that asks the person first, and the helper once
     it's allowed. Both agents are stand-ins on PATH. Claude Code's starts Codex's through the
@@ -1530,6 +1585,7 @@ with tempfile.TemporaryDirectory() as made:
     transcripts(scratch)
     agent_tabs(scratch)
     agent_names(scratch)
+    agent_in_terminal(scratch)
     agents_by_urgency(scratch)
     waits(scratch)
     task_scenes(scratch)
