@@ -531,13 +531,24 @@ def chart(path, width=1600, height=900):
 
 
 def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None, timeout=70,
-          expect=None):
+          expect=None, setup_for=(), cellix=False):
     """Runs one scene and writes `<name>.png` and `<name>.txt`, with `steps` run first. With
-    `expect`, only once the screen says it."""
+    `expect`, only once the screen says it.
+
+    A scene starts with no `.cellix` in the project (`ROOT`): left by the scenes before, it
+    showed as a folder in later pictures' Explorer, and a scene could stand on what another
+    had left there. One whose caller has just written its own there says `cellix=True`. A
+    scene that others stand on, as the workspaces' terminals the bar, the Inbox and a stopped
+    tile show, names them in `setup_for`, and runs without a picture when only they're asked
+    for."""
     # TOUR_ONLY=50-review,02-code retakes just those, for a quick look after a change.
     only = os.environ.get("TOUR_ONLY")
-    if only and name not in only.split(","):
+    listed = only.split(",") if only else []
+    setup = bool(only) and name not in listed and any(other in listed for other in setup_for)
+    if only and name not in listed and not setup:
         return
+    if setup:
+        print(f"setting up {name}", flush=True)
     index, SEEN[0] = SEEN[0], SEEN[0] + 1
     if not only and os.environ.get("TOUR_PART"):
         part, parts = (int(n) for n in os.environ["TOUR_PART"].split("/"))
@@ -548,7 +559,9 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
         return
     expect = expect or EXPECT.get(name)
     waited = [["until", expect]] if expect else []
-    script = [*steps, *waited, ["wait", 0.3], ["shot", f"{out}/{name}.png"]]
+    # A scene run only for what it leaves has its picture taken where nobody looks.
+    shots = tempfile.mkdtemp(prefix="cx-setup") if setup else out
+    script = [*steps, *waited, ["wait", 0.3], ["shot", f"{shots}/{name}.png"]]
     # A picture from an earlier tour mustn't stand in for one this tour didn't take.
     for old in (f"{out}/{name}.png", f"{out}/{name}.txt"):
         if os.path.exists(old):
@@ -561,6 +574,7 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
     own_cache = None if "XDG_CACHE_HOME" in extra else tempfile.mkdtemp(prefix="cx", dir="/tmp")
     if own_cache:
         extra = {**extra, "XDG_CACHE_HOME": own_cache}
+    ours = os.path.realpath(cwd or ROOT) == os.path.realpath(ROOT) and not cellix
     said = tempfile.NamedTemporaryFile(suffix=".txt", delete=False)
     said.close()
     env = {
@@ -607,11 +621,16 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
     # loaded machine can lose a scene its place, and one that misses twice is worth a
     # person's look.
     for attempt in ("first", "second"):
+        if ours:
+            shutil.rmtree(f"{ROOT}/.cellix", ignore_errors=True)
         try:
             done = subprocess.run(run, cwd=cwd or ROOT, env=env, timeout=timeout, capture_output=True, text=True)
             why = done.stdout.strip().splitlines()[-1:] if done.returncode else None
         except subprocess.TimeoutExpired:
             why = [f"took more than {timeout} seconds"]
+        if setup:
+            shutil.rmtree(shots, ignore_errors=True)
+            break
         if why is None and os.path.exists(f"{out}/{name}.png"):
             looked = wrong(name, taken_from, "CELLIX_TIER" in extra)
             why = [looked] if looked else None
@@ -624,7 +643,12 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
             break
         print(f"retaking {name}: {' '.join(why)}" if attempt == "first" else f"missed twice: {name}", flush=True)
         if own_cache:
+            # A retake starts afresh too: kept in the cache, what the first try left (a tab,
+            # the folder's consent to agents starting agents) changed what the second showed.
             subprocess.run(["pkill", "-9", "-f", own_cache])
+            shutil.rmtree(own_cache, ignore_errors=True)
+            own_cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+            env["XDG_CACHE_HOME"] = own_cache
     os.unlink(f.name)
     for left in (said.name, said.name[:-4] + ".new", said.name[:-4] + ".rows"):
         if os.path.exists(left):
@@ -632,6 +656,8 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
     if own_cache:
         subprocess.run(["pkill", "-9", "-f", own_cache])
         shutil.rmtree(own_cache, ignore_errors=True)
+    if setup:
+        return
     if why is None and os.path.exists(f"{out}/{name}.png"):
         LAST[0] = LAST[1]
         SHOT.append(name)
@@ -667,16 +693,21 @@ def workspaces(scratch):
     # Each waits for what its terminal was told before going on, so one whose keys never
     # landed fails rather than leave a picture of the welcome page: w0-infra's did once, and
     # passed.
+    # Every later scene here stands on what these three leave, and they run for any of them.
+    group = ["100-workspaces", "105-new-workspace-hover", "106-folder-finder", "107-folder-path",
+             "101-workspace-hover", "140-inbox", "141-inbox-hover", "142-inbox-find",
+             "102-stopped-card", "103-running-here", "104-logout-card"]
     # Notes had a terminal when the machine went down.
     shoot("w0-notes", [*terminal, ["keys", "echo building the index\r"], ["wait", 0.5]],
-          cwd=others["notes"], expect="building the index", **space)
+          cwd=others["notes"], expect="building the index",
+          setup_for=group, **space)
     subprocess.run(["pkill", "-9", "-f", cache])
     # api-server's terminal is busy, beside its agent; infra's is back at its prompt, beside
     # the agent that's about to finish its turn.
     shoot("w0-api-server", [*terminal, ["keys", "sleep 300\r"], ["until", "sleep 300"], ["wait", 0.5],
-                            *claude], cwd=others["api-server"], **space)
+                            *claude], cwd=others["api-server"], setup_for=group, **space)
     shoot("w0-infra", [*terminal, ["keys", "echo deployed\r"], ["until", "deployed"], ["wait", 0.5],
-                       *claude], cwd=others["infra"], **space)
+                       *claude], cwd=others["infra"], setup_for=group, **space)
 
     def hook(kind, root, **fields):
         stdin = json.dumps({"session_id": "s1", "cwd": root, **fields})
@@ -690,8 +721,10 @@ def workspaces(scratch):
         ["wait", 0.6],
     ]
     shoot("100-workspaces", told, CODE_FILE, size="150x44", **space)
-    # New Workspace stands after the four tiles, which keep more room than they did.
-    new_workspace = FOOT("New Workspace")
+    # New Workspace stands after the four tiles. Where the tiles lead the status bar's row it's
+    # a + alone, its words in its tip, so it's found by the + with a space after it: the
+    # words were looked for, and the scenes never reached it.
+    new_workspace = FOOT("+ ", 0)
     shoot("105-new-workspace-hover", [*told, ["move", *new_workspace], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     shoot("106-folder-finder", [*told, ["click", *new_workspace], ["wait", 0.6]], CODE_FILE, size="150x44", **space)
     shoot("107-folder-path", [*told, ["click", *new_workspace], ["keys", "../in"], ["wait", 0.6]], CODE_FILE,
@@ -705,9 +738,12 @@ def workspaces(scratch):
     # the ask was answered, so it asks last.
     inbox = [*told, failed, ["wait", 0.3], asking, ["wait", 0.6], *SHOW_INBOX, ["wait", 0.8]]
     shoot("140-inbox", inbox, CODE_FILE, size="150x44", **space)
-    shoot("141-inbox-hover", [*inbox, ["move", *ON("finished its turn")], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
+    # The pointer on the failed run, and Find after a press under the list's heading, which
+    # are there whatever else waits: the scenes waited for "finished its turn" and "waiting
+    # in", which an agent with no tab in its workspace doesn't leave.
+    shoot("141-inbox-hover", [*inbox, ["move", *ON("tests failed")], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     # Find, after a press on the pane, looks through the list in front of it.
-    find = [*inbox, ["click", *ON("waiting in", 1, 1)], ["wait", 0.3], ["keys", CTRL("f")], ["wait", 0.4],
+    find = [*inbox, ["click", *ON("newest first", 1, 1)], ["wait", 0.3], ["keys", CTRL("f")], ["wait", 0.4],
             ["keys", "server"], ["wait", 0.6]]
     shoot("142-inbox-find", find, CODE_FILE, size="150x44", **space)
     # Its tile brings back what stopped, with what it last showed.
@@ -1114,8 +1150,12 @@ def team_scenes(scratch):
         os.chmod(f"{tools}/{name}", 0o755)
     asks = [*command("Open Claude Code", F1), ["until", "stand-in"], ["until", "wants to start"],
             ["wait", 0.6]]
-    allowed = [*asks, ["click", *ON("Deny", 27)], ["gone", "wants to start"], ["until", "Codex"],
-               ["wait", 1.5]]
+    # Allow, the last of the card's buttons, by its own words: 27 columns past Deny landed on
+    # Always Allow Here in a narrow pane, and the consent it kept was never asked for again.
+    # Then the lead says so once the helper has started: in a narrow pane the helper's tab is
+    # its mark alone, and "Codex" was waited for there in vain.
+    allowed = [*asks, ["click", *ON("Allow", 1, 0, -1)], ["gone", "wants to start"],
+               ["until", "Asked reviewer"], ["wait", 1.5]]
     scenes = [
         ("170-agent-asks", asks, {}),
         ("170-agent-asks-light", asks, {"background": "eff1f5"}),
@@ -1128,14 +1168,13 @@ def team_scenes(scratch):
         # Ctrl+click on the helper's name in the lead's own words opens it the same way.
         ("174-name-peek", [*allowed, ["until", "Asked reviewer"], ["ctrl", *ON("Asked reviewer", 7)], ["until", "Keep as Tab"], ["wait", 0.8]], {}),
     ]
+    # Each with a cache of its own, which a retake makes again: what's kept there, the
+    # folder's consent among it, is never a later try's.
     for name, steps, extra in scenes:
-        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
-        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        env = {"PATH": f"{tools}:{os.environ['PATH']}"}
         if "CELLIX_TIER" in extra:
             env["CELLIX_TIER"] = extra.pop("CELLIX_TIER")
         shoot(name, steps, CODE_FILE, **{"size": "150x44", **extra}, env=env)
-        subprocess.run(["pkill", "-9", "-f", cache])
-        shutil.rmtree(cache, ignore_errors=True)
 
 
 def reviewer_scenes(scratch):
@@ -1174,7 +1213,15 @@ def reviewer_scenes(scratch):
         shutil.rmtree(cache, ignore_errors=True)
     # What the finding leaves in the file: its line's ◆ in the gutter. Then the finding goes,
     # or every later scene of this file has it: 02-code showed a ◆ that 0.10.2 didn't.
-    shoot("177-code-comment-mark", [["wait", 1.0]], CODE_FILE)
+    # It writes the finding itself, as `cellix suggest` leaves it, so it shows alone too.
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
+    finding = {"id": 1, "file": CODE_FILE, "line": 24, "quote": "/// Returned when the queue is full.",
+               "text": "Say what a caller should do when it gets this.", "replies": [],
+               "resolved": False, "told": 0, "asked": False, "kind": "Clarity",
+               "suggested_by": "Codex"}
+    with open(threads, "w") as f:
+        json.dump([finding], f)
+    shoot("177-code-comment-mark", [["wait", 1.0]], CODE_FILE, cellix=True)
     if os.path.exists(threads):
         os.unlink(threads)
 
@@ -1667,11 +1714,12 @@ with tempfile.TemporaryDirectory() as made:
          "replies": [{"author": "Claude", "text": "Agree: it follows https://arxiv.org/abs/1706.03762 too."}],
          "resolved": False, "told": 1, "asked": False, "kind": "", "suggested_by": ""},
     ]
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         json.dump(pictured, f)
     with_picture = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.5]]
-    shoot("50-comment-picture", with_picture, NOTE_FILE, size="150x44")
-    shoot("50-comment-picture-light", with_picture, NOTE_FILE, size="150x44", background="eff1f5")
+    shoot("50-comment-picture", with_picture, NOTE_FILE, size="150x44", cellix=True)
+    shoot("50-comment-picture-light", with_picture, NOTE_FILE, size="150x44", background="eff1f5", cellix=True)
     # A right click on a link in a comment: Open Link and Copy Link, at the pointer.
     linked = [
         {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
@@ -1679,11 +1727,12 @@ with tempfile.TemporaryDirectory() as made:
          "replies": [{"author": "Claude", "text": "Agree: https://example.com/papers/attention says so too."}],
          "resolved": False, "told": 1, "asked": False, "kind": "", "suggested_by": ""},
     ]
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         json.dump(linked, f)
     link_menu = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0],
                  ["right", ["example.com/notes", 6]], ["wait", 0.6]]
-    shoot("50-comment-link-menu", link_menu, NOTE_FILE, size="150x44")
+    shoot("50-comment-link-menu", link_menu, NOTE_FILE, size="150x44", cellix=True)
     # A review the agent has checked: a verdict on the reviewer's comment and a suggestion.
     review = [
         {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
@@ -1714,39 +1763,39 @@ with tempfile.TemporaryDirectory() as made:
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         json.dump(review, f)
     comments = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0]]
-    shoot("50-review", comments, NOTE_FILE, size="150x44")
+    shoot("50-review", comments, NOTE_FILE, size="150x44", cellix=True)
     # The resolved one unfolded under its button, after the two still open, with the pointer
     # on the order's button; and the same in the light theme with it off both.
     unfolded = [*comments, ["click", *REVIEW_RESOLVED], ["wait", 0.6]]
     shoot("50-review-resolved", [*unfolded, ["move", *REVIEW_ORDER], ["wait", 0.4]], NOTE_FILE,
-          size="150x44")
-    shoot("50-review-resolved-light", unfolded, NOTE_FILE, size="150x44", background="eff1f5")
+          size="150x44", cellix=True)
+    shoot("50-review-resolved-light", unfolded, NOTE_FILE, size="150x44", background="eff1f5", cellix=True)
     # The order's list, dropped from under its button.
     shoot("50-review-order", [*comments, ["click", *REVIEW_ORDER], ["wait", 0.6]], NOTE_FILE,
-          size="150x44")
+          size="150x44", cellix=True)
     # The Comments tab's own menu: what's done with the review once it's written.
     shoot("50-review-tab-menu", [*comments, ["right", *ON("Comments", 2)], ["wait", 0.6]],
-          NOTE_FILE, size="150x44")
+          NOTE_FILE, size="150x44", cellix=True)
     # The review as Markdown, saved into the project and opened as a page; taken away after,
     # so no later scene's tree has it.
     saved = [*comments, *command("Save Review as Markdown", F1), ["until", "Save review as"],
              ["keys", "\r"], ["until", "Saved the review"], ["wait", 1.5]]
-    shoot("50-review-saved", saved, NOTE_FILE, size="150x44")
+    shoot("50-review-saved", saved, NOTE_FILE, size="150x44", cellix=True)
     if os.path.exists(f"{ROOT}/review.md"):
         os.unlink(f"{ROOT}/review.md")
     # The pointer resting on commented words with the pane shut: their comment on a card
     # under them. The page's words overlap in the screen's text, so the pointer goes by "sum"
     # of "the weights sum to one", the first the screen says.
     glance = [["wait", 1.5], ["move", *ON("sum", 1)], ["until", "Open in Comments"], ["wait", 0.6]]
-    shoot("50-comment-glance", glance, NOTE_FILE, size="150x44")
-    shoot("50-comment-glance-light", glance, NOTE_FILE, size="150x44", background="eff1f5")
+    shoot("50-comment-glance", glance, NOTE_FILE, size="150x44", cellix=True)
+    shoot("50-comment-glance-light", glance, NOTE_FILE, size="150x44", background="eff1f5", cellix=True)
     # A press on the card opens the Comments on that comment.
     shoot("50-comment-glance-open", [*glance, ["click", *ON("Open in Comments", 2)],
                                      ["until", "Check My"], ["wait", 1.0]], NOTE_FILE,
-          size="150x44")
-    shoot("50-plan-versions", comments, "docs/PLAN.md", size="150x44")
+          size="150x44", cellix=True)
+    shoot("50-plan-versions", comments, "docs/PLAN.md", size="150x44", cellix=True)
     # Narrow beside the editor: a pill that can't share its header's row goes under it.
-    shoot("50-plan-versions-narrow", comments, "docs/PLAN.md", size="96x44")
+    shoot("50-plan-versions-narrow", comments, "docs/PLAN.md", size="96x44", cellix=True)
     # A comment being written, its kind picked from the chips under the hint.
     if os.path.exists(f"{ROOT}/.cellix/threads.json"):
         os.unlink(f"{ROOT}/.cellix/threads.json")
@@ -1775,37 +1824,41 @@ with tempfile.TemporaryDirectory() as made:
          "text": "Say which similarity: dot product, scaled.", "replies": [], "resolved": False,
          "told": 0, "kind": "Clarity", "suggested_by": "Claude", "at": now - 60},
     ]
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         json.dump(flow, f)
     flowing = [["wait", 1.0], *command("show comments", F1), ["until", "Addressed by"], ["wait", 1.0]]
-    shoot("50-flow-cards", flowing, NOTE_FILE, size="150x44")
-    shoot("50-flow-cards-light", flowing, NOTE_FILE, size="150x44", background="eff1f5")
+    shoot("50-flow-cards", flowing, NOTE_FILE, size="150x44", cellix=True)
+    shoot("50-flow-cards-light", flowing, NOTE_FILE, size="150x44", background="eff1f5", cellix=True)
     # A press on a kind's pill lists that kind alone; its pill is the accent's.
     shoot("50-flow-kind", [*flowing, ["click", *ON("Evidence")], ["gone", "Always exactly"],
-                           ["wait", 0.6]], NOTE_FILE, size="150x44")
+                           ["wait", 0.6]], NOTE_FILE, size="150x44", cellix=True)
     # The pill on the reworded one opens what changed since, word by word.
     shoot("50-flow-changes", [*flowing, ["click", *ON("Changed since", 2)], ["wait", 0.8]],
-          NOTE_FILE, size="150x44")
+          NOTE_FILE, size="150x44", cellix=True)
     # Next Comment from the palette: the second in the document's order, its words selected
     # and its card lit, and the bar says which of how many.
     shoot("50-flow-next", [*flowing, *command("next comment", F1), ["until", "Comment 1 of"],
                            *command("next comment", F1), ["until", "Comment 2 of"], ["wait", 0.6]],
-          NOTE_FILE, size="150x44")
+          NOTE_FILE, size="150x44", cellix=True)
     # Narrow, as Claude Code docks it, where cards are short until one is lit.
-    shoot("57-flow-dock", flowing, NOTE_FILE, size="64x40")
+    shoot("57-flow-dock", flowing, NOTE_FILE, size="64x40", cellix=True)
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         json.dump(review, f)
     # Every comment on the file settled: the pane says none is open, says how one is made and
     # offers the settled ones, each on a row of its own. Then with them shown, under those rows.
     settled = [dict(thread, resolved=True) for thread in review
                if thread["file"] == NOTE_FILE and not thread["suggested_by"]]
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         json.dump(settled, f)
     none_open = [["wait", 1.0], *command("show comments", F1), ["until", "No open comments"],
                  ["wait", 1.0]]
-    shoot("50-comments-all-resolved", none_open, NOTE_FILE, size="150x44")
+    shoot("50-comments-all-resolved", none_open, NOTE_FILE, size="150x44", cellix=True)
     shoot("50-comments-resolved-shown", [*none_open, ["click", *SHOW_RESOLVED], ["wait", 0.6]],
-          NOTE_FILE, size="150x44")
+          NOTE_FILE, size="150x44", cellix=True)
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
         json.dump(review, f)
     shoot("51-agent-list", [*LIST_AGENTS, ["wait", 1.0]], NOTE_FILE, size="150x44")
@@ -1963,21 +2016,20 @@ with tempfile.TemporaryDirectory() as made:
                                          ["wait", 0.5]], WRITING, **light)
     # Narrow, the three buttons take a row of their own under the count.
     shoot("71-sample-changes-row-narrow", row, WRITING, size="84x44", background="eff1f5")
-    # An agent's rewrite of commented words, to take in one step or as a suggestion.
-    with open(f"{ROOT}/.cellix/threads.json") as f:
-        kept = f.read()
+    # An agent's rewrite of commented words, to take in one step or as a suggestion: the
+    # only comment its scenes have, as each scene starts with no other scene's.
     rewrite = {"id": 40, "file": "samples/writing.md", "line": line_of(WRITING, "The model"),
                "quote": "improves on the baseline", "text": "By how much? Vague as it stands.",
                "replies": [{"author": "Claude", "text": "Rewrite: improves on the baseline by 3.6 points"}],
                "resolved": False, "told": 1, "asked": False, "kind": "Clarity", "suggested_by": ""}
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     with open(f"{ROOT}/.cellix/threads.json", "w") as f:
-        json.dump([*json.loads(kept or "[]"), rewrite], f)
+        json.dump([rewrite], f)
     rewrite_card = [["wait", 1.0], *command("show comments", F1), ["until", "Accept Re"], *CHANGES]
-    shoot("71-sample-rewrite", rewrite_card, WRITING, **light)
-    shoot("71-sample-rewrite-dark", rewrite_card, WRITING, size="150x44")
-    shoot("71-sample-rewrite-narrow", rewrite_card, WRITING, size="100x44", background="eff1f5")
-    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
-        f.write(kept)
+    shoot("71-sample-rewrite", rewrite_card, WRITING, cellix=True, **light)
+    shoot("71-sample-rewrite-dark", rewrite_card, WRITING, size="150x44", cellix=True)
+    shoot("71-sample-rewrite-narrow", rewrite_card, WRITING, size="100x44", background="eff1f5",
+          cellix=True)
     # A double click on "page" in the title, placed from the "Text" heading under it: the
     # title's measured letters don't come through whole in the screen's text.
     shoot("73-selection-bar", [["double", ["Text", 22, -9, -1]], ["wait", 0.5]], WRITING, **light,

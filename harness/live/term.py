@@ -34,7 +34,8 @@ A place can be named by what the screen says there rather than by column and row
 still finds it when the layout moves: ["click", ["Words"]] in place of ["click", col, row].
 The list is [words, columns right, rows down, which]: the place is that far from the first
 letter of the words, one column right and no rows down unless said, on the first row that
-says them, or the last with which as -1. It waits for the words as "until" does. Rows down
+says them, or with which as -1 the last place that does, the last of them on the last row
+that says them. It waits for the words as "until" does. Rows down
 can be a fraction, for a control drawn lifted off the row its words are counted on.
 
 Settings come from the environment: TERM_SIZE=170x46, TERM_CELL=17x36, TERM_PADDING=10x8,
@@ -366,7 +367,13 @@ def main():
         deadline = time.time() + 20
         while alive[0]:
             rows = said().split("\n")
-            hits = [(line.index(words), y) for y, line in enumerate(rows) if words in line]
+            # Every place the words are, by row and along it.
+            hits = []
+            for y, line in enumerate(rows):
+                at = line.find(words)
+                while at >= 0:
+                    hits.append((at, y))
+                    at = line.find(words, at + 1)
             if hits:
                 col, row = hits[which]
                 return [col + right, row + down]
