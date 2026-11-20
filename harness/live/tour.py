@@ -571,9 +571,11 @@ def shoot(name, steps, *args, size="120x40", background=DARK, cwd=None, env=None
     # A scene run only for what it leaves has its picture taken where nobody looks.
     shots = tempfile.mkdtemp(prefix="cx-setup") if setup else out
     script = [*steps, *waited, ["wait", 0.3], ["shot", f"{shots}/{name}.png"]]
-    # A picture from an earlier tour mustn't stand in for one this tour didn't take.
+    # A picture from an earlier tour mustn't stand in for one this tour didn't take. One run
+    # only as another's setup takes none, so its earlier picture stays: deleted here, w0-notes,
+    # w0-api-server and w0-infra went from a tour when 142-inbox-find was taken again.
     for old in (f"{out}/{name}.png", f"{out}/{name}.txt"):
-        if os.path.exists(old):
+        if os.path.exists(old) and not setup:
             os.unlink(old)
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
         json.dump(script, f)
@@ -1994,8 +1996,11 @@ with tempfile.TemporaryDirectory() as made:
     shoot("56-narrow-note", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="100x34")
     # About the size Claude Code docks Cellix at: at most 45% of a window, beside the chat.
     shoot("57-dock-page", [["wait", 1.5]], NOTE_FILE, size="64x40")
+    # With the two comments that name each other, so the docked cards show, each with its
+    # "· #n": on the project as it's left, the pane said only "No comments yet".
+    mentions_again()
     shoot("57-dock-comments", [["wait", 1.5], *command("show comments", F1), ["wait", 1.0]], NOTE_FILE,
-          size="64x40")
+          size="64x40", cellix=True, expect="Say which")
     shoot("57-dock-agents", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="64x40")
     shoot("57-dock-menu", [["wait", 1.5], ["right", 20, 12], ["wait", 0.4]], NOTE_FILE, size="64x40")
     # Format by its name: a menu's rows don't stand on the window's, so a place by row and
@@ -2114,7 +2119,7 @@ with tempfile.TemporaryDirectory() as made:
     shoot("71-sample-changes-row-narrow", row, WRITING, size="84x44", background="eff1f5")
     # An agent's rewrite of commented words, to take in one step or as a suggestion: the
     # only comment its scenes have, as each scene starts with no other scene's.
-    rewrite = {"id": 40, "file": "samples/writing.md", "line": line_of(WRITING, "The model"),
+    rewrite = {"id": 1, "file": "samples/writing.md", "line": line_of(WRITING, "The model"),
                "quote": "improves on the baseline", "text": "By how much? Vague as it stands.",
                "replies": [{"author": "Claude", "text": "Rewrite: improves on the baseline by 3.6 points"}],
                "resolved": False, "told": 1, "asked": False, "kind": "Clarity", "suggested_by": ""}
