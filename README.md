@@ -35,7 +35,9 @@ tmux to keep it running there.
 - **Review before it lands.** Plans wait for your Approve, edits stack hunk by hunk, each agent turn
   is checkpointed, and one changed line can be put back without touching the rest.
 - **Talk about anything you can see.** A sentence, a formula, a diagram, a cell of a table or a spot
-  in a PDF: select it, comment, and the agent gets the file, the line and the quote.
+  in a PDF: select it, comment, and the agent gets the file, the line and the quote. Or select it
+  and Ask, and the agent answers you on a card from the whole document, as a side question that
+  leaves your review and its own work alone.
 - **Documents are pages, not markup.** Markdown and LaTeX open typeset, with math, diagrams,
   citations, Track Changes and offline spelling, while the file stays plain text for git.
 - **A second reader for your review.** Check My Review has the agent weigh each of your comments and
@@ -100,8 +102,10 @@ edits what you edit and git sees every change.
 
 ![A document, with a comment waiting for the agent](docs/images/comments.png)
 
-- **Ask about anything on the page.** Select text, a formula, a diagram or a figure, then Comment or
-  Ask Agent. The answer lands under your question, as a thread beside the page.
+- **Ask about anything on the page.** Select a word you don't know, a sentence or a formula and
+  press **Ask** (Alt+A): the agent reads the whole document and answers on a card under the words,
+  as a side question that never becomes a comment. **Comment** (Alt+C) is for what the agent should
+  act on, and it answers under your words, as a thread beside the page.
 - **See suggestions as suggestions.** Track Changes keeps edits in the text itself, as CriticMarkup or
   the `changes` package. Accept and Reject stand by the one you're on, and the Comments pane counts
   them, with Accept All, Reject All and Next.
@@ -201,7 +205,7 @@ been tried for real. [docs/PROGRESS.md](docs/PROGRESS.md) says what has and hasn
 | Ctrl+J | Bring up or put away a terminal in the side pane |
 | Ctrl+B | Close or open the left side, or Bold with words picked on a page |
 | Alt+C, or select text | Comment on what's selected |
-| Alt+A | Ask the agent about what's selected: a comment that's sent as it's written |
+| Alt+A | Ask about what's selected: the agent answers on a card, and nothing becomes a comment |
 | Ctrl+F | Find in the file; in a terminal or an agent's chat; in the side pane's lists, Review and the Task page |
 | Ctrl+Shift+F | Search the project |
 | Ctrl+\\ | Split pane |
@@ -325,10 +329,11 @@ kernel, with Jupyter's keys. It needs `jupyter_client` and `ipykernel` in the pr
 ## Working with an agent
 
 Whatever you can see, you can talk about, the same way in every file type. Select text and **Comment**
-and **Ask Agent** appear beside it. A picture, diagram or formula has a Comment button under the
+and **Ask** appear beside it. A picture, diagram or formula has a Comment button under the
 pointer, and a PDF or image in the side pane's Preview takes one too. Comments are threads in the side pane,
-kept in `.cellix/threads.json`. Ask Agent sends yours to the agent with its file, line and quote, the
-agent answers with `cellix reply <id> "text"`, and the answer lands under your question. A comment
+kept in `.cellix/threads.json`. **Ask Agent** on a comment's card sends that comment, alone, to the
+agent with its file, line and quote, the agent answers with `cellix reply <id> "text"`, and the
+answer lands under your question. A comment
 not sent yet says on its card how it gets there: with your next prompt to Claude Code, Codex or
 Gemini CLI, whose hooks hand it over, or now with Ask Agent. **Send Comments to Agent** sends
 everything waiting, on code and on pages, in one message, as does **Send 3 to Claude Code** under
@@ -340,7 +345,11 @@ word. With a file
 open the Comments tab lists that file's; with none it lists every file's, each under its file's name,
 and a click on a name or a comment opens the file. Click words a comment is about and its card is
 lit in the Comments tab, which scrolls to it, and comes forward if the pane was open on another tab; click a card and its words are selected in the file. **Next Comment** and **Previous Comment** in the palette go through a file's comments in order, and a click on a line's ◆ opens its comment. Under the kinds a button says what order the tab lists in:
-click it for the document's order, newest first or oldest first. Resolved comments are folded away under a **Show resolved** button after the open ones: click it and they unfold under it, click it again and they fold away. A link in a comment or a reply is
+click it for the document's order, newest first or oldest first, and every Cellix on the machine
+keeps the one you picked. Each card's head ends with the comment's number, and "#33" or "comment 33"
+in a comment, a reply or a terminal's output is a link that opens that comment. Drag across a card's
+words, or double-click them, to select them, and Ctrl+C copies them; a right click on a card has
+**Copy**, **Copy Comment** and **Copy Quote**. Resolved comments are folded away under a **Show resolved** button after the open ones: click it and they unfold under it, click it again and they fold away. A link in a comment or a reply is
 underlined, and a click opens it, in the side pane's browser where there is one. In a narrow pane,
 as when Claude Code docks Cellix, cards are short until you click one, and show their buttons
 while the pointer is on them. Right-click it for
@@ -362,6 +371,17 @@ link that does the same.
 
 What you're writing stands in a box, with a button under it that sends it and one that cancels, for
 the mouse; Enter and Esc do the same from the keyboard.
+
+**Ask** is for a question rather than a comment: a word you don't know, what a formula means, why a
+line is there. Ask on a selection (Alt+A), with **Explain**, **Define** and **Simplify** for the usual
+ones or your own words, runs the agent's own command line in the background, read-only, with the
+whole document and the selection marked in it, and the answer streams onto a card under the words,
+with **Copy**, **Follow Up**, **Make a Comment** (for when it was feedback after all) and **Dismiss**.
+It never types into the agent in the side pane, and none of your waiting comments go with it. Each
+document keeps one side conversation, so a later question remembers the ones before; where Claude
+Code is working here, **With the agent's conversation** asks in a copy of what it already knows,
+leaving its own conversation as it was. Claude Code, Codex and Gemini CLI can answer, and
+`ask_agent` in the settings picks one.
 
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two (Ctrl+P and Ctrl+Shift+P open their lists from either, and a
@@ -391,9 +411,10 @@ next match and the list scrolls to it. A click on a file takes Find back to the 
 In Review and on the Task page Ctrl+F finds in what that page shows: every change of the file in
 Review, or the task's timeline and the step beside it.
 
-Select output in a terminal tab of the side pane, or hover a row in Problems, and Ask Agent sends it
-to the agent: all of the output, the command that printed it and the project's files it names, or
-the problem with the lines around it. Inside Claude Code it goes into Claude's prompt.
+Select output in a terminal tab of the side pane and Ask asks about it as on a page, with the
+command that printed it and the project's files it names. Hover a row in Problems and Ask Agent
+sends the problem with the lines around it to the agent to act on; inside Claude Code it goes into
+Claude's prompt.
 
 When an agent needs you, Cellix says so once and drops it when you've answered: an agent asking, a
 plan to review, a finished turn, a reply to your comment, or a failed test run. The bell at the right
@@ -415,11 +436,14 @@ Getting Started, in the command palette or on the empty window, is a short guide
 
 ## Agents among themselves
 
-An agent's tab in the side pane says what it's doing: its mark, the name it gives itself (or the one
-you give it with Rename on the tab's menu), how full its context is, and a spinner while it works or
-a dot when it needs you or finished while you were looking elsewhere. A shell's tab is named after
-the program running in it, and turns while it runs. The Agents list stands by what needs you:
-Needs you, Done, Working and Idle, each agent with how long since it changed.
+An agent's tab in the side pane says what it's doing: its mark, its name, how full its context is,
+and a spinner while it works or a dot when it needs you or finished while you were looking
+elsewhere. The name is the one the agent gives itself, else its conversation's title, else what you
+first asked it, so three Claude Code tabs read as three pieces of work; two alike are told apart by
+"(2)", the tab's tip has the whole name, and Rename on the tab's menu gives it your own. A shell's
+tab is named after the program running in it, and turns while it runs. The Agents list stands by
+what needs you: Needs you, Done, Working and Idle, each agent with how long since it changed. It
+lists the agents with a tab here and their helpers, so a press on any row opens something.
 
 The + after the tabs starts things: a terminal, any agent you have (keys 1–9), or a role. A role is
 a prompt for an agent, as a file in `.cellix/roles` or `~/.config/cellix/roles` with the agent named
@@ -654,7 +678,10 @@ Antigravity CLI in place of Gemini CLI, and that isn't covered here yet.
 ## Settings
 
 The sliders at the end of the views open Settings: theme, row height, smooth scrolling, the minimap, the keymap, language servers
-with a one-click install for each, and the installs for your agents. Changes apply as you click, and are
+with a one-click install for each, and the installs for your agents. Each language server says how
+it installs on this machine, with no root needed: Homebrew where it's there, npm into `~/.local`,
+the project's own release build into `~/.local/bin`, or rustup, `go install`, `dotnet tool` and
+`gem`. One only a system package has gets Copy Command, with the command to run. Changes apply as you click, and are
 saved to `~/.config/cellix/settings.json`. You can also edit that file, or
 `.cellix/settings.json` in a workspace:
 

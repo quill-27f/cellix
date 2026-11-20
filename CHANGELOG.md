@@ -2,6 +2,50 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.12.0] - 2026-11-20
+
+Ask: select words on a page, in code or in a terminal's output and ask the agent about them, as a side question that comes back on a card, not as a comment. Agents' tabs are named by what they're working on, every comment shows its number, and "#33" goes to comment 33, whose words you can now select and copy. Installing a language server works on Linux without root, and Settings says how each one installs before you press. The Agents list shows only agents you can act on here, the comment order you pick is kept for every Cellix on the machine, and a round of polish evens out tabs, buttons, cards and pages.
+
+### Added
+- **Ask.** A selection's buttons are Comment and Ask, on a page, in code and on a terminal's output, and Alt+A opens Ask: a card under the words with a field, and Explain, Define and Simplify for the usual questions. The agent's own command line answers in the background, read-only, with the whole document (the selection marked, the headings over it, a paper's `\input` files read in), so a question about one word is answered from everything around it. The answer streams onto the card, with Copy, Follow Up (which goes on in the same side conversation), Make a Comment (for when it was feedback after all) and Dismiss. Every later question about the same document goes on in its one side conversation. Where Claude Code works here, "With the agent's conversation" asks in a copy of what it already knows, and leaves its own conversation as it was. An answer is never a comment: it's never counted, sent or handed to the agent. Claude Code, Codex and Gemini CLI can answer; with none installed the card says what Ask needs.
+- The order you pick in the Comments pane (Document order, Newest first, Oldest first) is kept in `~/.config/cellix/settings.json` as `comment_sort`, so every Cellix on the machine opens with it; one already running follows the next time you open the menu, show the comments or come back to the window. A workspace's `.cellix/settings.json` can set its own.
+- Each language server in Settings › Editor says how it installs here, beside its name ("npm", "brew", "GitHub"), and the whole command when pointed at. The card that offers a server says it too, with the command set as code, and what Copy Command copies.
+- "Set up more agents…" at the end of Review with… opens Settings at Integrations.
+- A workspace's tile has the needs-you dot while its Inbox holds a failed test run or an agent's answer to a comment.
+- Each comment's card ends its head with the comment's number ("You · Clarity · #1"), as do the glance card and the review's Markdown, and "#33", "comment 33" or "Comment #33" in a comment, a reply or a terminal's output is a link: a press opens that comment as its ◆ does (a resolved one is shown, and a missing one is said), a right click has Go to Comment #33, and in a terminal it's a Ctrl+click.
+- A comment card's words can be selected: drag, double-click a word, triple-click a line or Shift+click, and Ctrl+C copies them, line breaks kept. A right click on a card has Copy, Copy Comment and Copy Quote, with Open Link and Copy Link over them on a link.
+- The graph in Source Control stands each branch and tag as a chip before its commit's message, in its lane's colour, as VS Code's does; a long name is cut in its middle.
+
+### Changed
+- An agent's tab is named by what it's working on: the name it gives itself, else its conversation's title, else what you first asked it, cut at a word's end, where every Claude Code tab used to read "Claude Code". Tabs that still read alike are told apart by "(2)", the tab's tip has the whole name, and Rename still wins. The Agents list names them the same way.
+- Ask Agent on one comment's card sends that comment alone. The agent used to be handed every other comment that waited too, and answered them all; they now wait for your next prompt or Send.
+- Install for a language server runs the first way this machine has: Homebrew where it's on the PATH, npm into `~/.local` where npm's own folder isn't yours, the project's release build fetched into `~/.local/bin` (static musl builds on Linux where the project makes them), or rustup, `go install`, `dotnet tool` or `gem --user-install`. A server only a system package gives says what it needs ("Needs … or sudo dnf install …") with Copy Command, and opening the file again looks for the server once more. Servers are found and started from `~/.local/bin`, `~/.cargo/bin`, Go's bin and `~/.dotnet/tools` even when the PATH lacks them.
+- The Agents list shows only agents with a tab here, and their helpers: every row does something when pressed. Agents running in other terminals no longer show there, in counts, on the bell or on the workspace tile; they still hear about your comments.
+- Tabs behind share a short row evenly: each keeps the same number of letters, three at the least, and they go to their marks only together. A first tab cut to its mark gets a little more room, and the + stands in the middle between the last tab and ⤢. Where the row is shorter still, the name in front is cut, keeping its "(2)", before ⤢ gives way, and only then do tabs go into the chevron's list.
+- A button's words are centred on a capital's height, so every label of a size has one baseline, and a button in a row of words stands on their line. Every floating card keeps 24 px inside its edge on all four sides, and the cards that ask you something put their buttons at the right, the answer last.
+- A line's number takes its worst problem's colour, warnings in amber, and the word where the problem starts is underlined in it, from a task's problems as well as a language server's.
+- Review with… lists only agents that are installed. An idle agent's name reads as plain text, not greyed out, and a helper's name is lighter than its agent's.
+- Check My Review is a quiet button, so only one button in view is filled.
+- Settings' language servers stand in one column: every tag ends at one edge, a long name is cut before it, and a pointed-at row stays quiet.
+- The workspaces share the status bar's row only where it still holds the status bar's words at their fullest; otherwise they have a row of their own, where New Workspace keeps its words.
+- In the light theme the needs-you chip and a transcript's "failed" read at 4.5 to 1.
+- A tip keeps 8 px between its words and its edge, over and under.
+
+### Fixed
+- A terminal's late answer to a question Cellix had stopped waiting for was typed into the open file as keys (`11;rgb:1010/1111/1414`). It's dropped wherever it arrives, whole or in pieces.
+- Installing a language server from Settings failed on Linux: most were Homebrew installs, npm wrote to a folder only root could, and there was no terminal for sudo. A failed install now says why on its row and on the card, and both stay until you've dealt with it.
+- "Spaces: 4" no longer drops off the status bar while a language server says it's fetching.
+- Sticky scroll keeps a scope's header while one of its lines is the first under the headers, and Go to Line, search results, problems and definitions put their line under the pinned headers instead of behind them.
+- A LaTeX drawing that never answers is stopped after a minute and the page says so, instead of "Drawing with LaTeX…" for ever; with no LaTeX installed it says that.
+- A selection's buttons stand 12 px from it, beside its start, and never past what follows its paragraph, or under it where a label such as a paper's Abstract stands over it; the same for selected terminal output, ending where it ends.
+- An insertion's underline stops at its last letter; a drawing's note, a picture under open source and the scrollbar beside Show Source keep their air; the emoji picker is as tall as what it finds; a pie's slices are their swatches' colours and stand out from the page in both themes; a table cut at the page's edge shows no part of a cell's words; an equation's number stands on its line; a misspelt word in a table's cell keeps its dots off the cell's line; a wide code box's scrollbar stands inside it, clear of its code.
+- A reviewer's note's tint is cut flush where it wraps; Abort stands on the line of the words beside it; a submenu stands against its menu without covering its edge.
+- The state dot on an agent's tab stays put when the tab comes forward, chips in a tab row are one height, a tip hides the terminal cursor under it, and a dragged tab's bar stands clear of the pane's line.
+- A frame drawn after news from an agent could put the workspaces' row over the status bar: the window is fitted when news comes in, not only on a key.
+- A state diagram's labelled edge to the state under it runs straight down with its label beside it, where its arrowhead stood on the label.
+- A card over a picture or a drawing hides only what it covers, where the rows at its top and foot were cleared whole and cut an equation under it in half.
+- A pixel of the terminal's prompt no longer shows at a tip's rounded corner, and the program in the side pane starts 8 px under the line over it.
+
 ## [0.11.0] - 2026-11-19
 
 Agents among themselves: they can start, message and wait for each other, and you see at a glance which one is working, which finished and which needs you. Reviewing a document goes further: your comments reach the agent from a page as from code, a card shows what changed since you wrote it, an agent's suggestion is accepted where it stands, and the review comes out as Markdown. Shift+click selects across a whole document, a link can be copied, and Cellix is calmer: idle, it draws and sends nothing. The dark theme is herdr's graphite.
