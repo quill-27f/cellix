@@ -362,6 +362,8 @@ pub(crate) const TIP_INSET: f32 = 0.01;
 /// Five pixels higher, at the top of its row, all of the shadow is in the row.
 pub(crate) const TIP_RAISE: f32 = 0.1;
 const TOOLTIP_SIZE: u8 = 92;
+/// How round a tip's corners are, in hundredths of the terminal's line.
+const TIP_RADIUS: u8 = 24;
 /// What each button is called, in order, since they're only icons and marks.
 const FIND_NAMES: [&str; 6] = [
     "Previous Match (Shift+Enter)",
@@ -11820,7 +11822,9 @@ impl App {
         }
         match self.dock.session().filter(|_| !self.dock.listing()) {
             Some(session) => {
+                let from = grid.painted_so_far();
                 session.draw(grid, screen, theme, self.dock.focused);
+                self.inset_program(grid, screen, from);
                 if session.stopped.is_some() {
                     self.draw_stopped(grid);
                 } else if session.exited {
@@ -11836,6 +11840,35 @@ impl App {
                 self.agents.draw(grid, panel, shown, self.hover, look);
             }
         }
+    }
+
+    /// The side pane's program starts on the row under its tabs, whose line is that row's top
+    /// pixels, and a cell is its row's whole height, so its cursor, or a coloured cell, stood
+    /// on the line (58, the final review's T8). Where a row has room, the first row's top is
+    /// painted the pane's ground `LINE_AIR` past the line, short of its words' capitals, which
+    /// stay whole: 10 px of a row of 50, so what's on it stands 8 px under the line. Under
+    /// whatever the program painted, its pictures and Find's ring. Rows, presses and the cell
+    /// tier are as they were: the cells don't move, and on the terminal's own line a row has
+    /// no air to give.
+    fn inset_program(&self, grid: &mut Grid, screen: Rect, from: usize) {
+        let measure = &*self.measure;
+        let (Some((_, row)), Some((caps, _))) =
+            (measure.cell_pixels(), measures::words_in_row(measure))
+        else {
+            return;
+        };
+        let line = measures::line_pixels(measure);
+        let band = (line + measures::LINE_AIR).min(caps - 2.0);
+        if !measures::roomy(measure) || band <= line || screen.w == 0 || screen.h == 0 {
+            return;
+        }
+        let band = Bounds::cells(
+            f32::from(screen.x),
+            f32::from(screen.y),
+            f32::from(screen.w),
+            band / row as f32,
+        );
+        grid.exact_fill_under(from, band, self.theme.sidebar.bg);
     }
 
     /// The comments on a plan and any edits to it, as an answer the agent can act on.
@@ -17952,7 +17985,8 @@ impl App {
         let (box_top, box_tall, line) = self.tip_box(top, more);
         let bounds = Bounds::cells(left, box_top, tip_wide, box_tall);
         let painted = grid.painted_so_far();
-        grid.popup(bounds, 24, theme.popup, theme.popup_border);
+        self.cover_tip_corners(grid, bounds, TIP_RADIUS);
+        grid.popup(bounds, TIP_RADIUS, theme.popup, theme.popup_border);
         self.cover_cursor(grid, bounds);
         // A tip over the bar at the foot keeps to the rows over it. The bar's row is moved
         // down to stand in what's under the sheets, and the part of a tip's shadow that
@@ -18024,6 +18058,74 @@ impl App {
     /// covers its row but the top of it, 10 px under the line over it, and a sliver of the
     /// cursor stood on the tip's top edge (0.11.0's release check, R4, 166). Its cell has the
     /// terminal's own colours again.
+    /// A tip's corners are round, and what's under the square it stands in shows past them:
+    /// over the side pane's program, a pixel of the prompt's "$" stood at the corner of the
+    /// tip under a tab (166). Where a letter of the cells is under a corner and nothing painted
+    /// covers it there, that corner of the square is filled with the cell's ground first, so
+    /// the tip is round over plain ground. A colour under a corner shows past it, as a round
+    /// corner over a colour does.
+    fn cover_tip_corners(&self, grid: &mut Grid, tip: Bounds, radius: u8) {
+        use cellix_render::{BOTTOM_LEFT, BOTTOM_RIGHT, TOP_LEFT, TOP_RIGHT, UNIT};
+        let Some((wide, tall)) = self.measure.cell_pixels() else {
+            return;
+        };
+        let (wide, tall) = (wide as f32, tall as f32);
+        let line = tall / self.measure.row_air().max(1.0);
+        let unit = UNIT as f32;
+        // Where the rasterizer stands it: a control's height in its row, and with a line round
+        // it, on whole pixels.
+        let (top, high) = cellix_render::stood(tip.y, tip.h, tall, line);
+        let left = (tip.x as f32 * wide / unit).round();
+        let right = ((tip.x + tip.w) as f32 * wide / unit).round();
+        let (top, bottom) = (top.round(), (top + high).round());
+        let square = Bounds::cells(
+            left / wide,
+            top / tall,
+            (right - left) / wide,
+            (bottom - top) / tall,
+        );
+        let reach = f32::from(radius) * line / 100.0;
+        let corners = [
+            (TOP_LEFT, left, top),
+            (TOP_RIGHT, right - reach, top),
+            (BOTTOM_RIGHT, right - reach, bottom - reach),
+            (BOTTOM_LEFT, left, bottom - reach),
+        ];
+        for (which, x, y) in corners {
+            let cells = |from: f32, size: f32, limit: u16| {
+                let first = (from / size).floor().max(0.0) as u16;
+                let last = ((from + reach) / size).ceil() as u16;
+                first..last.min(limit)
+            };
+            let lettered = cells(y, tall, grid.height()).any(|row| {
+                cells(x, wide, grid.width()).any(|column| {
+                    let cell = grid.cell(column, row);
+                    !cell.style.painted && !cell.symbol.trim().is_empty()
+                })
+            });
+            // The corner's middle, in paint's units, and whether a panel covers it.
+            let (middle_x, middle_y) = (x + reach / 2.0, y + reach / 2.0);
+            let at = (
+                (middle_x / wide * unit) as i32,
+                (middle_y / tall * unit) as i32,
+            );
+            let covered = grid.paint.iter().any(|paint| {
+                matches!(paint, Paint::Panel { bounds, fill: Some(_), .. }
+                    if (bounds.x..bounds.x + bounds.w).contains(&at.0)
+                        && (bounds.y..bounds.y + bounds.h).contains(&at.1))
+            });
+            if !lettered || covered {
+                continue;
+            }
+            let (column, row) = ((middle_x / wide) as u16, (middle_y / tall) as u16);
+            if column >= grid.width() || row >= grid.height() {
+                continue;
+            }
+            let ground = grid.cell(column, row).style.bg;
+            grid.corners(square, radius, ground, which);
+        }
+    }
+
     fn cover_cursor(&self, grid: &mut Grid, tip: Bounds) {
         if self.dock.front != Front::Session || self.dock.listing() {
             return;

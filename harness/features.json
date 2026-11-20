@@ -7341,5 +7341,19 @@
     "title": "Go to Definition shows a definition in nested scopes under the pinned sticky headers",
     "test": "a_definition_in_nested_scopes_shows_under_the_pinned_headers",
     "passes": true
+  },
+  {
+    "id": "tip-corners-cover-letters",
+    "milestone": 15,
+    "title": "A tip's rounded corners show the ground past them, never a piece of a letter under the square it stands in",
+    "test": "a_tips_round_corners_cover_the_letters_under_them",
+    "passes": true
+  },
+  {
+    "id": "pane-program-top-inset",
+    "milestone": 15,
+    "title": "The side pane's program stands 8 px under the line under the pane's tabs where a row has room, its cells, presses and the cell tier unchanged",
+    "test": "the_panes_program_stands_clear_of_the_line_under_its_tabs",
+    "passes": true
   }
 ]

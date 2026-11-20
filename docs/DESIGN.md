@@ -1694,7 +1694,16 @@ there, the second line is a phrase of its own and starts with a capital, "Right-
 transcript" (the release review of 0.12.0, 64-transcript-tab-hover). While a
 tip covers the side pane's terminal's cursor, the cursor goes: a tip covers the row under its
 line but the top 10 px of it, and a sliver of the cursor stood on the tip's edge (R4). Nothing
-covers part of a row. A palette (Quick Open, the commands, and
+covers part of a row. A tip's corners are round over plain ground: where a letter of the cells
+is under one and nothing painted covers it there, that corner of the square the tip stands in
+is filled with the cell's ground first, since a pixel of the prompt's "$" stood at the corner
+of the tip under a cut tab (166). A colour under a corner still shows past it. The side pane's
+program starts on the row under its tabs, whose line is that row's top pixels, and a cell is a
+whole row tall, so its cursor stood on the line (58, T8). Where a row has room, the first row's
+top is painted the pane's ground `LINE_AIR` past the line, short of its words' capitals: 10 px
+of a row of 50, so a cursor or a coloured cell there stands 8 px under the line, a little
+shorter than on the rows under it. The cells don't move, so rows, presses and the cell tier
+are as they were, and on the terminal's own line there's no air to give. A palette (Quick Open, the commands, and
 every list that asks with a field) is whole rows too: the field's row, one row of air, and its
 list. The field is a box, as the Find bar's and a prompt's are, nine tenths of its row as the
 canvas draws a field, a column in from the panel's edges where the picked row's band stands

@@ -1593,6 +1593,182 @@ fn a_tip_over_the_terminals_cursor_hides_it() {
     assert!(seen, "some width cuts the first tab short: {tried:?}");
 }
 
+/// A stand-in that names itself and then prints `text`, and waits.
+fn printing_stand_in(dir: &Path, title: &str, text: &str) -> String {
+    let fake = dir.join("printing-agent");
+    let script =
+        format!("#!/bin/sh\nprintf '\\033]0;{title}\\007'\nprintf '{text}'\nexec sleep 30\n");
+    fs::write(&fake, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fake.display().to_string()
+}
+
+/// Starts the printing stand-in in the side pane, in front, and waits until its first row
+/// says `shows`.
+fn start_printing(dir: &Path, app: &mut App, text: &str, shows: char) -> usize {
+    app.agent_program = Some(printing_stand_in(dir, "✳ pricing page", text));
+    app.open_agent("claude");
+    let index = app.dock.sessions.len() - 1;
+    app.dock.active = Some(index);
+    app.dock.front = Front::Session;
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let area = app.dock_screen().expect("the pane is open");
+        if screen(app).row_text(area.y).contains(shows) {
+            return index;
+        }
+        assert!(Instant::now() < deadline, "the stand-in never printed");
+        app.poll();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// The tour's terminal, rows of 50 px with words set for 36.
+fn tour_rows(app: &mut App) {
+    app.set_measure(Rc::new(
+        cellix_render::FontMeasure::new(17, 50).with_type_row(36),
+    ));
+}
+
+/// A tip's rounded corners show the ground past them, never a piece of a letter under their
+/// square: the prompt's "$" showed a pixel at the corner of the tip under a cut tab (166). The
+/// program in the pane fills its first rows with full blocks, so a letter is under every
+/// corner, and the picture is read in each corner, past the arc.
+#[test]
+#[cfg(unix)]
+fn a_tips_round_corners_cover_the_letters_under_them() {
+    let (dir, mut app) = project((150, 44));
+    tour_rows(&mut app);
+    app.open_agent(crate::agents::SHELL.1);
+    app.dock.sessions[0].renamed = Some("the documentation's navigation".to_string());
+    start_printing(dir.path(), &mut app, &"█".repeat(600), '█');
+    let theme = *app.theme();
+    let mut seen = false;
+    for width in (30..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let _ = screen(&app);
+        let row = title(&app);
+        let (from, _) = tab_span(&app, row, 0);
+        if app.dock.cut_name(row, from).is_none() {
+            continue;
+        }
+        mouse(&mut app, MouseKind::Move, from + 1, row.y);
+        let grid = screen(&app);
+        let tip = grid.paint.iter().find_map(|paint| match paint {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                fill: Some(fill),
+                ..
+            } if *fill == theme.popup => Some(*bounds),
+            _ => None,
+        });
+        let tip = tip.unwrap_or_else(|| panic!("{width}: a tip under the cut tab"));
+        // Where the rasterizer stands it: a control's height, on whole pixels.
+        let unit = UNIT as f32;
+        let (top, high) = cellix_render::stood(tip.y, tip.h, 50.0, 36.0);
+        let left = (tip.x as f32 * 17.0 / unit).round();
+        let right = ((tip.x + tip.w) as f32 * 17.0 / unit).round();
+        let (top, bottom) = (top.round(), (top + high).round());
+        // The rows of the picture it stands on, from the first.
+        let first = (top / 50.0) as u16;
+        let last = ((bottom - 1.0) / 50.0) as u16;
+        let rows: Vec<Vec<cellix_render::Rgb>> = (first..=last)
+            .flat_map(|y| super::strip_tests::picture(&grid, y))
+            .collect();
+        let pixel = |x: f32, y: f32| rows[(y as usize) - first as usize * 50][x as usize];
+        let bright = |c: cellix_render::Rgb| c.0.max(c.1).max(c.2) > 128;
+        // The blocks are there, beside the tip.
+        assert!(
+            bright(pixel(right + 30.0, top + 15.0)),
+            "{width}: a block beside the tip"
+        );
+        let reach = 24.0 * 36.0 / 100.0;
+        let corners = [
+            (left, top, left + reach, top + reach),
+            (right - reach, top, right - reach, top + reach),
+            (left, bottom - reach, left + reach, bottom - reach),
+            (right - reach, bottom - reach, right - reach, bottom - reach),
+        ];
+        for (x0, y0, cx, cy) in corners {
+            for y in y0 as i32..(y0 + reach) as i32 {
+                for x in x0 as i32..(x0 + reach) as i32 {
+                    let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+                    let past = ((px - cx).powi(2) + (py - cy).powi(2)).sqrt() > reach + 1.0;
+                    if past {
+                        let colour = pixel(x as f32, y as f32);
+                        assert!(
+                            !bright(colour),
+                            "{width}: ({x}, {y}) past the corner at ({cx}, {cy}) is {colour:?}"
+                        );
+                    }
+                }
+            }
+        }
+        seen = true;
+        break;
+    }
+    assert!(seen, "some width cuts the first tab short");
+}
+
+/// The program in the side pane stands clear of the line under the pane's tabs: a cell is its
+/// row's whole height, so a cursor or a coloured cell on the first row stood on the line (58,
+/// the final review's T8). Where a row has room, the first row's top is the pane's ground
+/// `LINE_AIR` past the line. The cells are as they were, and on cells nothing is painted.
+#[test]
+#[cfg(unix)]
+fn the_panes_program_stands_clear_of_the_line_under_its_tabs() {
+    let (dir, mut app) = project((150, 44));
+    tour_rows(&mut app);
+    // Its first row in reverse video, coloured the row's whole height, and its cursor after.
+    start_printing(dir.path(), &mut app, "\\033[7mINVERSE\\033[0m", 'I');
+    app.dock.focused = true;
+    let theme = *app.theme();
+    let area = app.dock_screen().expect("the pane is open");
+    let grid = screen(&app);
+    let at = grid
+        .row_text(area.y)
+        .find("INVERSE")
+        .expect("the program's words");
+    let x = grid.row_text(area.y)[..at].chars().count() as u16;
+    assert_eq!(
+        grid.cell(x, area.y).style.bg,
+        theme.text.fg,
+        "a coloured cell"
+    );
+    assert_eq!(
+        grid.cell(x + 7, area.y).style.bg,
+        theme.text.fg,
+        "the cursor"
+    );
+    let picture = super::strip_tests::picture(&grid, area.y);
+    // The line under the tabs is the row's top 2 px; 8 px of the pane's ground under it, the
+    // cells' colour after that.
+    let columns = usize::from(x) * 17..usize::from(x + 8) * 17;
+    for (y, pixels) in picture.iter().enumerate().take(12).skip(2) {
+        let (want, said) = match y {
+            10 => continue,
+            11 => (theme.text.fg, "the cell's colour under the inset"),
+            _ => (theme.sidebar.bg, "the pane's ground"),
+        };
+        for (column, pixel) in pixels[columns.clone()].iter().enumerate() {
+            assert_eq!(*pixel, want, "({}, {y}) is {said}", columns.start + column);
+        }
+    }
+    // Where there's no air to give, nothing is painted over the program.
+    app.set_measure(Rc::new(cellix_render::CellMeasure));
+    let grid = screen(&app);
+    let fills = grid.paint.iter().any(|paint| {
+        matches!(paint, Paint::Image { bounds, .. } if bounds.y == i32::from(area.y) * UNIT)
+    });
+    assert!(!fills, "nothing over the program on cells");
+}
+
 /// With the button that maximizes the pane right after it, the + stands in the middle of the
 /// air from the last tab's ink to that button's, measured in the picture, whether the tabs are
 /// whole or cut short: at the start of its columns it stood 39 px after the last tab's × and

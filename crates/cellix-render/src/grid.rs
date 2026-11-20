@@ -606,6 +606,14 @@ impl Grid {
         });
     }
 
+    /// `exact_fill`, put in under what's been painted from `index` on.
+    pub fn exact_fill_under(&mut self, index: usize, bounds: Bounds, color: Rgb) {
+        self.exact_fill(bounds, color);
+        if let Some(fill) = self.paint.pop() {
+            self.insert_paint(index, fill);
+        }
+    }
+
     /// A button's chip by itself, as wide as asked and not a whole number of cells, for one
     /// whose words and marks are placed by what draws it.
     pub fn chip(&mut self, x: f32, y: u16, wide: f32, fill: Rgb) {
