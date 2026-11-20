@@ -69,6 +69,8 @@ pub enum Action {
     OpenFile(PathBuf, Option<usize>),
     /// Goes to a comment a mention of it names.
     ShowComment(u32),
+    /// Puts words on the clipboard, as every copy goes, and says what they were.
+    CopyWords(String, &'static str),
     CloseTab(usize),
     CloseOtherTabs(usize),
     CloseAllTabs,

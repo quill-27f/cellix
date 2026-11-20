@@ -129,22 +129,48 @@ impl App {
         })
     }
 
-    /// A right click in the Comments pane: on a link, its menu. Elsewhere there's none.
+    /// A right click in the Comments pane: on a card, Copy where words on the cards are
+    /// selected, Copy Comment and Copy Quote; on a link, the link's rows over those (the user,
+    /// 20 November: "I cannot do copy paste from comments, which is a crucial feature").
     pub(super) fn comment_link_menu(&mut self, screen: Rect, at: (u16, u16, f32)) {
-        let hit = {
-            let (shown, resolved) = self.shown_threads();
-            let agent = self.comment_agent().0;
-            let draft = self.dock.draft.as_ref();
-            let view = self.comments_view();
-            let shown = (shown.as_slice(), draft, agent.as_str(), resolved, view);
-            let top = self.dock.tops.of(Front::Comments);
-            threads::hit(screen, shown, top, at, &*self.measure)
+        let top = self.dock.tops.of(Front::Comments);
+        let (hit, card) = self.card_rows(|shown, measure| {
+            let hit = threads::hit(screen, shown, top, at, measure);
+            (hit, threads::card_at(screen, shown, top, at.1, measure))
+        });
+        let mut items = Vec::new();
+        if self.card_selected_text().is_some() {
+            items.push(MenuItem::run("Copy", Command::Copy));
+        }
+        if let Some(thread) = card.and_then(|id| self.threads.iter().find(|t| t.id == id)) {
+            let words = thread.text.clone();
+            items.push(MenuItem::new(
+                "Copy Comment",
+                MenuAction::CopyWords(words, "Copied the comment"),
+            ));
+            // What it's about, as its agent is told it.
+            let about = if thread.selection.is_empty() {
+                &thread.quote
+            } else {
+                &thread.selection
+            };
+            if !about.trim().is_empty() {
+                items.push(MenuItem::new(
+                    "Copy Quote",
+                    MenuAction::CopyWords(about.clone(), "Copied the words it's about"),
+                ));
+            }
+        }
+        let linked = match hit {
+            Some(ThreadHit::Link(id, index)) => self.comment_linked(id, index),
+            _ => None,
         };
-        let Some(ThreadHit::Link(id, index)) = hit else {
-            return;
+        let items = match linked {
+            Some(linked) if items.is_empty() => self.link_items(linked),
+            Some(linked) => self.with_link(linked, items),
+            None => items,
         };
-        if let Some(linked) = self.comment_linked(id, index) {
-            let items = self.link_items(linked);
+        if !items.is_empty() {
             self.show_link_menu((at.0, at.1), items);
         }
     }

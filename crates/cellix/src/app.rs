@@ -452,6 +452,8 @@ enum Drag {
     Dock,
     /// A selection in a session.
     Session,
+    /// A selection among the cards' words in the Comments pane.
+    Cards,
     /// An image's edge, on its source line.
     Image(usize),
     /// A press on the Preview's pages, which pans once it moves.
@@ -1631,6 +1633,9 @@ pub struct App {
     dock_guide: Option<(u16, u16)>,
     /// The comment whose words were last pressed in the document, lit in the Comments pane.
     lit_thread: Option<u32>,
+    /// What's selected among the cards' words in the Comments pane: where it was begun, where
+    /// it reaches, and the mark of the rows it was made on, which it holds for.
+    card_selection: Option<(threads::Spot, threads::Spot, u64)>,
     /// The words a click on a comment's card selected in the file: the comment's own, so the
     /// buttons that offer to comment on a selection stay away from them.
     lit_range: Option<(usize, usize)>,
@@ -1872,6 +1877,7 @@ impl App {
             over_ssh: !cfg!(test) && crate::pane::over_ssh(),
             dock_guide: None,
             lit_thread: None,
+            card_selection: None,
             lit_range: None,
             pointed_change: None,
             comment_sort: (settings.comment_sort.as_deref())
@@ -4907,6 +4913,10 @@ impl App {
                     self.pane_pressed = false;
                 }
                 self.glance = None;
+                // The keys are for something else now, but a copy's.
+                if self.workflow.keys.command(key) != Some(Command::Copy) {
+                    self.card_selection = None;
+                }
                 self.key(key);
             }
             Event::Mouse(mouse) => {
@@ -11083,6 +11093,17 @@ impl App {
             return false;
         };
         let (x, y) = (mouse.x, mouse.y);
+        if self.drag == Drag::Cards && matches!(mouse.kind, MouseKind::Drag | MouseKind::Up) {
+            if mouse.kind == MouseKind::Up {
+                self.drag = Drag::None;
+            } else if let (Some(screen), Some((anchor, _, mark))) =
+                (self.dock_panel(), self.card_selection)
+                && let Some(spot) = self.card_spot(screen, mouse, Some(anchor))
+            {
+                self.card_selection = Some((anchor, spot, mark));
+            }
+            return true;
+        }
         let dragging = matches!(self.drag, Drag::Dock | Drag::Session);
         if mouse.kind == MouseKind::Drag && self.drag == Drag::Dock {
             // A step of a live resize lays both sides out again, which is every row's
@@ -11324,7 +11345,13 @@ impl App {
                 let top = self.dock.tops.of(Front::Comments);
                 let at = (x, y, mouse.fine_y);
                 let hit = threads::hit(screen, threads, top, at, &*self.measure);
+                let on_words = matches!(hit, Some(ThreadHit::Open(_)))
+                    && self.card_spot(screen, mouse, None).is_some();
                 match hit {
+                    // Its words: a selection begins, as on a page.
+                    Some(ThreadHit::Open(id)) if on_words => {
+                        self.press_card_words(screen, id, mouse)
+                    }
                     // Its list drops from under what's painted of its button.
                     Some(ThreadHit::Sort) => self.show_sort_menu((screen.x + 2, y + 1)),
                     // Edit and Delete, from under the "⋯" that stands for them.
@@ -11342,6 +11369,10 @@ impl App {
                     }
                     Some(hit) => self.thread_hit(hit),
                     None => {}
+                }
+                // A press anywhere else on the pane leaves what was selected on the cards.
+                if !on_words {
+                    self.card_selection = None;
                 }
             }
             if mouse.kind == MouseKind::Right {
@@ -11837,7 +11868,8 @@ impl App {
             let agent = self.comment_agent().0;
             let (listed, resolved) = self.shown_threads();
             let draft = self.dock.draft.as_ref();
-            let view = self.comments_view();
+            let mut view = self.comments_view();
+            view.selected = self.card_selected(panel);
             let shown = (listed.as_slice(), draft, agent.as_str(), resolved, view);
             threads::draw(grid, panel, shown, top, self.hover, look);
             return;
@@ -12718,7 +12750,108 @@ impl App {
             pictures: self.measure.cell_pixels().map(|_| &self.comment_pictures),
             laid: Some(&self.comment_rows),
             edge: self.pane_edge(),
+            selected: None,
         }
+    }
+
+    /// `then` with the Comments pane's rows as they're shown: the comments listed, the one
+    /// being written, and how they're laid out.
+    fn card_rows<T>(&self, then: impl FnOnce(threads::Shown, &dyn Measure) -> T) -> T {
+        let (listed, resolved) = self.shown_threads();
+        let agent = self.comment_agent().0;
+        let draft = self.dock.draft.as_ref();
+        let view = self.comments_view();
+        then(
+            (listed.as_slice(), draft, agent.as_str(), resolved, view),
+            &*self.measure,
+        )
+    }
+
+    /// The place among the cards' words under the pointer, on `screen`, the Comments pane's.
+    /// With `toward`, a drag's first place, the nearest one where the pointer is off them.
+    fn card_spot(
+        &self,
+        screen: Rect,
+        mouse: MouseEvent,
+        toward: Option<threads::Spot>,
+    ) -> Option<threads::Spot> {
+        let top = self.dock.tops.of(Front::Comments);
+        // On cells a column is a letter, and a press on one is before it.
+        let x = if self.measure.in_cells() {
+            f32::from(mouse.x)
+        } else {
+            mouse.fine_x
+        };
+        let at = (x, mouse.y);
+        self.card_rows(|shown, measure| threads::spot_at(screen, shown, top, at, toward, measure))
+    }
+
+    /// A press on a card's words: one goes to the words it's about in the file, as it did, and
+    /// begins a selection there that a drag carries on; two select the word under it and three
+    /// its line, as on a page; with Shift it reaches from where it was begun to here.
+    fn press_card_words(&mut self, screen: Rect, id: u32, mouse: MouseEvent) {
+        let shift = mouse.mods.shift;
+        let clicks = if shift {
+            self.last_click = None;
+            1
+        } else {
+            self.count_click(mouse.x, mouse.y)
+        };
+        let held = self.card_selection.filter(|(.., mark)| {
+            self.card_rows(|shown, measure| threads::words_mark(screen, shown, measure)) == *mark
+        });
+        if let Some((anchor, _, mark)) = held.filter(|_| shift) {
+            if let Some(spot) = self.card_spot(screen, mouse, Some(anchor)) {
+                self.card_selection = Some((anchor, spot, mark));
+            }
+            self.drag = Drag::Cards;
+            return;
+        }
+        if clicks == 1 {
+            self.thread_hit(ThreadHit::Open(id));
+        }
+        let Some(spot) = self.card_spot(screen, mouse, None) else {
+            self.card_selection = None;
+            return;
+        };
+        let (anchor, head, mark) = self.card_rows(|shown, measure| {
+            let (anchor, head) = match clicks {
+                2 => threads::word_around(screen, shown, spot, measure),
+                3 => threads::line_around(screen, shown, spot, measure),
+                _ => (spot, spot),
+            };
+            (anchor, head, threads::words_mark(screen, shown, measure))
+        });
+        self.card_selection = Some((anchor, head, mark));
+        self.drag = Drag::Cards;
+    }
+
+    /// What's selected among the cards' words, first place to last, while the rows it was
+    /// made on are the ones the pane shows.
+    fn card_selected(&self, panel: Rect) -> Option<(threads::Spot, threads::Spot)> {
+        let (anchor, head, mark) = self.card_selection?;
+        let now = self.card_rows(|shown, measure| threads::words_mark(panel, shown, measure));
+        (now == mark).then(|| {
+            if anchor <= head {
+                (anchor, head)
+            } else {
+                (head, anchor)
+            }
+        })
+    }
+
+    /// The words selected on the cards, as they were written, while the Comments pane shows
+    /// them.
+    fn card_selected_text(&self) -> Option<String> {
+        if !self.dock.open || self.dock.front != Front::Comments {
+            return None;
+        }
+        let panel = self.dock_panel()?;
+        let (first, last) = self.card_selected(panel).filter(|(a, b)| a != b)?;
+        let words = self.card_rows(|shown, measure| {
+            threads::selected_words(panel, shown, (first, last), measure)
+        });
+        (!words.is_empty()).then_some(words)
     }
 
     /// The agent a comment goes to, as its card names it, and how what waits gets there: the
@@ -15418,6 +15551,11 @@ impl App {
     }
 
     fn copy(&mut self) {
+        if let Some(text) = self.card_selected_text() {
+            self.clipboard.clone_from(&text);
+            self.outgoing_clipboard = Some(text);
+            return;
+        }
         if let Some(text) = self.selected_text() {
             self.clipboard.clone_from(&text);
             self.outgoing_clipboard = Some(text);
@@ -15595,6 +15733,14 @@ impl App {
         if !matches!(self.overlay, Overlay::None) {
             self.overlay_mouse(mouse);
             return;
+        }
+        let on_cards = self.dock.open
+            && self.dock.front == Front::Comments
+            && self
+                .dock_panel()
+                .is_some_and(|p| p.contains(mouse.x, mouse.y));
+        if mouse.kind == MouseKind::Left && !on_cards {
+            self.card_selection = None;
         }
         if self.side_mouse(mouse) {
             return;
@@ -16755,6 +16901,7 @@ impl App {
             }
             MenuAction::CopyLink(address) => self.copy_text(address, "Copied the link"),
             MenuAction::ShowComment(id) => self.go_to_comment(id),
+            MenuAction::CopyWords(words, note) => self.copy_text(words, note),
             MenuAction::OpenFile(path, line) => {
                 self.peek = None;
                 self.open_file_at(&path, line);
@@ -21589,6 +21736,8 @@ mod agent_tab_tests;
 mod agents_list_tests;
 #[cfg(test)]
 mod ask_tests;
+#[cfg(test)]
+mod card_copy_tests;
 #[cfg(test)]
 mod cards_tests;
 #[cfg(test)]

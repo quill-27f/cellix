@@ -663,10 +663,25 @@ words and its replies in the Comments pane, a file's text, rendered or as source
 are pages), and a terminal's output in the side pane and in peek, where a web address now opens
 on Ctrl+click too, found whole where it wrapped onto the rows under it. Where a right click
 already has a menu, as on a page or in code, the link's two rows stand at its top, a rule under
-them; in a terminal or a comment, where it had none, a right click off a link still opens none.
+them; in a terminal, where it had none, a right click off a link still opens none. On a comment's
+card it opens the card's own menu, the link's rows over it where there's a link.
 No key opens it: Cellix's context menus have none (no Shift+F10), and Open in Browser in the
 palette is the keyboard's way to the link at the caret. The Task page, Settings, Review's comment
 cards and the inbox show no links to click, so they have none.
+
+A card's words and its answers' can be selected with the mouse as a page's are (the user, 20
+November 2026: "I cannot do copy paste from comments, which is a crucial feature"): a press on
+them goes to the comment's words in the file as it always did and begins a selection, a drag
+carries it on, a double click selects a word, a triple click the line of the comment or answer
+it's on, every row it wraps into, and Shift+click reaches from where it began. It's tinted in the
+selection's colour, as a page's is. The copy key, Command::Copy as Cmd+C or Ctrl+Shift+C reach it,
+copies it, the way every copy goes, by OSC 52 through the terminal: as written, with the new lines
+it had where rows wrapped and a new line between a comment's words and an answer's. Any other key,
+or a press off the cards, lets it go, and the copy key is the file's again. A right click on a
+card has Copy where its words are selected, Copy Comment (the comment's own words, as written) and
+Copy Quote (the words it's about, as its agent is told them), with a link's rows over those. What's
+pasted into a comment being written goes in whole, its lines and all, as the terminal pastes it
+or from Cmd+V.
 
 A comment takes emoji three ways, all of which leave the emoji itself in its words, so an agent
 reads it as written. A name between colons, GitHub's names, becomes its emoji as its second colon

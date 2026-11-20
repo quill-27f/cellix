@@ -60,6 +60,11 @@ pub const KINDS: [&str; 5] = [
 const CHECK_LIFT: f32 = 0.25;
 /// What stands between a card's header and its number, which comes last.
 const NUMBER_GAP: &str = " \u{b7} #";
+/// How far inside its row a selection's tint on a card stands, top and foot, in rows; and at
+/// the foot of the row over an answer's line, which then keeps `LINE_AIR` from it: inset as
+/// any other, it stood 4.5 px over the line (the ui-expert's review of 50-comment-selected).
+const SELECTION_INSET: f32 = 0.05;
+const SELECTION_OVER_LINE: f32 = 0.12;
 /// How far a file's heading is lifted in its row, clear of the card under it.
 const FILE_LIFT: f32 = 0.3;
 const BUTTON_PADDING: usize = 1;
@@ -1229,6 +1234,9 @@ pub struct View<'a> {
     /// The suggestions in the document in view: how many, and which the caret is in. None
     /// when the list covers every file, or the file in view isn't a document.
     pub suggestions: Option<(usize, Option<usize>)>,
+    /// What's selected among the cards' words, first place to last, which is tinted as a
+    /// page's selection is. It changes nothing laid out.
+    pub selected: Option<(Spot, Spot)>,
 }
 
 /// A list's rows as they were last laid out, with a mark of all they were laid out from.
@@ -1334,6 +1342,7 @@ impl Default for View<'_> {
             laid: None,
             edge: 0.0,
             suggestions: None,
+            selected: None,
         }
     }
 }
@@ -1452,6 +1461,378 @@ const SUGGEST_GAP: f32 = 2.0;
 const SUGGEST_LEAD: f32 = 0.5;
 /// Columns kept at the end of that row for the key's name, and the gap before it.
 const SUGGEST_KEY: f32 = SUGGEST_GAP + 3.0;
+
+/// A place among the cards' words: the row of the list it's on, and how many letters into
+/// that row's words.
+pub type Spot = (usize, usize);
+
+/// The words on a row a card's or an answer's words stand on: the words, where they start and
+/// the size they're set at.
+fn words_row<'l>(line: &'l Line, a: &Across, measure: &dyn Measure) -> Option<(&'l str, f32, u8)> {
+    match line {
+        Line::Text(_, text) => Some((text, a.text, 100)),
+        Line::Reply(_, text) => Some((text, a.text, SMALL)),
+        Line::Proposed(_, text) => Some((text, a.text + box_padding(measure), SMALL)),
+        _ => None,
+    }
+}
+
+/// How many of a row's letters, set at `size` from `from`, stand before `x`: up to the one
+/// whose middle is past it.
+fn letters_before(text: &str, from: f32, x: f32, size: u8, measure: &dyn Measure) -> usize {
+    let font = Font {
+        size,
+        ..Font::default()
+    };
+    let mut at = from;
+    for (index, wide) in measure.advances(text, font).iter().enumerate() {
+        if x < at + wide / 2.0 {
+            return index;
+        }
+        at += wide;
+    }
+    text.chars().count()
+}
+
+/// The comment each row of words is on, and which of its words: 0 its own, n its nth
+/// answer's.
+fn parts_of(all: &[Line]) -> Vec<Option<(u32, usize)>> {
+    let mut part = 0;
+    all.iter()
+        .map(|line| match line {
+            Line::Header(..) => {
+                part = 0;
+                None
+            }
+            Line::Answer(..) => {
+                part += 1;
+                None
+            }
+            Line::Text(id, _) => Some((*id, 0)),
+            Line::Reply(id, _) | Line::Proposed(id, _) => Some((*id, part)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The words a part of a card was laid out from, whole: a comment's own, or an answer's.
+fn part_words(threads: &[&Thread], (id, part): (u32, usize), view: View) -> Option<String> {
+    let thread = threads.iter().find(|t| t.id == id)?;
+    let words = match part {
+        0 => thread.text.clone(),
+        n => reply_parts(thread.replies.get(n - 1)?).2,
+    };
+    Some(shown(&words, view).0.into_owned())
+}
+
+/// Where each of a part's rows starts in the words it was laid out from, in bytes: a row is a
+/// run of them, cut at a space or a line's end. None for one that isn't, as a short card's
+/// last row with its "…".
+fn row_starts(words: &str, rows: &[&str]) -> Vec<Option<usize>> {
+    let mut from = 0;
+    rows.iter()
+        .map(|row| {
+            let at = from + words.get(from..)?.find(row)?;
+            from = at + row.len();
+            Some(at)
+        })
+        .collect()
+}
+
+/// The place among the cards' words at `x` (in columns, with its fraction) on row `y`. Where
+/// that row has no words, with `toward` a drag's first place: the nearest end of words between
+/// the two, the last row's end going down and the first's start going up.
+pub fn spot_at(
+    area: Rect,
+    shown: Shown,
+    top: usize,
+    (x, y): (f32, u16),
+    toward: Option<Spot>,
+    measure: &dyn Measure,
+) -> Option<Spot> {
+    let width = text_width(area, shown.4, measure);
+    let all = lines(shown, width, measure);
+    let top = top.min(last_of(all.len(), area.h));
+    let a = across(area, shown.4, measure);
+    let row = (top + usize::from(y.saturating_sub(area.y))).min(all.len().checked_sub(1)?);
+    let row = if y < area.y {
+        top.saturating_sub(1)
+    } else {
+        row
+    };
+    if let Some((text, from, size)) = words_row(&all[row], &a, measure) {
+        return Some((row, letters_before(text, from, x, size, measure)));
+    }
+    let (anchor, _) = toward?;
+    let length = |r: usize| words_row(&all[r], &a, measure).map(|(t, ..)| t.chars().count());
+    if row >= anchor {
+        (anchor..row).rev().find_map(|r| Some((r, length(r)?)))
+    } else {
+        (row + 1..=anchor).find_map(|r| length(r).map(|_| (r, 0)))
+    }
+}
+
+/// The words a selection holds, from one place to the other in either order: as they were
+/// written where a card's or an answer's words were wrapped, new lines and all, and a new line
+/// between one card's or answer's words and the next's.
+pub fn selected_words(
+    area: Rect,
+    shown: Shown,
+    (one, other): (Spot, Spot),
+    measure: &dyn Measure,
+) -> String {
+    let (first, last) = if one <= other {
+        (one, other)
+    } else {
+        (other, one)
+    };
+    let width = text_width(area, shown.4, measure);
+    let all = lines(shown, width, measure);
+    let a = across(area, shown.4, measure);
+    let parts = parts_of(&all);
+    // Each part's words and where its rows start in them, found once.
+    let mut found: Found = Vec::new();
+    let mut pieces: Vec<String> = Vec::new();
+    // The part being read, and where in its words the selection is so far.
+    let mut open: Option<((u32, usize), usize, usize)> = None;
+    type Found = Vec<((u32, usize), Option<String>, Vec<(usize, Option<usize>)>)>;
+    fn close(
+        open: &mut Option<((u32, usize), usize, usize)>,
+        found: &Found,
+        pieces: &mut Vec<String>,
+    ) {
+        if let Some((part, from, to)) = open.take() {
+            let words = (found.iter().find(|(p, ..)| *p == part)).and_then(|(_, w, _)| w.as_ref());
+            if let Some(words) = words.and_then(|words| words.get(from..to)) {
+                pieces.push(words.to_string());
+            }
+        }
+    }
+    for row in first.0..=last.0.min(all.len().saturating_sub(1)) {
+        let (Some((text, ..)), Some(part)) = (words_row(&all[row], &a, measure), parts[row]) else {
+            continue;
+        };
+        let count = text.chars().count();
+        let from = if row == first.0 {
+            first.1.min(count)
+        } else {
+            0
+        };
+        let to = if row == last.0 {
+            last.1.min(count)
+        } else {
+            count
+        };
+        let byte = |c: usize| text.char_indices().nth(c).map_or(text.len(), |(b, _)| b);
+        let (from, to) = (byte(from), byte(to.max(from)));
+        if !found.iter().any(|(p, ..)| *p == part) {
+            let words = part_words(shown.0, part, shown.4);
+            let rows: Vec<usize> = (0..all.len()).filter(|r| parts[*r] == Some(part)).collect();
+            let texts: Vec<&str> = (rows.iter())
+                .filter_map(|r| words_row(&all[*r], &a, measure).map(|(t, ..)| t))
+                .collect();
+            let starts = words
+                .as_deref()
+                .map_or_else(Vec::new, |w| row_starts(w, &texts));
+            let starts = rows
+                .into_iter()
+                .zip(starts.into_iter().chain(std::iter::repeat(None)));
+            found.push((part, words, starts.collect::<Vec<_>>()));
+        }
+        let start = (found.iter().find(|(p, ..)| *p == part))
+            .and_then(|(_, _, starts)| starts.iter().find(|(r, _)| *r == row))
+            .and_then(|(_, start)| *start);
+        match start {
+            Some(start) => match &mut open {
+                Some((was, _, end)) if *was == part => *end = start + to,
+                _ => {
+                    close(&mut open, &found, &mut pieces);
+                    open = Some((part, start + from, start + to));
+                }
+            },
+            None => {
+                close(&mut open, &found, &mut pieces);
+                pieces.push(text[from..to].to_string());
+            }
+        }
+    }
+    close(&mut open, &found, &mut pieces);
+    pieces.join("\n")
+}
+
+/// The word at a place among the cards' words, as a double click selects it: its letters and
+/// digits, or the one other letter there.
+pub fn word_around(
+    area: Rect,
+    shown: Shown,
+    (row, at): Spot,
+    measure: &dyn Measure,
+) -> (Spot, Spot) {
+    let width = text_width(area, shown.4, measure);
+    let all = lines(shown, width, measure);
+    let a = across(area, shown.4, measure);
+    let Some((text, ..)) = all.get(row).and_then(|line| words_row(line, &a, measure)) else {
+        return ((row, at), (row, at));
+    };
+    let letters: Vec<char> = text.chars().collect();
+    let part = |c: &char| c.is_alphanumeric() || *c == '_';
+    let at = at.min(letters.len().saturating_sub(1));
+    if !letters.get(at).is_some_and(part) {
+        return ((row, at), (row, (at + 1).min(letters.len())));
+    }
+    let start = letters[..at]
+        .iter()
+        .rposition(|c| !part(c))
+        .map_or(0, |i| i + 1);
+    let end = (letters[at..].iter().position(|c| !part(c))).map_or(letters.len(), |i| at + i);
+    ((row, start), (row, end))
+}
+
+/// The line of a comment's or an answer's words a place is on, as a triple click selects it:
+/// every row it was wrapped into.
+pub fn line_around(
+    area: Rect,
+    shown: Shown,
+    (row, at): Spot,
+    measure: &dyn Measure,
+) -> (Spot, Spot) {
+    let width = text_width(area, shown.4, measure);
+    let all = lines(shown, width, measure);
+    let a = across(area, shown.4, measure);
+    let parts = parts_of(&all);
+    let whole = |r: usize| words_row(&all[r], &a, measure).map_or(0, |(t, ..)| t.chars().count());
+    let alone = ((row, 0), (row, whole(row.min(all.len().saturating_sub(1)))));
+    let Some(part) = parts.get(row).copied().flatten() else {
+        return ((row, at), (row, at));
+    };
+    let Some(words) = part_words(shown.0, part, shown.4) else {
+        return alone;
+    };
+    let rows: Vec<usize> = (0..all.len()).filter(|r| parts[*r] == Some(part)).collect();
+    let texts: Vec<&str> = (rows.iter())
+        .filter_map(|r| words_row(&all[*r], &a, measure).map(|(t, ..)| t))
+        .collect();
+    let starts: Vec<(usize, Option<usize>)> =
+        rows.into_iter().zip(row_starts(&words, &texts)).collect();
+    let Some(here) = starts.iter().find(|(r, _)| *r == row).and_then(|(_, s)| *s) else {
+        return alone;
+    };
+    let begins = words[..here].rfind('\n').map_or(0, |i| i + 1);
+    let ends = words[here..].find('\n').map_or(words.len(), |i| here + i);
+    let on_line: Vec<usize> = (starts.iter())
+        .filter(|(_, s)| s.is_some_and(|s| s >= begins && s <= ends))
+        .map(|(r, _)| *r)
+        .collect();
+    match (on_line.first(), on_line.last()) {
+        (Some(&first), Some(&last)) => ((first, 0), (last, whole(last))),
+        _ => alone,
+    }
+}
+
+/// The comment whose card a row of the list is on, where it says which.
+pub fn card_at(area: Rect, shown: Shown, top: usize, y: u16, measure: &dyn Measure) -> Option<u32> {
+    let width = text_width(area, shown.4, measure);
+    let all = lines(shown, width, measure);
+    let top = top.min(last_of(all.len(), area.h));
+    let row = top + usize::from(y.checked_sub(area.y)?);
+    let id = match all.get(row)? {
+        Line::Header(id, ..)
+        | Line::Pill(id, ..)
+        | Line::Quote(id, ..)
+        | Line::Diff(id, _)
+        | Line::Text(id, _)
+        | Line::Answer(id, ..)
+        | Line::Reply(id, _)
+        | Line::Proposed(id, _)
+        | Line::Choices(id)
+        | Line::Addressed(id)
+        | Line::Rewrite(id, _)
+        | Line::Buttons(id)
+        | Line::Reopen(id)
+        | Line::Send(id, _) => *id,
+        Line::Picture { thread, .. } => *thread,
+        _ => return None,
+    };
+    (id != NEW_DRAFT).then_some(id)
+}
+
+/// A number that's the same while the rows of words a selection is made on are: each row of
+/// a card's or an answer's words, where it is in the list, and where it starts. What else
+/// changes, as which card is lit or how long ago each was written, leaves it as it was.
+pub fn words_mark(area: Rect, shown: Shown, measure: &dyn Measure) -> u64 {
+    let width = text_width(area, shown.4, measure);
+    let all = lines(shown, width, measure);
+    let a = across(area, shown.4, measure);
+    let mut hasher = DefaultHasher::new();
+    for (index, line) in all.iter().enumerate() {
+        if let Some((text, from, size)) = words_row(line, &a, measure) {
+            (index, text, from.to_bits(), size).hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
+/// Tints what's selected of a row of words, `index` in the list, set at `size` from `from`:
+/// under its letters where there are pictures, and behind them in the cells.
+fn tint_selected(
+    grid: &mut Grid,
+    (index, text): (usize, &str),
+    (from, cell, y): (f32, u16, u16),
+    (size, right, over_line): (u8, u16, bool),
+    view: View,
+    (measure, theme): (&dyn Measure, &Theme),
+    under: bool,
+) {
+    let Some((first, last)) = view.selected else {
+        return;
+    };
+    if index < first.0 || index > last.0 {
+        return;
+    }
+    let count = text.chars().count();
+    let start = if index == first.0 {
+        first.1.min(count)
+    } else {
+        0
+    };
+    let end = if index == last.0 {
+        last.1.min(count)
+    } else {
+        count
+    };
+    if start >= end {
+        return;
+    }
+    if measure.in_cells() {
+        if !under {
+            let left = cell + start as u16;
+            let wide = ((end - start) as u16).min(right.saturating_sub(left));
+            grid.set_style(Rect::new(left, y, wide, 1), |style| Style {
+                bg: theme.selection,
+                ..style
+            });
+        }
+        return;
+    }
+    if under {
+        let font = Font {
+            size,
+            ..Font::default()
+        };
+        let advances = measure.advances(text, font);
+        let x = from + stretch(&advances, 0, start);
+        let wide = stretch(&advances, start, end - start);
+        // A hair inside its row, as a page's selection pill is, and clear of a line under it.
+        let foot = if over_line {
+            SELECTION_OVER_LINE
+        } else {
+            SELECTION_INSET
+        };
+        let tall = 1.0 - SELECTION_INSET - foot;
+        let band = Bounds::cells(x, f32::from(y) + SELECTION_INSET, wide, tall);
+        grid.panel(band, 0, Some(theme.selection), None);
+    }
+}
 
 /// Each web address in a run of words, as the bytes it takes: `http://` or `https://` to the
 /// next space, without the stop or bracket a sentence puts after it.
@@ -3206,7 +3587,21 @@ pub fn draw(
             }
             Line::Text(_, text) => {
                 let place = (a.text, text_x, y);
+                let tint = |grid: &mut Grid, under| {
+                    let sizes = (100, right, over_answer(&all, index));
+                    tint_selected(
+                        grid,
+                        (index, text.as_str()),
+                        place,
+                        sizes,
+                        view,
+                        (measure, theme),
+                        under,
+                    );
+                };
+                tint(grid, true);
                 draw_linked(grid, place, text, (inner, 100, right), (measure, theme));
+                tint(grid, false);
                 if over_answer(&all, index) {
                     grid.lift_since(from, over_answer_lift(100, measure));
                 }
@@ -3255,7 +3650,21 @@ pub fn draw(
             }
             Line::Reply(_, text) => {
                 let place = (a.text, text_x, y);
+                let tint = |grid: &mut Grid, under| {
+                    let sizes = (SMALL, right, over_answer(&all, index));
+                    tint_selected(
+                        grid,
+                        (index, text.as_str()),
+                        place,
+                        sizes,
+                        view,
+                        (measure, theme),
+                        under,
+                    );
+                };
+                tint(grid, true);
                 draw_linked(grid, place, text, (inner, SMALL, right), (measure, theme));
+                tint(grid, false);
                 if over_answer(&all, index) {
                     grid.lift_since(from, over_answer_lift(SMALL, measure));
                 }
@@ -3268,7 +3677,21 @@ pub fn draw(
                     ..inner
                 };
                 let place = (start, cell_of(start).0, y);
+                let tint = |grid: &mut Grid, under| {
+                    let sizes = (SMALL, right, over_answer(&all, index));
+                    tint_selected(
+                        grid,
+                        (index, text.as_str()),
+                        place,
+                        sizes,
+                        view,
+                        (measure, theme),
+                        under,
+                    );
+                };
+                tint(grid, true);
                 draw_linked(grid, place, text, (style, SMALL, right), (measure, theme));
+                tint(grid, false);
                 grid.lift_since(from, lift);
             }
             Line::File(opens, place, count) => {

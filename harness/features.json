@@ -7376,5 +7376,19 @@
     "title": "Each comment's card, glance card and review heading says its number, and a mention of a comment in a card or a terminal's output goes to it",
     "test": "a_mention_of_a_comment_goes_to_it",
     "passes": true
+  },
+  {
+    "id": "comment-card-copy",
+    "milestone": 15,
+    "title": "A comment card's words and its answers' are selected with the mouse and copied by the copy key, and its right-click menu copies what's selected, the comment or its quote",
+    "test": "a_cards_words_are_selected_with_the_mouse_and_copied",
+    "passes": true
+  },
+  {
+    "id": "comment-card-menu-copies",
+    "milestone": 15,
+    "title": "A right click on a comment's card has Copy, Copy Comment and Copy Quote, with a link's rows over them",
+    "test": "a_right_click_on_a_card_copies_it_its_quote_or_whats_selected",
+    "passes": true
   }
 ]

@@ -157,6 +157,9 @@ EXPECT = {
     "50-comment-picture-light": "yours",
     "50-comment-link-menu": "Copy Link",
     "50-comment-mentions": "Comment 1",
+    "50-comment-selected": "same gap",
+    "50-comment-copy-menu": "Copy Quote",
+    "50-comment-copy-menu-light": "Copy Quote",
     "m1-agent-names": "Fix the login",
     "m1-agent-names-tip": "Fix the login",
     "m1-agent-names-list": "Refund route",
@@ -1809,6 +1812,21 @@ with tempfile.TemporaryDirectory() as made:
         json.dump(mentions, f)
     mentioned = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0]]
     shoot("50-comment-mentions", mentioned, NOTE_FILE, size="150x44", cellix=True)
+    # A card's words selected with a drag, tinted as a page's selection is, and a right click on
+    # them: Copy, Copy Comment and Copy Quote. Each scene has the comments written afresh, so
+    # none stands on what the one before left.
+    def mentions_again():
+        os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
+        with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+            json.dump(mentions, f)
+    selected = [*mentioned, ["drag", *ON("same gap", 0), *ON("cost claim", 10)], ["wait", 1.2]]
+    mentions_again()
+    shoot("50-comment-selected", selected, NOTE_FILE, size="150x44", cellix=True)
+    copy_menu = [*selected, ["right", *ON("cost claim", 2)], ["wait", 0.6]]
+    for scene, extra in (("50-comment-copy-menu", {}),
+                         ("50-comment-copy-menu-light", {"background": "eff1f5"})):
+        mentions_again()
+        shoot(scene, copy_menu, NOTE_FILE, size="150x44", cellix=True, **extra)
     # A review the agent has checked: a verdict on the reviewer's comment and a suggestion.
     review = [
         {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",

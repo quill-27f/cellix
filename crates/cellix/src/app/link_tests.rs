@@ -172,14 +172,14 @@ fn a_comments_link_has_open_and_copy_on_a_right_click() {
     choose(&mut app, "Open Link");
     assert_eq!(opened(&log), "https://example.com/answer/b");
 
-    // Words that aren't a link have no menu.
+    // Words that aren't a link have the card's menu, which copies the comment, and none of
+    // the link's rows: they had no menu, and nothing on a card could be copied (the user, 20
+    // November).
     let (x, y) = find(&screen(&app), "See https");
     right(&mut app, (x + 1, y));
-    assert!(
-        matches!(app.overlay, Overlay::None),
-        "{}",
-        screen(&app).text()
-    );
+    let rows = menu_rows(&app, &["Copy Comment", "Open Link", "Copy Link"]);
+    assert_eq!(rows[0], Some(y + 1), "{}", screen(&app).text());
+    assert_eq!(rows[1..], [None, None], "{}", screen(&app).text());
 }
 
 /// On a page a right click already has a menu. On a link the link's two rows stand at its
