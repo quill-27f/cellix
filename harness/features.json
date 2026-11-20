@@ -7439,5 +7439,12 @@
     "title": "A selection on a comment card stands 1.8 to 1 from the card, its words at 4.5 to 1",
     "test": "a_selection_on_a_card_is_seen_and_its_words_read_on_it",
     "passes": true
+  },
+  {
+    "id": "agent-asks-as-subject",
+    "milestone": 15,
+    "title": "The agent that asks to start another is the sentence's subject, its tab's name after it, quietly",
+    "test": "an_agent_named_by_its_work_is_still_the_one_that_asks",
+    "passes": true
   }
 ]

@@ -101,14 +101,27 @@ pub(super) struct Start {
     pub(super) task: Option<String>,
     parent: Option<String>,
     outlive: bool,
-    /// Who asked, as the card names them.
+    /// Who asked, as the card's sentence names them: the agent, as "Claude Code", or "An
+    /// agent" or "You".
     pub(super) by: String,
+    /// Which of them, by its tab's name, where that isn't the agent's own: said after the
+    /// sentence, quietly (`which`). Tabs are named by their work, and as the sentence's subject
+    /// a name such as "Review the queue" read as an order: "Review the queue wants to start
+    /// Codex" (0.12.0's last review, 170 and 171).
+    pub(super) tab: Option<String>,
     /// Where it runs, as the card says it: None for this folder. Worked out as the start is
     /// asked for, so drawing the card asks nothing of the disk.
     place: Option<String>,
 }
 
 impl Start {
+    /// Which agent asked, after a sentence about it: " · " and its tab's name, or nothing.
+    pub(super) fn which(&self) -> String {
+        self.tab
+            .as_ref()
+            .map_or_else(String::new, |tab| format!(" · {tab}"))
+    }
+
     /// What the card calls what it starts: the agent's name, or the command.
     pub(super) fn what(&self) -> String {
         match self.kind.as_str() {
@@ -707,7 +720,11 @@ impl App {
                         kind: Waits::Permission,
                         key: format!("start:{}", start.name),
                         title: format!("{} wants to start {}", start.by, start.what()),
-                        detail: "Allow or deny it in the card".to_string(),
+                        // Which one, by its tab's name, on the quiet line under it.
+                        detail: match &start.tab {
+                            Some(tab) => format!("{tab} · Allow or deny it in the card"),
+                            None => "Allow or deny it in the card".to_string(),
+                        },
                         since: Instant::now(),
                         target: WaitTarget::Session(parent.unwrap_or_default()),
                     });
@@ -800,9 +817,17 @@ impl App {
         let caller = self.caller_index(from);
         let parent = caller.and_then(|i| self.dock.sessions[i].called().map(str::to_string));
         let someone = if from.agent { "An agent" } else { "You" };
-        // The person knows an agent by its tab, as it's called there.
+        // The person knows an agent by what it is, the sentence's subject, and which one by its
+        // tab's name as the tab shows it, said after the sentence (`Start::tab`).
         let tab = caller.filter(|_| parent.is_some());
-        let by = tab.map_or_else(|| someone.to_string(), |i| self.dock.sessions[i].label());
+        let by = tab.map_or_else(
+            || someone.to_string(),
+            |i| self.dock.sessions[i].name.clone(),
+        );
+        let tab = tab
+            .and_then(|i| self.dock.session_names().into_iter().nth(i))
+            .map(|(shown, _)| shown)
+            .filter(|shown| *shown != by);
         let place = self.place_of(&folder);
         Ok(Start {
             name,
@@ -811,6 +836,7 @@ impl App {
             folder,
             task,
             by,
+            tab,
             parent,
             outlive,
             place,
@@ -833,7 +859,11 @@ impl App {
                     task: start.task.clone(),
                 };
                 let what = start.what();
-                self.say(format!("{} started {} ({what})", start.by, start.name));
+                let which = start.which();
+                self.say(format!(
+                    "{} started {} ({what}){which}",
+                    start.by, start.name
+                ));
             }
             Err(e) => {
                 pending.step = Step::Answered;
@@ -1549,6 +1579,22 @@ impl App {
         );
         let title = format!("{} wants to start {}", start.by, start.what());
         grid.label(area.x + 4, area.y + 1, &title, strong, right);
+        // Which agent asked, by its tab's name, quietly after the sentence, where there's room
+        // for some of it: cut short at a letter with "…", never mid-letter.
+        if start.tab.is_some() {
+            let bold = Font {
+                bold: true,
+                ..Font::default()
+            };
+            let x = f32::from(area.x + 4) + self.measure.width(&title, bold);
+            let cell = area.x + 4 + title.chars().count() as u16;
+            let width = |words: &str| self.measure.width(words, Font::default());
+            let which = start.which();
+            let tail = crate::agent_task::fit(&which, f32::from(right) - x, width);
+            if tail.chars().count() > " · …".chars().count() + 2 {
+                grid.label_at(x, cell, area.y + 1, &tail, dim, right, 100);
+            }
+        }
         // The agent's mark stands taller than the title's capitals: down 4 px, so the mark is
         // as far under the card's top as the buttons are over its foot. It stood 20 px under it.
         let down = measures::rows(4.0, &*self.measure).unwrap_or(0.0);
@@ -1842,6 +1888,49 @@ mod tests {
             held: None,
             agent: true,
         }
+    }
+
+    /// The sentence that asks is the agent's, with its tab's name after it, quietly, where the
+    /// tab is named by its work: "Claude Code wants to start Codex · Review the queue", where it
+    /// read "Review the queue wants to start Codex" (0.12.0's last review, 170). The inbox says
+    /// the same, which one on its quiet line, and so does the bar once it's started (171).
+    #[test]
+    #[cfg(unix)]
+    fn an_agent_named_by_its_work_is_still_the_one_that_asks() {
+        let (dir, mut app, fake) = project();
+        let lead = lead(&mut app, &fake);
+        app.dock.sessions[0].topic = Some("Review the queue".into());
+        assert_eq!(
+            app.dock.sessions[0].label(),
+            "Review the queue",
+            "its tab's name"
+        );
+        let reviewer = run(dir.path(), "reviewer", "codex", Some("Review alpha.txt"));
+        let _started = call(&mut app, &lead, reviewer);
+        let grid = screen(&app);
+        let text = grid.text();
+        let said = "Claude Code wants to start Codex · Review the queue";
+        assert!(text.contains(said), "{text}");
+        assert!(!text.contains("queue wants"), "{text}");
+        // The sentence in the words' colour, which one quietly after it.
+        let (x, y) = find(&grid, said);
+        assert_eq!(grid.cell(x, y).style.fg, app.theme.text.fg);
+        let (x, y) = find(&grid, "· Review the queue");
+        assert_eq!(grid.cell(x + 2, y).style.fg, app.theme.popup_dim);
+        let asked = app.inbox.items.iter().find(|w| w.key == "start:reviewer");
+        let asked = asked.expect("it waits in the inbox");
+        assert_eq!(asked.title, "Claude Code wants to start Codex");
+        assert!(
+            asked.detail.starts_with("Review the queue · "),
+            "{}",
+            asked.detail
+        );
+        let at = find(&screen(&app), "[Allow]");
+        click(&mut app, at);
+        assert_eq!(
+            *app.message.borrow(),
+            "Claude Code started reviewer (Codex) · Review the queue"
+        );
     }
 
     #[test]

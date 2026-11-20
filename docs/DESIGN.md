@@ -2346,7 +2346,11 @@ own hooks; a program with none is working until it ends.
   column here, from the sheet's edge on both sides, the rule for every card. Its buttons end as
   far in from its right edge as its words start from its left, its panel's half column painted
   past their cells (they ended 33 px in where the words start 24 in). Always is kept in the
-  folder's `state.json`. `run` waits 90 s for an answer and says what happened. While the card
+  folder's `state.json`. The asking agent is the sentence's subject by what it is, "Claude Code
+  wants to start Codex", with its tab's name after it in the card's quiet colour, cut short
+  with "…" or left off where there's no room ("· Review the queue"): tabs are named by their
+  work, and as the subject such a name read as an order. The inbox and the bar say it the same
+  way. `run` waits 90 s for an answer and says what happened. While the card
   waits, the asking agent waits on the person, and its tab says so with the needs-you dot, as
   its row in the Agents list, its workspace's chip and the bell do: it turned, and the chip
   said "working" (0.11.0's release review, 170).
