@@ -2,6 +2,23 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.12.1] - 2026-11-20
+
+The cursor blinks, every box edits text as the others do, and an agent's tab is named by the conversation it holds, wherever it runs.
+
+### Added
+- The cursor blinks, as VS Code's does, half a second each way: in files and pages, in every text box, and in a terminal pane unless its program asks for a steady cursor. Any key, click or move shows it solid and starts the blink again, and it stays still while Cellix's window is behind another. Settings › Editor › Cursor blinking turns it off (`cursor_blink` in `~/.config/cellix/settings.json`). In the cell tier the terminal blinks its own cursor; elsewhere a blink re-shows a picture the terminal already holds, a few hundred bytes a second, and a window in the background wakes for nothing.
+
+### Changed
+- An agent's tab is named by the conversation it holds, wherever it runs. Cellix reads Claude Code's own record of each running session (`~/.claude/sessions/<pid>.json`, under `CLAUDE_CONFIG_DIR` when set) for its conversation, and names the tab by that conversation's title or its first prompt, so a tab no longer depends on which `cellix` the plugin's hooks find first on the PATH. After `/clear`, `/resume` or a new conversation in the same tab, the name, the first prompt and the context meter start over.
+- `claude` typed at a Terminal tab's prompt names and marks that tab as an agent's tab, by its conversation, where it read "claude"; its spinner and dots follow its hooks, and when it exits the tab is a terminal again.
+- Every text box edits as the comment box does: Rename tab and every other prompt (Rename Symbol, a file's name, a stash's message…), both of the Find bar's fields, the Search sidebar's boxes, Settings' filter, the commit message and New Worktree. They have a caret that the arrows, Home and End move, a word at a time with Alt or Ctrl, Option+Backspace and Ctrl+W delete the word before it, Delete, Cmd+Backspace and Ctrl+K clear to the line's ends, paste goes in at the caret, and a click puts the caret where you press. Where they took letters and Backspace only, Ctrl+W in a box now deletes a word rather than closing the tab behind it.
+- A box's caret stands where it is, between two letters and clear of both, and a text longer than its box shows the part the caret is in.
+
+### Fixed
+- Pasting while the Search sidebar or Settings had the keyboard went into the file behind them, and the emoji picker's field didn't take the word and line deletes.
+- Claude Code tabs stayed "Claude Code" on a machine where the hooks' `cellix` was an older one, or where Claude Code was started from a Terminal tab.
+
 ## [0.12.0] - 2026-11-20
 
 Ask: select words on a page, in code or in a terminal's output and ask the agent about them, as a side question that comes back on a card, not as a comment. Agents' tabs are named by what they're working on, every comment shows its number, and "#33" goes to comment 33, whose words you can now select and copy. Installing a language server works on Linux without root, and Settings says how each one installs before you press. The Agents list shows only agents you can act on here, the comment order you pick is kept for every Cellix on the machine, and a round of polish evens out tabs, buttons, cards and pages.

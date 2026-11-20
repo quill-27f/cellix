@@ -230,7 +230,9 @@ merge's while one is under way, and so on. A command it leaves out still runs by
 Both lists scroll with the arrows, Page Up and Page Down and the wheel, their field takes the
 caret keys and Ctrl+V, and the letters you typed are picked out in each row.
 
-Ctrl+W closes a tab and Ctrl+Q quits. Ghostty keeps Cmd+W and Cmd+Q for itself, so they
+Ctrl+W closes a tab and Ctrl+Q quits; in a text box Ctrl+W deletes the word before the caret, as
+in a shell. Every box edits as the comment box does: the arrows, Home and End, a word at a time
+with Alt or Ctrl, Option+Backspace, Cmd+Backspace, and a click puts the caret where you press. Ghostty keeps Cmd+W and Cmd+Q for itself, so they
 only reach Cellix if you unbind them with `keybind = cmd+w=unbind` and
 `keybind = cmd+q=unbind` in your Ghostty config.
 
@@ -439,9 +441,11 @@ Getting Started, in the command palette or on the empty window, is a short guide
 An agent's tab in the side pane says what it's doing: its mark, its name, how full its context is,
 and a spinner while it works or a dot when it needs you or finished while you were looking
 elsewhere. The name is the one the agent gives itself, else its conversation's title, else what you
-first asked it, so three Claude Code tabs read as three pieces of work; two alike are told apart by
+first asked it, so three Claude Code tabs read as three pieces of work. Cellix reads Claude Code's own
+record of its running sessions for this, and the name follows `/clear` and `/resume`; two alike are told apart by
 "(2)", the tab's tip has the whole name, and Rename on the tab's menu gives it your own. A shell's
-tab is named after the program running in it, and turns while it runs. The Agents list stands by
+tab is named after the program running in it, and turns while it runs; `claude` typed at its
+prompt makes it an agent's tab, named and marked as one, until it exits. The Agents list stands by
 what needs you: Needs you, Done, Working and Idle, each agent with how long since it changed. It
 lists the agents with a tab here and their helpers, so a press on any row opens something.
 
@@ -699,7 +703,9 @@ wheel jump by lines, for a slow link, and `minimap: false` hides the minimap. `m
 stills the spinners (Motion under Settings › Appearance). `word_wrap`,
 `sticky_scroll` (with `sticky_scroll_lines`, 5 unless set), `bracket_pairs` and `inlay_hints` turn
 those on or off for code. `reading_width: false` lets a page's text run the whole width of its pane
-rather than keep to 88 columns; it's Reading width under Settings › Editor.
+rather than keep to 88 columns; it's Reading width under Settings › Editor. `cursor_blink: false`
+holds the cursor still (Cursor blinking under Settings › Editor); it blinks as VS Code's does,
+solid while you type, and still while Cellix's window is behind another.
 `language_servers` maps a language to a command, `formatters` maps one to a formatter that
 reads stdin and writes stdout, and `browser` replaces the command that opens web pages.
 
