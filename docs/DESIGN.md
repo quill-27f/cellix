@@ -1154,16 +1154,16 @@ either (see Look). Three more follow from the same room:
   height it has on the terminal's line, 32 px, in a row of 50, and a row of a list that holds
   a button is washed its whole height when pointed at (Problems, Settings' language servers),
   so the button has 10 px of it over and 8 under. In a wash of 39 px set in from the row, its
-  foot lay on the wash's once it went down onto the row's baseline (the polish review). Its words' span, a capital's top to a tail's foot, stands in its middle,
-  5 px clear of it either way, as every button's does, and it goes down with its words onto
-  the baseline of the row's own words (`Grid::beside_words`, `WORDS_BASELINE`, 3 px on a row
-  of 50): 12 px over it and 6 under in the row, its foot on a pointed row's wash's. A label
-  in 90 per cent of the row's size rode 3 px over the words beside it (0.11.0's release check,
-  R2, and the polish review: Keep, Ask Agent, Keep as Tab). Peek's header has its line at the
-  row's foot, so there Keep as Tab goes down only as far as keeps 8 px from it, a pixel, and
-  its words stand 2 px over the name's; so do Install and Ask Agent in their whole-row washes
-  (`measures::row_button_foot_lift`). The suggestion's row in Review (Keep and Dismiss) has no
-  wash, and its buttons stand on its baseline. As tall
+  foot lay on the wash's once it went down onto the row's baseline (the polish review). A
+  capital's height of its words stands in its middle, as every button's does, and it goes down
+  with its words onto the baseline of the row's own words (`Grid::beside_words`,
+  `WORDS_BASELINE`, a pixel on a row of 50): 10 px over it and 8 under in the row. A label in
+  90 per cent of the row's size rode 3 px over the words beside it (0.11.0's release check, R2,
+  and the polish review: Keep, Ask Agent, Keep as Tab), and 3 px down, Keep and Dismiss stood
+  6 px over the next line in Review (the release review of next). Where its row's foot is an
+  edge, the line under peek's header, a whole-row wash, a suggestion's row in Review, a button
+  that would stand within 8 px of it stays in the row's middle instead
+  (`measures::row_button_foot_lift`); on a row of 50 the pixel keeps 8. As tall
   as the wash, its edges lay on the wash's and the two read as one shape with a step in it; at
   27 px, for 6 px of wash, a "p"'s tail ended on its foot (0.11.0's release review: Keep, Keep
   as Tab, Show Source, Ask Agent, Install). Its corners are 6 px where a button's are 8 (`ROW_BUTTON_RADIUS`),
@@ -1352,19 +1352,22 @@ reaches 4 px further down than an "h" reaches up. A text box is seven eighths of
 which leaves a tail as far from the box's foot as a tall letter is from its top; the caret
 stands in the box's middle, and what shares the box's line, a search box's switches and the
 Find bar's count, is raised with the words. The band behind a picked or pointed row, a
-palette's and a menu's, is 33 px of 36 (`BAND_HEIGHT`). A button's words stand by their
-font's span in its chip (`Grid::button_label`, `Paint::Text`'s `span_centred`): a capital's
-top to a tail's foot in their font, "Hg", whatever letters they have, is in its middle, so
-every label of a size has one baseline and a row of buttons with it. In the font's line, as
-other words stand, "Show Source" had 5 px over its capitals and 10 under, and a card's "Accept
-Rewrite" 9 over and 6 under its tails (0.11.0's release check, P2). Centred on its own ink
-for a while, each label had its own baseline, and a row's rode high whenever one had a "p":
-"Dismiss" stood 4 px under its button's top and 10 over its foot (0.11.0's polish review). A
+palette's and a menu's, is 33 px of 36 (`BAND_HEIGHT`). A button's words stand by a capital's
+height in its chip (`Grid::button_label`, `Paint::Text`'s `span_centred`): a capital's top as
+far from its top as the baseline from its foot, in their font ("H"), whatever letters they
+have, so every label of a size has one baseline, a row of buttons with it, and tails hang
+under it as in any interface, 4 to 5 px over the foot of a button of 38. In the font's line,
+as other words stand, "Show Source" had 5 px over its capitals and 10 under, and a card's
+"Accept Rewrite" 9 over and 6 under its tails (0.11.0's release check, P2). Centred on its own
+ink for a while, each label had its own baseline, and a row's rode high whenever one had a
+"p": "Dismiss" stood 4 px under its button's top and 10 over its foot (0.11.0's polish
+review); centred by a capital's top to a tail's foot, "Hg", every label without tails stood 2
+to 3 px high and segmented controls 3 px over their row's words (the release review of next). A
 button in a row of words, at the row's end or on its own, goes down with its words onto the
 row's baseline (`Grid::beside_words`), the box moving and not the words: Reject and Accept
 on a hunk's heading, Keep and Dismiss on a suggestion's row, Ask Agent, Install. A button by
 itself is 38 px, one in a row 30 (32 nominal). A selection's buttons, the conflict header's,
-the pane's order and Check My Review stand by the span too. A workspace's chip is three quarters of the bar's row, keeps 8 px from the
+the pane's order, segmented controls and Check My Review stand by it too. A workspace's chip is three quarters of the bar's row, keeps 8 px from the
 window's edge where the terminal has no padding of its own, and its words and icons are
 raised a pixel and a half in it; a pill in the comments pane is three quarters of a row too,
 its words in its middle. An icon inside a text box or a chip is 13 pt (`SMALL_GLYPH`), an
@@ -1486,12 +1489,19 @@ title's capitals and its buttons' foot have the air its sides have, 24 to 32 px
 (`measures::card_parts`); they had 21 over and under and 17 or 11 over the buttons. On the
 terminal's line a row stands between its words and its buttons. Its words wrap inside it, and
 it stands inside one sheet, never across the line between the file and the pane
-(`App::corner_frame`). Over the side pane every card is the asking card's: a column in from
-each of the pane's sides however wide it is, its panel half a column into that column
-(`App::card_lead`), so it stands about 16 px from the pane's lines with its words 24 px in, its
-buttons ending inside its words' column, and a command's box 12 px outside that column with
-the command on it, as far in from the card's edge as its command is from its own
-(`COMMAND_BOX_OUT`; at 16 it stood 8 px inside the card's edge and read as a strip across it).
+(`App::corner_frame`). Every floating card keeps 24 px of its ground inside its line on all four
+sides, 26 from its edge with the line and the blended pixel inside it (`App::card_room`): its
+panel half a column into its first column (`App::card_lead`), so its words' ink is 24 px in,
+its buttons painted right of their cells so the last ends as far from its right
+(`App::card_button_nudge`), its title's capitals 24 px under its top and its buttons' foot 24
+over its foot, and a command's box on those insets, ending where the buttons do, with the
+command 12 px into it (`COMMAND_PADDING`). The install card over the file had 32 px and 29, and
+over the pane the buttons ended 32 to 34 px from the right; 12 px outside the words, the box ran
+22 px past them (the release review of next), and 24 px from the edge, the buttons kept 22 of
+ground. Over the side pane every card is the asking
+card's: a column in from each of the pane's sides however wide it is, so it stands about 16 px
+from the pane's lines. The asking card's mark beside its title stands taller than the title's
+capitals, so that row goes down 4 px.
 Two columns in and capped at its width, the install, logout and stopped
 cards stood 24 px from the pane's left and 33 from its right with their words 33 px in
 (0.11.0's release review). A card in a sheet's corner ends on the sheet's last row and is

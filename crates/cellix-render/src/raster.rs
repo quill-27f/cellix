@@ -65,10 +65,11 @@ struct TextMask {
 const INK: u8 = 85;
 
 /// What a button's words are stood by in its middle, whatever letters they have: a capital's
-/// top to a tail's foot in their font. Each by its own ink, words without tails stood lower than
-/// words with them, a row of buttons had as many baselines, and "Dismiss" stood 4 px under its
-/// button's top and 10 over its foot (0.11.0's polish review).
-const SPAN: &str = "Hg";
+/// height in their font, its top to the baseline, so tails hang under it as in any interface.
+/// Each by its own ink, a row of buttons had as many baselines and "Dismiss" stood 4 px under
+/// its button's top and 10 over its foot; by a capital's top to a tail's foot, every label
+/// without tails stood 2 to 3 px high (the release review of next, 2026-11-20).
+const SPAN: &str = "H";
 
 /// The first and last rows of a `width`-wide picture whose `alpha` reaches `INK` anywhere.
 fn ink_rows(alpha: &[u8], width: usize) -> Option<(usize, usize)> {
@@ -1555,11 +1556,11 @@ mod tests {
             button.len()
         );
         // Inside the wash, gone down with its words onto the row's baseline
-        // (`WORDS_BASELINE`), 3 px under the wash's middle: its foot is on the wash's.
+        // (`WORDS_BASELINE`), a pixel under the wash's middle.
         let over = round.iter().filter(|y| **y < button[0]).count();
         let under = round.len() - over;
         assert!(
-            (6..=8).contains(&over) && under <= 1,
+            (4..=6).contains(&over) && (2..=4).contains(&under) && over >= under,
             "{over} px of wash over the button, {under} under"
         );
         // Its corners are tighter than a button's, with its height.
@@ -1616,15 +1617,14 @@ mod tests {
         // Clear of the row over it; under it, it's gone down onto the row's baseline.
         let (top, foot) = (button[0], *button.last().unwrap());
         assert!(top >= 8, "{top} px over it");
-        // Its words, white on its red: from the capital's top to the tail's foot.
-        let ink: Vec<usize> = (0..image.height)
-            .filter(|y| (100..170).any(|x| at(x, *y).1 > 90))
-            .collect();
-        let (caps, tail) = (ink[0], *ink.last().unwrap());
-        let (over, under) = (caps - top, foot - tail);
+        // Its words, white on its red: the capital's top as far from its top as the baseline
+        // from its foot, and the tail of its "p" clear of the foot.
+        let [.., caps, tail, baseline] = chip_and_ink(&image, 45, (100, 170));
+        let (over, under) = (caps - top, foot - baseline);
         assert!(
-            under >= 4 && over.abs_diff(under) <= 1,
-            "{over} px over its capitals, {under} under its tails"
+            over.abs_diff(under) <= 1 && foot - tail >= 2,
+            "{over} px over its capitals, {under} under its baseline, {} under its tail",
+            foot - tail
         );
     }
 
@@ -1666,13 +1666,14 @@ mod tests {
         ]
     }
 
-    /// A button's words stand by their font's span in its middle, a capital's top to a tail's
-    /// foot, whatever their letters, on a row with room and on the terminal's line alike: so
-    /// every label of a size has one baseline, and a row of buttons with it. In the font's
-    /// line "Show Source" stood 5 px under its button's top and 10 over its foot; each by its
-    /// own ink, "Dismiss" stood 4 px under its top and 10 over its foot beside "Keep", and a
-    /// row's labels rode high whenever one of them had a "p" (0.11.0's polish review). A button
-    /// in a row of words, at its end or on its own, goes down onto the words' baseline with its
+    /// A button's words stand by a capital's height in its middle, its top as far from the
+    /// button's top as the baseline from its foot, whatever their letters, on a row with room
+    /// and on the terminal's line alike: so every label of a size has one baseline, a row of
+    /// buttons with it, and tails hang under it. In the font's line "Show Source" stood 5 px
+    /// under its button's top and 10 over its foot; each by its own ink, "Dismiss" stood 4 px
+    /// under its top and 10 over its foot beside "Keep"; by a capital's top to a tail's foot,
+    /// every label without tails stood 2 to 3 px high (the release review of next). A button in
+    /// a row of words, at its end or on its own, goes down onto the words' baseline with its
     /// words (`Grid::beside_words`): "Reject" rode 3 px over the hunk's heading beside it.
     #[test]
     fn a_buttons_words_stand_on_one_baseline_by_their_fonts_span() {
@@ -1696,14 +1697,13 @@ mod tests {
                     let image = r.row(&grid, 0);
                     let [top, foot, caps, tails, baseline] = chip_and_ink(&image, 21, (40, 330));
                     baselines.push((label, baseline - top, foot - baseline));
-                    // A capital and a tail: the span itself, in the middle.
-                    if label == "Keep" {
-                        let (over, under) = (caps - top, foot - tails);
-                        assert!(
-                            over.abs_diff(under) <= 1 && under >= 4,
-                            "{label} on a row of {row}: {over} px over its ink, {under} under"
-                        );
-                    }
+                    // A capital's top as far from the top as the baseline from the foot, and
+                    // a tail, where there is one, clear of the foot.
+                    let (over, under) = (caps - top, foot - baseline);
+                    assert!(
+                        over.abs_diff(under) <= 1 && foot - tails >= 2,
+                        "{label} on a row of {row}: {over} px over its capitals, {under} under"
+                    );
                 }
                 let first = baselines[0];
                 assert!(
@@ -1739,10 +1739,11 @@ mod tests {
                     baseline.abs_diff(words) <= 1,
                     "{label}: its baseline at {baseline}, the words' at {words}"
                 );
-                // Its chip went down with its words, from the row's middle.
+                // Its chip went down with its words, from the row's middle; at a row's end, at
+                // the terminal's line's height, it keeps 8 px from the row's foot.
                 let (over, under) = (top, image.height - 1 - foot);
                 assert!(
-                    over >= under + 4,
+                    over >= under && (own || under >= 8),
                     "{label}: {over} px over it, {under} under"
                 );
             }

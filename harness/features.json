@@ -6813,7 +6813,7 @@
   {
     "id": "button-words-by-ink",
     "milestone": 15,
-    "title": "A button's words stand by their font's span in its middle, so labels have one baseline, and a button in a row of words stands on the words' baseline",
+    "title": "A button's words stand by a capital's height in its middle, so labels have one baseline with tails hanging under it, and a button in a row of words stands on the words' baseline",
     "test": "a_buttons_words_stand_on_one_baseline_by_their_fonts_span",
     "passes": true
   },
@@ -6995,7 +6995,7 @@
   {
     "id": "command-box-12-out",
     "milestone": 15,
-    "title": "A card's command box stands 12 px outside its words, as far in from the card's edge as its command is from its own",
+    "title": "A card's command box stands on the card's 24 px insets, ending with its buttons, its command 12 px in",
     "test": "a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in",
     "passes": true
   },
@@ -7088,6 +7088,20 @@
     "milestone": 15,
     "title": "Ask Agent on one comment's card hands the agent that comment alone",
     "test": "ask_agent_on_one_card_sends_that_comment_alone",
+    "passes": true
+  },
+  {
+    "id": "card-24-px-inside",
+    "milestone": 15,
+    "title": "Every floating card keeps 24 px inside its edges: words, last button, title and buttons' foot",
+    "test": "every_floating_card_keeps_24_px_inside_its_edges",
+    "passes": true
+  },
+  {
+    "id": "row-button-fallback-middle",
+    "milestone": 15,
+    "title": "A button at a row's end that would stand within 8 px of an edge at its row's foot stays in the row's middle",
+    "test": "a_row_button_keeps_8_px_from_its_rows_foot_or_stays_in_the_middle",
     "passes": true
   }
 ]

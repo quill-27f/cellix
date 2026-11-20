@@ -1452,7 +1452,13 @@ impl Review {
                 fg: theme.text.fg,
                 ..theme.sidebar
             };
+            // The row is a band to its foot, with the diff's next line under it: the button
+            // keeps 8 px from it or stays in the row's middle.
+            let from = grid.painted_so_far();
             grid.row_button((*x, y), cells, words, fill, style);
+            if let Some(measure) = &self.measure {
+                grid.lift_since(from, crate::measures::row_button_foot_lift(&**measure));
+            }
         }
     }
 

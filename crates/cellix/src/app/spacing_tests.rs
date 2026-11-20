@@ -770,9 +770,10 @@ fn card_air(app: &App, area: Rect, main: Rgb) -> (usize, usize, usize) {
 }
 
 /// A card has a dialog's air round it: as much over its title's capitals and under its
-/// buttons as at its sides, 24 to 32 px, and 24 px between its words, or the box of a
-/// command, and its buttons. The install card had 21 over and under and 17 over its
-/// buttons, the logout card 11 under its command's box, against 34 px at their sides.
+/// buttons as at its sides, 24 px from its line (this counts from the first row inside it, so
+/// 21 to 27), and 24 px between its words, or the box of a command, and its buttons. The
+/// install card had 21 over and under and 17 over its buttons, the logout card 11 under its
+/// command's box, against 34 px at their sides.
 #[test]
 fn a_card_has_a_dialogs_air_round_it() {
     let dir = tempfile::tempdir().unwrap();
@@ -788,14 +789,14 @@ fn a_card_has_a_dialogs_air_round_it() {
     app.note_missing("Java");
     let button = app.theme.button;
     let (over, under, gap) = card_air(&app, app.offer_area(), button);
-    assert!((24..=34).contains(&over), "{over} px over its title");
+    assert!((21..=27).contains(&over), "{over} px over its title");
     assert!(over.abs_diff(under) <= 3, "{over} px over, {under} under");
     assert!((22..=27).contains(&gap), "{gap} px over its buttons");
     // The logout card, whose command's box is last over its buttons.
     app.not_now.push("Java".to_string());
     app.linger = Linger::Offered;
     let (over, under, gap) = card_air(&app, app.linger_area(), button);
-    assert!((24..=34).contains(&over), "{over} px over its title");
+    assert!((21..=27).contains(&over), "{over} px over its title");
     assert!(over.abs_diff(under) <= 3, "{over} px over, {under} under");
     assert!(
         (22..=27).contains(&gap),
@@ -804,10 +805,11 @@ fn a_card_has_a_dialogs_air_round_it() {
 }
 
 /// A card over the side pane stands 16 px from the pane's lines on both sides with its words
-/// 24 px in, its buttons ending inside its words' column, and a command's box 12 px outside
-/// that column with the command on it, as far in from the card's edge as the command is from
-/// its own. The install, logout and stopped-session cards stood 24 px from the pane's left line
-/// and 33 from its right with their words 33 px in; the logout card's box had its edge on its
+/// 24 px of its ground in, its buttons ending as far in from its right, and a command's box on
+/// those insets, ending with the buttons, with the command 12 px into it (the release review of
+/// next: 12 px outside the words, the box ran 22 px past the buttons). The install, logout and
+/// stopped-session cards stood 24 px from the pane's left line and 33 from its right with their
+/// words 33 px in; the logout card's box had its edge on its
 /// words' column, 12 px from its own words, and then 16 px outside it, 8 px inside the card's
 /// edge (0.11.0's release check, P5).
 #[test]
@@ -850,13 +852,16 @@ fn a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in() {
             (22.5..=26.5).contains(&inside),
             "{title}: its words {inside} px in"
         );
-        // Its buttons end at least as far in from its right.
+        // Its buttons end at least 24 px of its ground in from its right, its line and the
+        // blended pixel inside it past that, as its words' ink starts from its left (their
+        // cells start 25.5 px in).
+        let room = measures::CARD_INSET + CARD_LINE_INK;
         for (bounds, fill, ..) in panels(grid) {
             let within = bounds.x >= found.x && bounds.x + bounds.w <= found.x + found.w;
             if within && bounds.h < UNIT && fill.is_some_and(|f| buttons.contains(&f)) {
                 let end = px(found.x + found.w) - px(bounds.x + bounds.w);
                 assert!(
-                    end >= inside - 1.5,
+                    end >= room - 0.5,
                     "{title}: a button ends {end} px from its right"
                 );
             }
@@ -875,24 +880,22 @@ fn a_card_over_the_pane_stands_16_px_from_its_sides_with_its_words_24_in() {
         .find(|(_, fill, ..)| *fill == Some(app.theme.input))
         .expect("the command's box")
         .0;
-    let out = words - px(well.x);
-    assert!(
-        (10.5..=13.5).contains(&out),
-        "the box {out} px outside the words"
-    );
+    // The box on the card's insets, 24 px of its ground in from both its sides past its line
+    // and the blended pixel, ending with the buttons, the command 12 px into it.
     let (card, _) = card(&app, &grid, "Agents here stop");
     let (inside, inside_right) = (
         px(well.x) - px(card.x),
         px(card.x + card.w) - px(well.x + well.w),
     );
+    let room = measures::CARD_INSET + CARD_LINE_INK;
     assert!(
-        (inside - out).abs() <= 2.0 && (inside_right - out).abs() <= 2.0,
-        "the box {inside} and {inside_right} px inside the card, {out} outside the words"
+        (inside - room).abs() <= 1.0 && (inside_right - room).abs() <= 1.0,
+        "the box {inside} and {inside_right} px inside the card"
     );
-    let command = words_at(&grid, "loginctl");
+    let command = words_at(&grid, "loginctl") - px(well.x);
     assert!(
-        (command - words).abs() <= 1.5,
-        "the command on the words' column"
+        (command - 12.0).abs() <= 1.0,
+        "the command {command} px into its box, by {words} words"
     );
 }
 
@@ -942,7 +945,7 @@ fn a_corner_card_stands_as_far_over_its_sheets_foot_as_from_its_side() {
     let pane = app.dock_area().expect("the side pane");
     let (under, side) = air(&app, "Install Java", pane);
     assert!(
-        (14.5..=17.5).contains(&under) && (under - side).abs() <= 1.5,
+        (14.0..=17.5).contains(&under) && (under - side).abs() <= 1.5,
         "over the pane: {under} px over its foot, {side} from its side"
     );
     // Not Now's foot is painted a tenth of a row into the row under its cells.
@@ -973,7 +976,7 @@ fn a_corner_card_stands_as_far_over_its_sheets_foot_as_from_its_side() {
     app.linger = Linger::Offered;
     let (under, side) = air(&app, "Agents here stop", pane);
     assert!(
-        (14.5..=17.5).contains(&under) && (under - side).abs() <= 1.5,
+        (14.0..=17.5).contains(&under) && (under - side).abs() <= 1.5,
         "the logout card: {under} px over the pane's foot, {side} from its side"
     );
 }
@@ -1094,6 +1097,80 @@ fn a_pointed_row_with_a_button_is_washed_whole_round_it() {
     assert!(
         top >= 8 && under >= 8,
         "{top} px of the wash over the button and {under} under it"
+    );
+}
+
+/// Every floating card keeps 24 px of its ground inside its line: its words' ink starts that
+/// far from its left, its last button ends that far from its right, its title's capitals stand
+/// that far under its top and its buttons' foot that far over its foot, over the file and over
+/// the side pane alike, so from its edge, past its line and the blended pixel inside it, 26.
+/// The install card over the file had 32 and 29, and over the pane its buttons ended 32 to 34
+/// px from its right (the release review of next); at 24 from the edge they kept 22 of ground.
+/// (`card_air` counts from the first row of ground, so its 21 to 27 is 24 within a few rows'
+/// rounding.)
+#[test]
+fn every_floating_card_keeps_24_px_inside_its_edges() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("Main.java"), "class Main {}\n").unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    airy(&mut app);
+    app.server_install = Some("exit 0".to_string());
+    app.open(&dir.path().join("Main.java")).unwrap();
+    app.servers.clear();
+    app.note_missing("Java");
+    let sides = |app: &App, title: &str| {
+        let grid = screen(app);
+        let words = words_at(&grid, title);
+        let card = grid
+            .paint
+            .iter()
+            .rev()
+            .find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    shadow: true,
+                    ..
+                } if px(bounds.x) <= words
+                    && words < px(bounds.x + bounds.w)
+                    && bounds.h > UNIT =>
+                {
+                    Some(*bounds)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{title}'s card"));
+        let ends = panels(&grid)
+            .into_iter()
+            .filter(|(b, fill, ..)| {
+                fill.is_some() && b.h < UNIT && b.w > UNIT && b.y > card.y && b.x > card.x
+            })
+            .map(|(b, ..)| px(b.x + b.w))
+            .fold(0.0, f32::max);
+        (words - px(card.x), px(card.x + card.w) - ends)
+    };
+    let main = app.theme.button;
+    let room = measures::CARD_INSET + CARD_LINE_INK;
+    for over_pane in [false, true] {
+        if over_pane {
+            app.run(Command::ListAgents);
+        }
+        let (left, right) = sides(&app, "Install Java");
+        assert!(
+            (22.5..=26.5).contains(&left) && (right - room).abs() <= 1.0,
+            "the install card: words {left} px in, buttons {right} px from its right"
+        );
+        let (over, under, _) = card_air(&app, app.offer_area(), main);
+        assert!(
+            (20..=27).contains(&over) && (20..=27).contains(&under) && over.abs_diff(under) <= 3,
+            "the install card: {over} px over its title, {under} under its buttons"
+        );
+    }
+    app.not_now.push("Java".to_string());
+    app.linger = Linger::Offered;
+    let (left, right) = sides(&app, "Agents here stop");
+    assert!(
+        (22.5..=26.5).contains(&left) && (right - room).abs() <= 1.0,
+        "the logout card: words {left} px in, buttons {right} px from its right"
     );
 }
 

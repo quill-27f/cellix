@@ -313,11 +313,12 @@ const OFFER_BUTTONS: [&str; 3] = ["Install", "Not Now", "Never"];
 /// In the order they stand, the answer last, rightmost, as on every card that asks.
 const LINGER_BUTTONS: [&str; 3] = ["Not Now", "Copy Command", "Turn On"];
 const LINGER_WIDTH: u16 = 52;
-/// Pixels a card's box for a command stands outside its words' column, with the command on
-/// that column: over the side pane, where the words are 24 px in, the box is as far in from the
-/// card's edge as its command is from its own. At `BOX_PADDING`, 16, it stood 8 px inside the
-/// card's edges and read as a strip across it (0.11.0's release check, P5).
-const COMMAND_BOX_OUT: f32 = 12.0;
+/// Pixels between a card's box for a command and the command in it. The box stands on the
+/// card's insets, `CARD_INSET` from its edges, and ends where the buttons do. Outside the
+/// words' column by 16 px it stood 8 px inside the card's edges and read as a strip across it
+/// (0.11.0's release check, P5); by 12 it ran 22 px past the buttons once they stood at the
+/// right (the release review of next).
+const COMMAND_PADDING: f32 = 12.0;
 /// How far into its first row a card's panel starts, and how far short of the end of its
 /// last row it stops, so there's the same air over the title as under the buttons.
 /// Rows left empty between the views and what the one in front shows, where the views are
@@ -343,6 +344,8 @@ const CARD_RADIUS: u8 = 26;
 /// further in, it's a column from the edge on both sides. That column's left half is the
 /// pane's sheet, whatever stood there.
 pub(super) const PANE_CARD_LEAD: f32 = 0.5;
+/// Pixels a card's line and the blended pixel inside it take at its top and its foot.
+const CARD_LINE_INK: f32 = 2.0;
 /// Columns at the end of the pane's title that close it.
 const PANE_CLOSE_REACH: u16 = 3;
 /// A tooltip's height in rows, and the size of its text.
@@ -2380,7 +2383,7 @@ impl App {
     fn offer_hit(&self, at: (f32, f32)) -> Option<&'static str> {
         let row = self.offer_button_row();
         let drop = self.card_drop(self.offer_area(), measures::DialogLast::Words);
-        let at = Self::card_at(at, drop);
+        let at = self.card_at(at, drop);
         self.offer_buttons()
             .into_iter()
             .find_map(|(label, cells, x)| {
@@ -9924,18 +9927,33 @@ impl App {
         self.draw_card_led(grid, area, (self.card_lead(area), last, drop));
     }
 
-    /// How far into its first column a card's panel starts: over the side pane, where it
-    /// stands a column in from each of the pane's sides, `pane_card_lead`, so its panel is
-    /// 16 px from the pane's lines and its words 24 px in from it; nothing elsewhere.
-    fn card_lead(&self, area: Rect) -> f32 {
-        let pane = self
-            .dock_area()
-            .filter(|pane| pane.contains(area.x, area.y));
-        if pane.is_some() {
-            self.pane_card_lead()
-        } else {
+    /// How far into its first column a card's panel starts where there are pictures,
+    /// `PANE_CARD_LEAD`, so its words, two columns into its cells, are 24 px in from its edge:
+    /// over the side pane, where it stands a column in from each of the pane's sides, its panel
+    /// is then 16 px from the pane's lines, and over the file its words stood 32 px in where
+    /// over the pane they stood 24 (the release review of next). Nothing on cells.
+    fn card_lead(&self, _area: Rect) -> f32 {
+        if self.measure.in_cells() {
             0.0
+        } else {
+            PANE_CARD_LEAD
         }
+    }
+
+    /// How far right of their cells a card's buttons are painted, in columns, so the last ends
+    /// `card_room` from the card's right edge, 24 px of its ground inside its line, as its words'
+    /// ink starts from its left: their cells end two columns in, which left 34 px (the release
+    /// review of next), and from `CARD_INSET` alone they kept 22 px of ground where the words
+    /// kept 24. Nothing on cells, where the words and the buttons are both two columns in.
+    fn card_button_nudge(&self) -> f32 {
+        measures::columns(Self::card_room(), &*self.measure)
+            .map_or(0.0, |inset| (2.0 - inset).max(0.0))
+    }
+
+    /// The pixels from a card's edge to what stands inside it, on every side: `CARD_INSET` of
+    /// its ground, and its line and the blended pixel inside it.
+    fn card_room() -> f32 {
+        measures::CARD_INSET + CARD_LINE_INK
     }
 
     /// The sheet a card in a corner stands on: the side pane's where its last row is the
@@ -9994,9 +10012,10 @@ impl App {
     }
 
     /// Where a press at `at` (columns and rows, with their fractions) lands on a card dropped
-    /// `drop` rows under its rows (`card_drop`): where its buttons are painted.
-    fn card_at(at: (f32, f32), drop: f32) -> (f32, f32) {
-        (at.0, at.1 - drop)
+    /// `drop` rows under its rows (`card_drop`): where its buttons are painted, right of their
+    /// cells by `card_button_nudge`.
+    fn card_at(&self, at: (f32, f32), drop: f32) -> (f32, f32) {
+        (at.0 - self.card_button_nudge(), at.1 - drop)
     }
 
     /// A card whose panel starts `lead` columns into its first column where there are
@@ -10025,9 +10044,14 @@ impl App {
             if plain || !edge {
                 grid.fill(Rect::new(area.x, y, area.w, 1), base);
                 if lead > 0.0 {
-                    // The pane's sheet, whatever stood in that column: a terminal's cursor
-                    // there showed half of itself beside the card.
-                    let sheet = theme.sidebar.bg;
+                    // The sheet it's on, the pane's or the file's, whatever stood in that
+                    // column: a terminal's cursor there showed half of itself beside the card.
+                    let over_pane = self.dock_area() == Some(self.card_sheet(area));
+                    let sheet = if over_pane {
+                        theme.sidebar.bg
+                    } else {
+                        theme.text.bg
+                    };
                     grid.fill(Rect::new(area.x, y, 1, 1), Style { bg: sheet, ..base });
                     let left = Bounds::cells(f32::from(area.x), f32::from(y), lead, 1.0);
                     grid.panel(left, 0, Some(sheet), None);
@@ -10094,14 +10118,13 @@ impl App {
         }
     }
 
-    /// The pixels from a card's side to its words, which start two columns in from its cells
-    /// and `lead` of a column less from its panel.
-    fn card_side(&self, lead: f32) -> f32 {
-        let cell = self
-            .measure
-            .cell_pixels()
-            .map_or(0.0, |(wide, _)| wide as f32);
-        (2.0 - lead) * cell
+    /// The pixels a card keeps over its title's capitals and under its buttons, as measured
+    /// in from its line: `CARD_INSET`, and the line and the blended pixel inside it, which take
+    /// 2 px of what the panel's edge is placed by. From the words' 25.5 px at its side, the
+    /// stopped and logout cards measured 22 and 23, and from two columns the install card over
+    /// the file 29 (the release review of next).
+    fn card_side(&self, _lead: f32) -> f32 {
+        Self::card_room()
     }
 
     /// How far a card's words are raised in their rows, so `last` stands `DIALOG_GAP` over its
@@ -10134,12 +10157,18 @@ impl App {
             bg: theme.popup,
             ..theme.bar
         };
+        // Painted right of their cells, so the last ends as far from the card's right edge as
+        // its words start from its left.
+        let nudge = self.card_button_nudge();
+        let from = grid.painted_so_far();
         for (i, (cells, x)) in placed.iter().enumerate() {
             // The last, rightmost, is the answer, filled, unless this row only leads to
             // another.
             let first = i + 1 == placed.len() && filled;
             let width = cells.chars().count() as u16;
-            let hovered = self.over_raised_button((*x, y), width, -drop);
+            let (px, py) = self.pointer;
+            let at = (px - nudge, py - drop);
+            let hovered = self.hover.is_some() && on_large_button((*x, y), width, at);
             // A quiet button stands a step further off what's behind it when pointed at, as
             // every one that isn't the main one does.
             let quiet = theme.quiet_button(theme.popup);
@@ -10159,6 +10188,7 @@ impl App {
             };
             grid.large_button(*x, y, cells, labels[i], fill, style);
         }
+        grid.nudge_since(from, nudge);
     }
 
     fn draw_linger(&self, grid: &mut Grid) {
@@ -10209,16 +10239,17 @@ impl App {
             } else {
                 (0.1, 1.2)
             };
-            // 12 px outside the card's words on either side, its command on their column, so
-            // over the side pane it's as far in from the card's edge as its command is from
-            // its own (`COMMAND_BOX_OUT`). The words end as far from the panel's right as they
-            // start from its left, `lead` short of two columns.
+            // On the card's insets, `card_room` from its edges, ending where its buttons do,
+            // with the command `COMMAND_PADDING` into it: 12 px outside the words, it ran 22 px
+            // past the buttons once they stood at the right.
             let lead = self.card_lead(area);
-            let out = measures::columns(COMMAND_BOX_OUT, &*self.measure).unwrap_or(0.0);
+            let inset = measures::columns(Self::card_room(), &*self.measure).unwrap_or(2.0);
+            let pad = measures::columns(COMMAND_PADDING, &*self.measure).unwrap_or(0.0);
+            let left = f32::from(area.x) + lead + inset;
             let bounds = Bounds::cells(
-                f32::from(area.x) + 2.0 - out,
+                left,
                 f32::from(row) - over,
-                f32::from(area.w.saturating_sub(4)) + lead + out * 2.0,
+                f32::from(area.right()) - inset - left,
                 tall,
             );
             grid.panel(bounds, 17, Some(theme.input), None);
@@ -10226,7 +10257,7 @@ impl App {
                 mono: true,
                 ..Font::default()
             };
-            let text = (f32::from(area.x) + 2.0, f32::from(row));
+            let text = (left + pad, f32::from(row));
             grid.text_run(
                 text,
                 f32::from(right),
@@ -10256,7 +10287,7 @@ impl App {
         }
         let row = self.linger_button_row();
         let drop = self.card_drop(area, measures::DialogLast::Control);
-        let at = Self::card_at(mouse.at(), drop);
+        let at = self.card_at(mouse.at(), drop);
         let hit = self
             .linger_buttons()
             .into_iter()
@@ -10444,7 +10475,7 @@ impl App {
         let card = self.stopped_card()?;
         let (_, _, buttons) = self.stopped_offer()?;
         let placed = self.stopped_buttons(card, &buttons);
-        let at = Self::card_at(at, self.card_drop(card, measures::DialogLast::Words));
+        let at = self.card_at(at, self.card_drop(card, measures::DialogLast::Words));
         placed.into_iter().find_map(|(cells, x, row, choice)| {
             let width = cells.chars().count() as u16;
             on_large_button((x, row), width, at).then_some(choice)
@@ -25163,8 +25194,10 @@ mod tests {
                 bottom - button.3 >= 0.5,
                 "under {label}: {button:?} in {bottom}"
             );
-            assert!(button.0 >= left + 2.0, "{label} two cells in: {button:?}");
-            assert!(button.2 <= right - 2.0, "{label} two cells in: {button:?}");
+            // Inside the card's insets, 24 px (`card_inset`).
+            let inset = measures::card_inset(&*app.measure) - 0.05;
+            assert!(button.0 >= left + inset, "{label} inside: {button:?}");
+            assert!(button.2 <= right - inset, "{label} inside: {button:?}");
             // A row is left empty between the words and the buttons.
             assert!(button.1 >= title + 3.0, "{label}: {button:?} under {title}");
         }
@@ -25186,8 +25219,9 @@ mod tests {
                 })
                 .unwrap_or_else(|| panic!("no {words} painted"));
             let end = x + app.measure.width(words, font(bold));
+            let inset = measures::card_inset(&*app.measure) - 0.05;
             assert!(
-                x >= left + 2.0 && end <= right - 2.0,
+                x >= left + inset && end <= right - inset,
                 "{words}: {x} to {end}"
             );
         }

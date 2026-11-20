@@ -324,9 +324,12 @@ pub fn bar_chip_height(measure: &dyn Measure) -> (f32, bool) {
 }
 
 /// How far a button at a row's end (`Grid::row_button`) is lifted back after it goes down onto
-/// the words' baseline, in rows, so it keeps `LINE_AIR` from its row's foot where that foot is
-/// an edge: the line under peek's header, or a wash the row's whole height in Settings. There
-/// it goes down a pixel where the baseline wants 3, and its words stand 2 px over the row's.
+/// the words' baseline, in rows, where its row's foot is an edge (the line under peek's header,
+/// a band the row's whole height, a suggestion's row in Review): back to the row's middle,
+/// where gone down it would stand within `LINE_AIR` of that edge, and nothing where it keeps
+/// that. With a capital's height in a button's middle the baseline wants a pixel, which a row of
+/// 50 has; on a shorter Airy row the button stays in the middle. The first rule wanted 3 px, and
+/// in Review's suggestion row Keep and Dismiss stood 6 px over the next line.
 pub fn row_button_foot_lift(measure: &dyn Measure) -> f32 {
     let Some((_, tall)) = measure
         .cell_pixels()
@@ -337,9 +340,12 @@ pub fn row_button_foot_lift(measure: &dyn Measure) -> f32 {
     let row = tall as f32;
     let line = row / measure.row_air().max(1.0);
     let (_, foot) = cellix_render::row_button_in_row(row, line);
-    // In whole paint units, rounded up, as paint moves: rounded to the nearest, it kept 7.7 px.
+    if foot <= row - LINE_AIR {
+        return 0.0;
+    }
+    // The way it went down, as paint moves, in whole units.
     let unit = cellix_render::UNIT as f32;
-    ((foot - (row - LINE_AIR)) / row * unit).ceil().max(0.0) / unit
+    (cellix_render::WORDS_BASELINE * line / row * unit).round() / unit
 }
 
 /// How tall the band behind a picked or pointed row of a list is, in rows: 33 px of 36,
@@ -408,6 +414,25 @@ mod tests {
         assert_eq!(clear_of_lines(&[28.0, 93.0], (28.0, 92.0), &measure), -1);
         assert_eq!(clear_of_lines(&[27.0, 100.5], (28.0, 92.0), &measure), 0);
         assert_eq!(clear_of_lines(&[28.0], (28.0, 92.0), &CellMeasure), 0);
+    }
+
+    /// A button at a row's end keeps 8 px from an edge at its row's foot: on a row of 50 it goes
+    /// down onto the baseline, a pixel, and keeps 8; on the shortest Airy row, 47, gone down it
+    /// would keep 7, so it stays in the middle, lifted back the whole way (Review's suggestion
+    /// row stood 6 px over the next line under the first rule).
+    #[test]
+    fn a_row_button_keeps_8_px_from_its_rows_foot_or_stays_in_the_middle() {
+        let tall = FontMeasure::new(17, 50).with_type_row(36);
+        assert_eq!(row_button_foot_lift(&tall), 0.0, "a pixel down keeps 8");
+        let short = FontMeasure::new(17, 47).with_type_row(36);
+        assert!(roomy(&short));
+        let lift = row_button_foot_lift(&short);
+        let drop = cellix_render::WORDS_BASELINE * 36.0 / 47.0;
+        assert!(
+            lift > 0.0 && (lift - drop).abs() <= 1.0 / cellix_render::UNIT as f32,
+            "lifted back the whole way: {lift} against {drop}"
+        );
+        assert_eq!(row_button_foot_lift(&CellMeasure), 0.0);
     }
 
     /// A text box's words are raised for their tails where a row is the terminal's line, or

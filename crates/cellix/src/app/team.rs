@@ -1513,11 +1513,8 @@ impl App {
             return;
         };
         let theme = &self.theme;
-        // Over the side pane, a column from the sheet's edge on both sides.
-        let in_pane = self
-            .dock_area()
-            .is_some_and(|pane| pane.contains(area.x, area.y));
-        let lead = if in_pane { self.pane_card_lead() } else { 0.0 };
+        // Its words 24 px in from its edge, as every card's (`card_lead`).
+        let lead = self.card_lead(area);
         let last = measures::DialogLast::Words;
         self.draw_card_led(grid, area, (lead, last, 0.0));
         // Its words raised over its buttons as a dialog's are (`card_lift`).
@@ -1541,6 +1538,7 @@ impl App {
             .map_or("command", |m| m.kind.as_str());
         let (icon, fallback) = crate::agents::mark_of(kind);
         let colour = crate::dock::icon_colour(icon, theme);
+        let title_from = grid.painted_so_far();
         grid.glyph(
             f32::from(area.x + 2),
             area.y + 1,
@@ -1551,6 +1549,10 @@ impl App {
         );
         let title = format!("{} wants to start {}", start.by, start.what());
         grid.label(area.x + 4, area.y + 1, &title, strong, right);
+        // The agent's mark stands taller than the title's capitals: down 4 px, so the mark is
+        // as far under the card's top as the buttons are over its foot. It stood 20 px under it.
+        let down = measures::rows(4.0, &*self.measure).unwrap_or(0.0);
+        grid.lift_since(title_from, -down);
         for (i, (line, quoted)) in self.consent_lines(start, area.w).iter().enumerate() {
             let y = area.y + 2 + i as u16;
             if *quoted {
@@ -1571,15 +1573,15 @@ impl App {
         }
         grid.lift_since(words, self.card_lift(last, lead));
         let y = area.bottom().saturating_sub(2);
-        // As far in from the card's right edge as its words are from its left: the panel
-        // starts `lead` into its first column, so the buttons are painted that much right of
-        // their cells. They ended 33 px from the edge where the words start 24 in.
+        // As far in from the card's right edge as its words are from its left
+        // (`card_button_nudge`). They ended 33 px from the edge where the words start 24 in.
         let buttons = grid.painted_so_far();
+        let nudge = self.card_button_nudge();
         let (px, py) = self.pointer;
         for (i, (cells, x)) in self.consent_buttons(area).iter().enumerate() {
             let label = CONSENT_BUTTONS[i];
             let width = cells.chars().count() as u16;
-            let hovered = self.hover.is_some() && on_large_button((*x, y), width, (px - lead, py));
+            let hovered = self.hover.is_some() && on_large_button((*x, y), width, (px - nudge, py));
             // Allow is the answer; Always Allow Here and Deny are the one quiet kind every
             // other action is. Deny was only its words, a third kind beside them.
             let fill = if label == "Allow" {
@@ -1599,7 +1601,7 @@ impl App {
             };
             grid.large_button(*x, y, cells, label, fill, style);
         }
-        grid.nudge_since(buttons, lead);
+        grid.nudge_since(buttons, nudge);
     }
 
     /// A press on the consent card. Returns whether the card took it.
@@ -1614,18 +1616,15 @@ impl App {
             return false;
         }
         let y = area.bottom().saturating_sub(2);
-        // Where they're painted, `lead` right of their cells.
-        let in_pane = self
-            .dock_area()
-            .is_some_and(|pane| pane.contains(area.x, area.y));
-        let lead = if in_pane { self.pane_card_lead() } else { 0.0 };
+        // Where they're painted, right of their cells (`card_button_nudge`).
+        let nudge = self.card_button_nudge();
         let (fine_x, fine_y) = mouse.at();
         let hit = self
             .consent_buttons(area)
             .into_iter()
             .position(|(cells, x)| {
                 let width = cells.chars().count() as u16;
-                on_large_button((x, y), width, (fine_x - lead, fine_y))
+                on_large_button((x, y), width, (fine_x - nudge, fine_y))
             });
         if let Some(index) = hit {
             self.answer_consent(CONSENT_BUTTONS[index]);
@@ -2272,8 +2271,9 @@ mod tests {
             [quiet, quiet, theme.button],
             "Deny, Always Allow Here, Allow"
         );
-        // Its buttons end as far in from its right edge as its words start from its left:
-        // they ended 33 px in where the words start 24 in.
+        // Its buttons end 24 px of its ground in from its right, past its line and the blended
+        // pixel inside it, as its words' ink starts from its left (`card_button_nudge`): they
+        // ended 33 px in where the words start 24 in.
         let allow = panels(&grid)
             .into_iter()
             .filter(|(b, fill, _)| *fill == Some(theme.button) && b.y > card.y && b.w >= 128)
@@ -2292,8 +2292,10 @@ mod tests {
             .expect("its title");
         // The title follows the mark, a column and a half after the text's edge.
         let text_edge = words - unit(2.0);
+        let room = crate::measures::CARD_INSET + crate::app::CARD_LINE_INK;
+        let inset = unit(crate::measures::columns(room, &*app.measure).unwrap());
         assert!(
-            ((card.x + card.w) - (allow.x + allow.w) - (text_edge - card.x)).abs() <= 2,
+            ((card.x + card.w) - (allow.x + allow.w) - inset).abs() <= 2,
             "{} in at the right, {} at the left",
             (card.x + card.w) - (allow.x + allow.w),
             text_edge - card.x

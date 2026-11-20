@@ -18,13 +18,12 @@ const LARGE_BUTTON_HEIGHT: f32 = BUTTON_HEIGHT;
 const ROW_BUTTON_RADIUS: u8 = 17;
 /// The one picture `Grid::exact_fill` scales: a single pixel, all ink.
 const EXACT_FILL: u64 = u64::MAX - 1;
-/// How far a button's words, their font's span in its middle (`Paint::Text`'s `span_centred`),
-/// stand over the baseline of words of 13 pt in the middle of the same row, in the terminal's
-/// lines: their 90 per cent puts their baseline a pixel higher, and the span's middle, a
-/// capital's height less a tail's over the baseline, another two; 3.3 px of a line of 36. A
+/// How far a button's words, a capital's height in their middle (`Paint::Text`'s
+/// `span_centred`), stand over the baseline of words of 13 pt in the middle of the same row, in
+/// the terminal's lines: their 90 per cent puts it a pixel higher, 0.9 px of a line of 36. A
 /// button in a row of words goes down this far with its words (`Grid::beside_words`), so they
 /// stand on the row's baseline: "Reject" rode 3 px over the hunk's heading beside it.
-pub const WORDS_BASELINE: f32 = 0.092;
+pub const WORDS_BASELINE: f32 = 0.026;
 /// Rows tall an icon beside a name is: 16 pt where a row is 18.5 pt, VS Code's size.
 pub const GLYPH: f32 = 0.86;
 /// Rows tall an icon inside a text box or a chip is, where one of `GLYPH` would stand against
