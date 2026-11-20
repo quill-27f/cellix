@@ -145,8 +145,9 @@ EXPECT = {
     "176-review-suggested-light": "1 suggested",
     "39-hover-agents": "WORKTREES",
     "42-hover-install": "files save",
-    "42-settings-needs": "Needs npm",
-    "108-install-card-needs": "Copy Command",
+    # The pointed row says all it needs, in small letters as at rest.
+    "42-settings-needs": "npm, or Homebrew",
+    "108-install-card-needs": "Run it in a terminal",
     "43-light-hover-menu": "Rename Symbol",
     "50-comments": "yours",
     "50-comment-emoji": ":rock",

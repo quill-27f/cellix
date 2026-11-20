@@ -7250,5 +7250,19 @@
     "title": "A box of code wider than the page reaches further under it, so its thumb keeps 8 px from its code",
     "test": "a_wide_code_boxs_thumb_keeps_clear_of_its_border_and_its_code",
     "passes": true
+  },
+  {
+    "id": "server-rows-one-column",
+    "milestone": 15,
+    "title": "Settings' language server rows keep one right-hand column: a column as wide as Copy Command on every row, every tag ending at one edge before it, programs cut with a … 24 px before their tag, and pointed-at words quiet, what a row needs in small letters",
+    "test": "language_server_rows_keep_one_column_for_tags_and_buttons",
+    "passes": true
+  },
+  {
+    "id": "install-card-says-what-it-copies",
+    "milestone": 15,
+    "title": "The install card where this machine can't install a server says what Copy Command copies and the next step, and opening the file again starts the server once it's there",
+    "test": "the_offer_says_what_its_language_needs_where_it_cant_install",
+    "passes": true
   }
 ]

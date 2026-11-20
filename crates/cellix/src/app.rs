@@ -2125,6 +2125,14 @@ impl App {
             .position(|e| e.buffer.path() == Some(path))
         {
             self.set_active(i);
+            // Opened again with its language's server missing, it looks once more: what the
+            // install card's Copy Command copied may have been run since, and the card says to
+            // open the file again then.
+            let missing = Registry::language_name(path)
+                .is_some_and(|language| self.missing_servers.contains_key(language));
+            if missing {
+                self.attach_server(path);
+            }
             return Ok(());
         }
         let buffer = Buffer::open(path).map_err(|e| {
@@ -2192,6 +2200,7 @@ impl App {
             match command.map(|c| Client::start(&c, &root)) {
                 Some(Ok(client)) => {
                     self.servers.insert(language, client);
+                    self.missing_servers.remove(language);
                 }
                 Some(Err(_)) if !custom => {
                     self.note_missing(language);
@@ -2331,19 +2340,24 @@ impl App {
     /// runs here, so what a press does is said before it's pressed.
     fn offer_detail_lines(&self, detail: &str) -> Vec<String> {
         let mut lines = self.offer_lines(detail);
-        if let Some(runs) = self.offer_runs() {
+        for runs in self.offer_runs() {
             lines.extend(self.offer_lines(&runs));
         }
         lines
     }
 
-    /// What the card's Install runs ("Runs brew install …", "Fetches … into ~/.local/bin"), or
-    /// what it needs where it can't install here.
-    fn offer_runs(&self) -> Option<String> {
+    /// What the card's Install runs ("Runs brew install ….", "Fetches … into ~/.local/bin."),
+    /// each a sentence of its own with its stop, as the line over it is: it had none (the
+    /// release review of 0.12.0, 108). Where it can't install here, what it needs, then what
+    /// Copy Command copies, the same line Install's card has, and what to do with it: the card
+    /// never said what went on the clipboard or where to run it (108-install-card-needs).
+    fn offer_runs(&self) -> Vec<String> {
         if self.offering_browser() || self.offer_failure().is_some() {
-            return None;
+            return Vec::new();
         }
-        let (_, server) = self.offer()?;
+        let Some((_, server)) = self.offer() else {
+            return Vec::new();
+        };
         let plan = self.offer_plan(server);
         match &plan {
             // A build by its program's name, which the card has room for on one line, where
@@ -2351,19 +2365,59 @@ impl App {
             Plan::Run { says, .. } if says.starts_with("Fetches ") => {
                 let program = SERVERS[server].command[0];
                 let from = plan.tag();
-                Some(format!("Fetches {program} from {from} into ~/.local/bin"))
+                vec![format!("Fetches {program} from {from} into ~/.local/bin.")]
             }
-            Plan::Run { says, .. } => Some(says.clone()),
-            // Or, where it can't install here, what it needs, on that line.
-            Plan::Needs { says, .. } => Some(format!("{says}.")),
+            Plan::Run { says, .. } => vec![format!("{says}.")],
+            // Or, where it can't install here, what it needs, on that line, and what to run.
+            Plan::Needs { says, copy } => {
+                let mut lines = vec![format!("{says}.")];
+                if let Some(copy) = copy {
+                    lines.push(format!("Copies {copy}."));
+                    lines.push(self.offer_next_step());
+                }
+                lines
+            }
+        }
+    }
+
+    /// What to do once the card's command is copied: run it, and open the file again, which
+    /// starts its server once it's there (`open`).
+    fn offer_next_step(&self) -> String {
+        let file = (self.editors.get(self.active()))
+            .and_then(|editor| editor.buffer.path())
+            .and_then(Path::file_name)
+            .map(|name| name.to_string_lossy().into_owned());
+        match file {
+            Some(file) => format!("Run it in a terminal, then open {file} again."),
+            None => "Run it in a terminal, then open the file again.".to_string(),
         }
     }
 
     /// A line of the corner card's words as the lines it takes inside the card, two cells
-    /// in from either edge.
+    /// in from either edge. A path never stands alone on a line: the word before it goes
+    /// with it ("into ~/.local/bin"), where "~/.local/bin" stood on a line of its own in the
+    /// side pane (the release review of 0.12.0, 108-install-card-pane).
     fn offer_lines(&self, words: &str) -> Vec<String> {
-        let width = self.corner_frame(OFFER_WIDTH).1;
-        self.wrap(words, f32::from(width.saturating_sub(4)))
+        let width = f32::from(self.corner_frame(OFFER_WIDTH).1.saturating_sub(4));
+        let mut lines = self.wrap(words, width);
+        let alone = |line: &str| {
+            let path = line.trim_end_matches('.');
+            !line.contains(' ') && (path.starts_with("~/") || path.starts_with('/'))
+        };
+        for at in 1..lines.len() {
+            if !alone(&lines[at]) {
+                continue;
+            }
+            let Some((kept, moved)) = lines[at - 1].rsplit_once(' ') else {
+                continue;
+            };
+            let joined = format!("{moved} {}", lines[at]);
+            if self.measure.width(&joined, Font::default()) <= width {
+                lines[at - 1] = kept.to_string();
+                lines[at] = joined;
+            }
+        }
+        lines
     }
 
     /// The card's place, as tall as its words: an edge, the title, the detail, a gap, the
@@ -2445,7 +2499,9 @@ impl App {
             }
             Some("Copy Command") => {
                 if let Some(command) = self.offer_copy(server) {
-                    let note = format!("Copied: {command}");
+                    // The card goes, so the bar keeps what it said to do next.
+                    let next = self.offer_next_step();
+                    let note = format!("Copied: {command}. {next}");
                     self.copy_text(command, &note);
                 }
                 self.offer_failed = None;
@@ -25000,13 +25056,16 @@ mod tests {
         app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Editor;
         assert!(settings_row(&app, "Markdown").contains("Install"));
 
-        // Pointed at, Install says what it runs on this machine.
+        // Pointed at, Install says what it runs on this machine: on cells, where the list keeps
+        // Copy Command's column on every row (the release review of 0.12.0), cut in its middle
+        // by a letter or two, the build's name and where it goes.
         let markdown = server_index("Markdown");
         let install = settings_spot(&app, Control::InstallServer(markdown)).expect("Install");
         app.handle(mouse(MouseKind::Move, install.x + 1, install.y));
         let row = settings_row(&app, "Markdown");
         assert!(
-            row.contains("Fetches marksman-linux-musl-x64 from GitHub into ~/.local/bin"),
+            row.contains("Fetches marksman-linux-musl-x")
+                && row.contains("from GitHub into ~/.local/bin"),
             "{row}"
         );
         app.handle(mouse(MouseKind::Left, install.x + 1, install.y));
@@ -25085,9 +25144,10 @@ mod tests {
         let copy = settings_spot(&app, Control::CopyServer(clangd)).expect("Copy Command");
         assert!(settings_row(&app, "C ").contains("Copy Command"));
         app.handle(mouse(MouseKind::Move, copy.x + 1, copy.y));
+        // Pointed at, all it needs, in small letters as its tag is at rest.
         let row = settings_row(&app, "C ");
         assert!(
-            row.contains("Needs Homebrew, or sudo dnf install clang-tools-extra"),
+            row.contains("needs Homebrew, or sudo dnf install clang-tools-extra"),
             "{row}"
         );
         app.handle(mouse(MouseKind::Left, copy.x + 1, copy.y));
@@ -25169,8 +25229,10 @@ mod tests {
         app.handle(mouse(MouseKind::Move, install.x + 1, install.y));
         let row = settings_row(&app, "Markdown");
         assert!(row.contains("marksman"), "{row}");
+        // Its start and its end, "Fetche…al/bin" here, where the list keeps Copy Command's
+        // column and 24 px before its words (the release review of 0.12.0).
         assert!(
-            row.contains("Fetches") && row.contains('…') && row.contains("bin"),
+            row.contains("Fetch") && row.contains('…') && row.contains("bin"),
             "{row}"
         );
 
@@ -25213,6 +25275,185 @@ mod tests {
         );
     }
 
+    /// The language servers' rows keep one right-hand column, measured in what's painted:
+    /// every row's tag ends at one edge, before a column for what a press does that's as wide
+    /// as Copy Command, on an Install row too; a server's program ends 24 px or more before
+    /// its tag, cut with a "…" where it's longer; pointed at, what the row says stays in the
+    /// quiet colour, what it needs in small letters, and Copy Command's capitals stand in the
+    /// middle of its button. Tags ended at their own buttons, 85 px apart down the list;
+    /// "…-wrapper" ran to 10 px from "needs Homebrew"; and pointed at, the tag went to
+    /// "Needs npm, or Homebrew" in the words' own white (the release review of 0.12.0,
+    /// 42-settings-needs).
+    #[cfg(unix)]
+    #[test]
+    fn language_server_rows_keep_one_column_for_tags_and_buttons() {
+        use cellix_render::{Paint, UNIT};
+        // Nothing here installs with npm or Homebrew; builds fetched from GitHub, and gopls,
+        // install. None of these stand-ins runs: nothing is pressed.
+        let tools = ["curl", "tar", "gunzip", "unzip", "xz", "go"].map(|tool| (tool, "exit 1"));
+        let (dir, machine) = stand_in_linux(&tools);
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let mut app = App::new(project, (150, 70));
+        app.machine = machine;
+        let measure = Rc::new(cellix_render::FontMeasure::new(17, 50).with_type_row(36));
+        app.set_measure(measure.clone());
+        app.run(Command::OpenSettings);
+        app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Editor;
+        let quiet = app.theme.gutter.fg;
+        let px = |units: i32| units as f32 / UNIT as f32 * 17.0;
+        // A server's row as painted: its program's start and end, and its tag's start, end and
+        // words and colour, in pixels.
+        let row = |grid: &Grid, language: &str| {
+            let program = SERVERS[server_index(language)].command[0];
+            let y = (grid.paint.iter())
+                .find_map(|p| match p {
+                    Paint::Text { y, text, .. } if text == language => Some(*y),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no {language} row"));
+            let on_row = || {
+                grid.paint.iter().filter_map(move |p| match p {
+                    Paint::Text {
+                        x,
+                        y: at,
+                        text,
+                        color,
+                        font,
+                        align_right,
+                        ..
+                    } if *at == y => Some((*x, text.clone(), *color, *font, *align_right)),
+                    _ => None,
+                })
+            };
+            let name = on_row()
+                .find(|(_, text, ..)| {
+                    let kept = text.trim_end_matches('…');
+                    !kept.is_empty() && program.starts_with(kept)
+                })
+                .unwrap_or_else(|| panic!("{language}'s program"));
+            let start = px(name.0);
+            let end = start + measure.width(&name.1, name.3) * 17.0;
+            let tag = on_row()
+                .find(|(_, text, _, font, right)| *right && font.size == 90 && text != "Found")
+                .filter(|(_, text, ..)| text != "Install" && text != "Copy Command");
+            let tag = tag.map(|(x, text, color, font, _)| {
+                let right = px(x);
+                (
+                    right - measure.width(&text, font) * 17.0,
+                    right,
+                    text,
+                    color,
+                )
+            });
+            (name.1, (start, end), tag)
+        };
+        let languages = ["Python", "Java", "Haskell", "Markdown", "Zig", "C#", "TOML"];
+        for width in [150, 120] {
+            app.handle(Event::Resize(width, 70));
+            let grid = screen(&app);
+            let mut edges = Vec::new();
+            for language in languages {
+                let (name, (_, end), tag) = row(&grid, language);
+                let (left, right, words, color) = tag.unwrap_or_else(|| panic!("{language}'s tag"));
+                assert_eq!(color, quiet, "{language}: {words}");
+                assert!(
+                    left - end >= 24.0 - 0.5,
+                    "{width}: {language}'s {name} ends {} px before {words}",
+                    left - end
+                );
+                edges.push((language, right));
+            }
+            // One edge for every tag, an Install row's (Markdown, Zig, TOML) and a Copy
+            // Command row's alike.
+            let first = edges[0].1;
+            assert!(
+                edges.iter().all(|(_, right)| (right - first).abs() < 0.5),
+                "{width}: {edges:?}"
+            );
+            // A column for Copy Command and the air before it: the tag ends that far before
+            // the page's end, where Copy Command ends.
+            let copy = settings_spot(&app, Control::CopyServer(server_index("Java"))).unwrap();
+            let button = crate::measures::button_width("Copy Command", &*measure);
+            assert!(
+                f32::from(copy.right() - button) * 17.0 - first >= 17.0,
+                "{width}: the tags end at {first}, Copy Command starts at column {}",
+                copy.right() - button
+            );
+        }
+        // Too narrow for it whole, haskell-language-server-wrapper is cut short with a "…".
+        let (name, ..) = row(&screen(&app), "Haskell");
+        assert!(name.ends_with('…'), "{name}");
+
+        // Pointed at, a row that needs something says all of it, in small letters and quiet;
+        // one that installs says what Install runs, quiet too.
+        app.handle(Event::Resize(150, 70));
+        for (language, control, starts) in [
+            (
+                "Python",
+                Control::CopyServer(server_index("Python")),
+                "needs npm",
+            ),
+            (
+                "Markdown",
+                Control::InstallServer(server_index("Markdown")),
+                "Fetches ",
+            ),
+        ] {
+            let spot = settings_spot(&app, control).unwrap();
+            app.handle(mouse(MouseKind::Move, spot.x + 1, spot.y));
+            let grid = screen(&app);
+            let (_, (_, end), tag) = row(&grid, language);
+            let (left, right, words, color) = tag.expect("what it says");
+            assert!(words.starts_with(starts), "{language}: {words}");
+            assert_eq!(color, quiet, "{language}: {words}");
+            // At the edge every row's tag ends at, Java's here.
+            let java = row(&grid, "Java").2.expect("Java's tag").1;
+            assert!((right - java).abs() < 0.5, "{language}: {right} and {java}");
+            assert!(left - end >= 23.5, "{language}: {} px", left - end);
+        }
+        // Copy Command's words in the middle of its button, in the picture: a capital's height
+        // in it, as every button's words stand, the tails of "py" hanging under it.
+        let python = settings_spot(&app, Control::CopyServer(server_index("Python"))).unwrap();
+        app.handle(mouse(MouseKind::Move, python.x + 1, python.y));
+        let grid = screen(&app);
+        let rows = super::strip_tests::picture(&grid, python.y);
+        // The last panel on its row narrower than the row: the button, over the row's wash.
+        let fill = (grid.paint.iter())
+            .rev()
+            .find_map(|p| match p {
+                Paint::Panel {
+                    bounds,
+                    fill: Some(fill),
+                    ..
+                } if bounds.y / UNIT == i32::from(python.y) && bounds.w < UNIT * 20 => {
+                    Some((*bounds, *fill))
+                }
+                _ => None,
+            })
+            .expect("the button");
+        // Its fill's top and foot where its words aren't, clear of its round corners.
+        let (from, to) = (px(fill.0.x) as usize, px(fill.0.x + fill.0.w) as usize);
+        let filled: Vec<usize> = (0..rows.len())
+            .filter(|line| rows[*line][from + 10] == fill.1)
+            .collect();
+        let (top, foot) = (filled[0], filled[filled.len() - 1] + 1);
+        // "Comma" of "Command", from the button's middle, which has no tails and no "d".
+        let inked: Vec<usize> = (top..foot)
+            .filter(|line| {
+                rows[*line][(from + to) / 2..to - 32]
+                    .iter()
+                    .any(|p| super::strip_tests::apart(*p, fill.1))
+            })
+            .collect();
+        let (ink_top, ink_foot) = (inked[0], inked[inked.len() - 1] + 1);
+        let (over, under) = (ink_top - top, foot - ink_foot);
+        assert!(
+            over.abs_diff(under) <= 1,
+            "{over} px over Command's capital and {under} under its foot, in {top} to {foot}"
+        );
+    }
+
     /// The card that offers a language's server, where this machine can't install it: what it
     /// needs and Copy Command, not an Install that can only fail. And an install from the card
     /// that fails keeps the card up, saying why, where the bar's message went with the next key.
@@ -25232,12 +25473,61 @@ mod tests {
         let text = screen(&app).text();
         assert!(text.contains("Java support"), "{text}");
         assert!(!text.contains("Install Java support?"), "{text}");
-        assert!(text.contains("Needs Homebrew"), "{text}");
+        assert!(text.contains("Needs Homebrew."), "{text}");
         assert!(!text.contains("[Install]"), "{text}");
+        // What Copy Command copies, on a line of its own as what Install runs is on its card,
+        // and what to do with it: the card said neither (the release review of 0.12.0, 108).
+        let grid = screen(&app);
+        let area = app.offer_area();
+        let card: Vec<String> = (area.y..area.bottom())
+            .map(|y| {
+                let cells = (area.x..area.right()).map(|x| grid.cell(x, y).symbol.to_string());
+                cells.collect::<String>().trim().to_string()
+            })
+            .filter(|line| !line.is_empty())
+            .collect();
+        let said = card.join(" ");
+        assert!(
+            said.contains("Needs Homebrew. Copies brew install jdtls. Run it in a terminal, then open Main.java again."),
+            "{card:#?}"
+        );
+        let copies = (card.iter()).position(|line| line.starts_with("Copies brew install jdtls."));
+        assert!(copies.is_some(), "a line of its own: {card:#?}");
         let (x, y) = find(&screen(&app), "Copy Command");
         app.handle(mouse(MouseKind::Left, x + 1, y));
         assert_eq!(app.clipboard, "brew install jdtls");
-        assert!(!screen(&app).text().contains("Java support"), "answered");
+        let text = screen(&app).text();
+        assert!(!text.contains("Java support"), "answered");
+        // The card's gone, and the bar says what to do next.
+        assert!(
+            text.contains("Copied: brew install jdtls. Run it in a terminal"),
+            "{text}"
+        );
+        // Run, the command puts jdtls where the machine finds it, here a stand-in that says
+        // it started; opening Main.java again starts it.
+        let started = dir.path().join("started.log");
+        let jdtls = dir.path().join("bin").join("jdtls");
+        let script = format!(
+            "#!/bin/sh\necho started >> '{}'\nexec cat > /dev/null\n",
+            started.display()
+        );
+        fs::write(&jdtls, script).unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&jdtls, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        app.open(&dir.path().join("Main.java")).unwrap();
+        assert!(app.servers.contains_key("Java"), "its server started");
+        assert!(
+            !app.missing_servers.contains_key("Java"),
+            "and isn't missing"
+        );
+        let deadline = std::time::Instant::now() + BACKGROUND;
+        while !fs::read_to_string(&started).is_ok_and(|said| said.contains("started")) {
+            assert!(std::time::Instant::now() < deadline, "the stand-in ran");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        app.servers.clear();
 
         app.open(&dir.path().join("main.py")).unwrap();
         app.servers.clear();

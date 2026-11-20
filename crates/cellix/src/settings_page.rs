@@ -132,6 +132,21 @@ const INSTALL_WIDTH: u16 = 9;
 const COPY_WIDTH: u16 = 14;
 /// Columns from an integration's name to its state.
 const STATUS_GAP: f32 = 1.1;
+/// Pixels a language server's program keeps clear before the tag after it.
+const NAME_AIR: f32 = 24.0;
+
+/// What a server's row says of installing it while it's pointed at: what Install runs, or
+/// all that it needs, which starts in small letters as its tag does at rest ("needs npm, or
+/// Homebrew"): pointed at, it went to a capital (the release review of 0.12.0).
+fn pointed_words(plan: &Plan) -> String {
+    match plan {
+        Plan::Needs { says, .. } => match says.strip_prefix("Needs ") {
+            Some(rest) => format!("needs {rest}"),
+            None => says.clone(),
+        },
+        Plan::Run { says, .. } => says.clone(),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Section {
@@ -420,6 +435,18 @@ impl Found {
             Some(Plan::Needs { copy: None, .. }) => return None,
             _ => (Control::InstallServer(index), INSTALL_WIDTH),
         })
+    }
+
+    /// The columns the list keeps at its rows' right for what a press does, the same on every
+    /// row: as wide as the widest button any row has, so every row's tag ends at one edge. Each
+    /// tag ended at its own button, 85 px further right on an Install row than on a Copy
+    /// Command row, a zig-zag down the list (the release review of 0.12.0, 42-settings-needs).
+    fn action_column(&self) -> u16 {
+        (0..SERVERS.len())
+            .filter_map(|index| self.server_control(index))
+            .map(|(_, wide)| wide)
+            .max()
+            .unwrap_or(INSTALL_WIDTH)
     }
 }
 
@@ -1774,20 +1801,18 @@ impl SettingsPage {
         grid.label(page.x, y, server.languages[0], theme.text, page.x + detail);
         let found = self.found.servers.get(index).copied().unwrap_or(false);
         let control = self.found.server_control(index);
-        let end = page
-            .right()
-            .saturating_sub(control.map_or(INSTALL_WIDTH, |(_, wide)| wide) + 1);
+        // Every row's tag ends at one edge, a column before the list's column for what a
+        // press does (`action_column`).
+        let end = page.right().saturating_sub(self.found.action_column() + 1);
         // The program always, and what installing it does here in a slot of its own before
         // the button: at rest a word or two, the tool or where it's from or what it needs;
-        // pointed at, the whole of it; after a failure, why.
+        // pointed at, the whole of it, in the same quiet colour, and what it needs still in
+        // small letters, as at rest; after a failure, why.
         let program = server.command[0];
-        grid.label(page.x + detail, y, program, quiet, end);
         let font = Font {
             size: NOTE_SIZE,
             ..Font::default()
         };
-        let named = f32::from(page.x + detail) + measure.width(program, font) + 2.0;
-        let room = f32::from(end) - named;
         let plan = self.found.plan(index).filter(|_| !found);
         let failed = self.failed.as_ref().filter(|(at, _)| *at == index);
         let error = Style {
@@ -1796,19 +1821,38 @@ impl SettingsPage {
         };
         let installing = self.installing.is_some()
             && self.installing_what == Some(Control::InstallServer(index));
+        let tag = plan.map(Plan::tag);
         let said = match (plan, failed) {
             _ if installing => None,
-            (Some(plan), _) if hovered => Some((plan.says().to_string(), theme.text)),
+            (Some(plan), _) if hovered => Some((pointed_words(plan), quiet)),
             // A failure stays on its row, where it was asked for, until it's tried again.
             (_, Some((_, why))) => {
                 let why = why.split_once(": ").map_or(why.as_str(), |(_, why)| why);
                 Some((format!("Couldn't: {why}"), error))
             }
-            (Some(plan), _) => Some((plan.tag(), quiet)),
+            (Some(_), _) => tag.clone().map(|tag| (tag, quiet)),
             _ => None,
         };
+        // The program's name stops `NAME_AIR` before the tag the row has at rest, cut with a
+        // "…" where it's longer, so the two never read as one phrase: "…-wrapper" ended 10 px
+        // before "needs Homebrew", both in one grey (the release review of 0.12.0). Pointed
+        // at, it keeps that place, and the longer words have what's left after it.
+        let air = crate::measures::columns(NAME_AIR, measure).unwrap_or(1.0);
+        let start = f32::from(page.x + detail);
+        let resting = match (&said, &tag) {
+            (Some((words, _)), _) if !hovered => Some(words.clone()),
+            (_, Some(tag)) => Some(tag.clone()),
+            _ => None,
+        };
+        let name_room = match &resting {
+            Some(words) => f32::from(end) - measure.width(words, font) - air - start,
+            None => f32::from(end) - start,
+        };
+        let name = crate::context::elide(program, name_room.max(0.0), measure);
+        grid.label(page.x + detail, y, &name, quiet, end);
+        let named = start + measure.width(&name, Font::default()) + air;
         if let Some((words, style)) = said {
-            let words = cut_middle(&words, room, measure, font);
+            let words = cut_middle(&words, f32::from(end) - named, measure, font);
             grid.label_right(end, y, &words, style, NOTE_SIZE);
         }
         if found {

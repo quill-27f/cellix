@@ -2067,14 +2067,25 @@ only fail: the row says what's needed and has Copy Command, as the agents' cards
 for that button everywhere). A row keeps the server's program in its middle column, and before
 its button says how it installs: at rest a word or two, muted, the tool ("npm", "brew", "go"),
 where a build comes from ("GitHub") or what it needs ("needs .NET SDK"); pointed at, the whole
-of it in the same place, cut in its middle where the row is too narrow, never over the
-program's name; after a failure, why, in the error's colour. The row pointed at is washed whole,
-which leaves its button 8 px and more over and under. The offer card says what its Install runs
-on a line of its own under what the server adds, a build by its program's name, or what it
-needs. What a row says pointed at: "Runs npm install
--g --prefix ~/.local pyright",
-"Fetches marksman-linux-musl-x64 from GitHub into ~/.local/bin", "Needs Homebrew, or sudo dnf
-install clang-tools-extra".
+of it in the same place and the same muted colour, what it needs still in small letters, cut in
+its middle where the row is too narrow, never over the program's name; after a failure, why, in
+the error's colour. The list keeps one right-hand column: a column for what a press does as wide
+as the widest button any row has, Copy Command, on an Install row too, and every row's words
+ending at one edge a column before it; the program stops 24 px before those words and is cut
+with a "…" where it's longer. Tags ended at their own buttons, 85 px apart down the list,
+"…-wrapper" ran to 10 px from "needs Homebrew" in the same grey, and pointed at, a row's words
+went to a capital in the words' own white (the release review of 0.12.0, 42-settings-needs).
+The row pointed at is washed whole, which leaves its button 8 px and more over and under. The
+offer card says what its Install runs on a line of its own under what the server adds, a build
+by its program's name, each a sentence with its stop; where it can't install here, what it
+needs, then what Copy Command copies and what to do with it: "Needs Homebrew." "Copies brew
+install jdtls." "Run it in a terminal, then open Main.java again." The card never said what went
+on the clipboard or where to run it (108-install-card-needs). Opening a file again that's open
+looks once more for its language's server where it was missing, and starts it once it's there;
+the bar keeps the next step after the card goes. A path on the card never stands alone on a line:
+the word before it goes with it ("into ~/.local/bin"). What a row says pointed at: "Runs npm
+install -g --prefix ~/.local pyright", "Fetches marksman-linux-musl-x64 from GitHub into
+~/.local/bin", "needs Homebrew, or sudo dnf install clang-tools-extra".
 
 Cellix looks for a server, and starts it, in `~/.local/bin`, `~/.cargo/bin`, Go's bin
 (`$GOBIN`, `$GOPATH/bin` or `~/go/bin`) and `~/.dotnet/tools` after the PATH, and in Homebrew's
