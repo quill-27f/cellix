@@ -23397,6 +23397,9 @@ mod tests {
     #[test]
     fn review_with_drops_its_menu_under_a_turn_too() {
         let (dir, mut app) = reviewed();
+        // Its first row is measured by name, so Claude Code counts as installed whatever this
+        // machine has: CI's runners have no agent, and the menu then starts at Set up more.
+        app.agents.pretend_installed(&["claude", "codex"]);
         cellix_review::checkpoint(dir.path(), "Add the limit").unwrap();
         fs::write(dir.path().join("beta.rs"), "fn turn() {}\n").unwrap();
         let rows = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
