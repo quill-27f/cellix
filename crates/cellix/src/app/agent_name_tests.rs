@@ -260,32 +260,25 @@ fn an_agent_typed_at_a_shells_prompt_is_named_by_its_conversation() {
     let (dir, home, mut app) = project();
     app.turn_at = Some(3);
     let root = app.workspace.root().to_path_buf();
-    // A stand-in that runs as `claude`, as the system names its process: a link to `sleep`.
+    // A stand-in that runs as `claude`, as the system names its process: a script of that
+    // name, which Linux names by the script and macOS by its shell. A link to `sleep` was one
+    // until CI's Ubuntu took uutils' coreutils, whose one binary refuses to run under another
+    // name ("Requested utility `claude` does not match executable name").
     let bin = dir.path().join("bin");
     fs::create_dir_all(&bin).unwrap();
-    let sleep = ["/bin/sleep", "/usr/bin/sleep"]
-        .into_iter()
-        .find(|path| Path::new(path).exists())
-        .expect("a sleep");
-    std::os::unix::fs::symlink(sleep, bin.join("claude")).unwrap();
+    let claude = bin.join("claude");
+    fs::write(&claude, "#!/bin/sh\nsleep \"$1\"\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let path = format!(
         "PATH={}:{}",
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    // Interactive, a shell gives each command a process group of its own, as a person's does:
-    // bash where there is one, as on the Linux machines Cellix runs on, whose `sh` is often
-    // dash. With dash on CI's Linux, `claude 60` was never seen in front in a minute, though
-    // `sleep` is in `shell_tab_tests`; what the shell said is in the message if it happens again.
-    let bash = ["/bin/bash", "/usr/bin/bash"]
-        .into_iter()
-        .find(|path| Path::new(path).exists());
-    let shell: Vec<String> = match bash {
-        Some(bash) => [bash, "--norc", "--noprofile", "-i"]
-            .map(String::from)
-            .to_vec(),
-        None => ["sh", "-i"].map(String::from).to_vec(),
-    };
+    // Interactive, a shell gives each command a process group of its own, as a person's does.
+    let shell = ["sh".to_string(), "-i".to_string()];
     let env = ["PS1=ready$ ".to_string(), "ENV=".to_string(), path];
     app.start_session(crate::agents::SHELL.0, &shell, &env, &root);
     let printed = |app: &App, words: &str| {
