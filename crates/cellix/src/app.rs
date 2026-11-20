@@ -10221,7 +10221,8 @@ impl App {
 
     /// A card's panel, raised and rounded. It starts and ends inside its first and last rows,
     /// so the title and the buttons have the same air above and below them, and what's under
-    /// those rows is cleared so no text shows half covered.
+    /// those rows is cleared so no text shows half covered. A picture there shows up to its
+    /// line: the card hides only the part of it the card covers.
     /// It's a card in a sheet's corner, its panel dropped as `card_drop` says.
     fn draw_card(&self, grid: &mut Grid, area: Rect, last: measures::DialogLast) {
         let drop = self.card_drop(area, last);
@@ -10339,6 +10340,7 @@ impl App {
             bg: theme.popup,
             ..theme.bar
         };
+        let under = grid.painted_so_far();
         let right = area.right().min(grid.width());
         for y in area.y..area.bottom().min(grid.height()) {
             let edge = y == area.y || y + 1 == area.bottom();
@@ -10386,6 +10388,10 @@ impl App {
                 self.draw_sheet_edges(grid);
                 grid.keep_to_rows(from, y, y + 1);
             }
+            // Its panel covers only part of those two rows and of its first column, and a
+            // picture under it shows whole past its line: an equation under the Ask card's
+            // foot lost 29 px of its first line (the release review of 0.12.0, q4).
+            grid.pictures_again_in(under, area);
         }
         let (top, foot) = self.card_ends(last, lead);
         let bounds = Bounds::cells(

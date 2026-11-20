@@ -7425,5 +7425,12 @@
     "title": "The agent's name over an Ask card's answer ends where its buttons do, 24 px inside the card's line",
     "test": "the_answers_agent_ends_where_the_buttons_do",
     "passes": true
+  },
+  {
+    "id": "card-over-picture-hides-only-what-it-covers",
+    "milestone": 15,
+    "title": "A card over a picture or drawing hides only what it covers; past its line the picture shows whole",
+    "test": "a_card_over_a_picture_hides_only_what_it_covers",
+    "passes": true
   }
 ]

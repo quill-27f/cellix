@@ -346,6 +346,63 @@ impl Grid {
         });
     }
 
+    /// Paints again, clipped to `area`, the pictures painted before `before` that reach into
+    /// it, for a surface that hides its edge rows' cells whole, so no words show half covered,
+    /// though its panel covers only part of their pixels: painted over that ground, a picture
+    /// shows whole up to the surface's line, and the panel painted next hides what it covers.
+    /// The Ask card's last row hid 29 px of an equation under the card's foot (the release
+    /// review of 0.12.0, q4-ask-follow-up). Fills (`exact_fill`) aren't pictures and stay hidden
+    /// with the words, and a picture kept to some rows (`keep_to_rows`) stays on them.
+    pub fn pictures_again_in(&mut self, before: usize, area: Rect) {
+        let clip_to = |clip: Bounds, (left, top, right, bottom): (i32, i32, i32, i32)| {
+            let (x, y) = (clip.x.max(left), clip.y.max(top));
+            let (end_x, end_y) = ((clip.x + clip.w).min(right), (clip.y + clip.h).min(bottom));
+            Bounds {
+                x,
+                y,
+                w: end_x - x,
+                h: end_y - y,
+            }
+        };
+        let (left, right) = (i32::from(area.x) * UNIT, i32::from(area.right()) * UNIT);
+        let (top, bottom) = (i32::from(area.y) * UNIT, i32::from(area.bottom()) * UNIT);
+        let mut again = Vec::new();
+        for (index, paint) in self.paint.iter().enumerate().take(before) {
+            let Paint::Image {
+                bounds,
+                clip,
+                bitmap,
+                color,
+            } = paint
+            else {
+                continue;
+            };
+            if bitmap.id == EXACT_FILL {
+                continue;
+            }
+            let mut clip = clip_to(*clip, (left, top, right, bottom));
+            for ((from, to), (first, end)) in &self.kept {
+                if (*from..*to).contains(&index) {
+                    let rows = (i32::from(*first) * UNIT, i32::from(*end) * UNIT);
+                    clip = clip_to(clip, (left, rows.0, right, rows.1));
+                }
+            }
+            let shown = clip_to(
+                clip,
+                (bounds.x, bounds.y, bounds.x + bounds.w, bounds.y + bounds.h),
+            );
+            if shown.w > 0 && shown.h > 0 {
+                again.push(Paint::Image {
+                    bounds: *bounds,
+                    clip,
+                    bitmap: bitmap.clone(),
+                    color: *color,
+                });
+            }
+        }
+        self.paint.extend(again);
+    }
+
     /// How much has been painted so far, to `lift_since` later.
     pub fn painted_so_far(&self) -> usize {
         self.paint.len()

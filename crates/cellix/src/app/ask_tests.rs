@@ -682,3 +682,85 @@ fn with_the_agents_conversation_asks_in_a_copy_of_it() {
     let kept = crate::ask::load(app.workspace.root());
     assert!(!kept.contains_key("notes.md"), "{kept:?}");
 }
+
+/// A card over a picture hides only what it covers: in the card's last row the picture shows
+/// whole from just under the panel's foot, and on every row past it, and the panel itself still
+/// covers it. The card's last row was cleared whole, so no words show half covered, and with
+/// them the picture: an equation under the Ask card lost 29 px of its first line under the
+/// card's foot (the release review of 0.12.0, q4-ask-follow-up). Every card in a corner or
+/// over a page is drawn the same way (`App::draw_card_led`). Measured in the rendered pixels.
+#[test]
+fn a_card_over_a_picture_hides_only_what_it_covers() {
+    use cellix_render::{FontMeasure, Paint, Pixels, UNIT};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("notes.md");
+    let text = "# Notes\n\nWe rely on ICL to adapt the model.\n\n![Plot](plot.png)\n\nThe end.\n";
+    fs::write(&path, text).unwrap();
+    let red = image::Rgba([200, 30, 30, 255]);
+    let plot = image::RgbaImage::from_pixel(1200, 900, red);
+    plot.save(dir.path().join("plot.png")).unwrap();
+    fs::create_dir(dir.path().join("bin")).unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (150, 40));
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+    app.open(&path).unwrap();
+    app.side_path = Some(dir.path().join("bin").into_os_string());
+    stand_in(dir.path(), "claude", CLAUDE);
+    select(&mut app, "ICL");
+    app.run(Command::AskAgent);
+    let grid = screen(&app);
+    assert!(grid.text().contains("Ask a"), "the field: {}", grid.text());
+    let (wide, tall) = (17.0, 50.0);
+    let px = |units: i32, size: f32| units as f32 * size / UNIT as f32;
+    let card = (grid.paint.iter()).find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            ..
+        } => Some(*bounds),
+        _ => None,
+    });
+    let card = card.expect("the card's panel");
+    let plot = (grid.paint.iter()).find_map(|p| match p {
+        Paint::Image { bounds, bitmap, .. } if bitmap.kind == Pixels::Rgba => Some(*bounds),
+        _ => None,
+    });
+    let plot = plot.unwrap_or_else(|| panic!("the picture: {}", grid.text()));
+    let foot = px(card.y + card.h, tall);
+    let (top, bottom) = (px(plot.y, tall), px(plot.y + plot.h, tall));
+    assert!(
+        top < foot - tall && bottom > foot + tall,
+        "the card ({:.0}..{foot:.0} px) stands over the picture's top ({top:.0}..{bottom:.0} px)",
+        px(card.y, tall)
+    );
+    // Columns the card and the picture share.
+    let left = px(card.x.max(plot.x), wide).ceil() as usize + 2;
+    let right = px((card.x + card.w).min(plot.x + plot.w), wide).floor() as usize - 2;
+    assert!(right > left + 100, "they share {left}..{right} px");
+    let last = (foot / tall).floor() as u16;
+    let end = ((bottom / tall).ceil() as u16).min(grid.height() - 1);
+    let rows = super::strip_tests::picture;
+    let lit = |pixel: cellix_render::Rgb| i32::from(pixel.0) - i32::from(pixel.1) > 60;
+    // Under the panel's foot, a few pixels for its shadow, to the picture's foot or the screen's.
+    let first = foot.ceil() as usize + 4;
+    for y in last..end {
+        let image = rows(&grid, y);
+        for (line, pixels) in image.iter().enumerate() {
+            let at = f32::from(y) * tall + line as f32;
+            if (at as usize) < first || at >= bottom - 1.0 {
+                continue;
+            }
+            for x in [left, (left + right) / 2, right] {
+                assert!(
+                    lit(pixels[x]),
+                    "the picture under the card's foot ({foot:.0} px) at x{x} y{at:.0}: {:?}",
+                    pixels[x]
+                );
+            }
+        }
+    }
+    // And the panel still hides it, in its middle and on its last row.
+    let inside = foot - 8.0;
+    let image = rows(&grid, (inside / tall) as u16);
+    let pixel = image[(inside % tall) as usize][(left + right) / 2];
+    assert!(!lit(pixel), "the card covers the picture: {pixel:?}");
+}

@@ -1107,7 +1107,11 @@ panels' colours on the frame's ground, with what washes a row moved as far.
 
 Paint can't go under text, so a rounded surface is coloured cells with its corners painted
 back in the colour behind. Icon pills work the same way. Floating panels reach past their
-rows in paint, which gives them padding that a row of cells couldn't.
+rows in paint, which gives them padding that a row of cells couldn't. A card whose panel starts
+and ends inside its first and last rows hides those rows' words whole, so none shows half
+covered, but not a picture or a drawing: that shows whole up to the card's line, and the card
+hides only what it covers (`Grid::pictures_again_in`). An equation under the Ask card's foot
+lost 29 px of its first line (0.12.0's release review, q4-ask-follow-up).
 
 Ghostty doesn't clip images, so on Ghostty tiles reach past the text area: each row runs on
 into the right padding in its edge colour, and the last row runs on to the bottom of the
