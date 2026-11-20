@@ -156,6 +156,7 @@ EXPECT = {
     "50-comment-picture": "yours",
     "50-comment-picture-light": "yours",
     "50-comment-link-menu": "Copy Link",
+    "50-comment-mentions": "Comment 1",
     "m1-agent-names": "Fix the login",
     "m1-agent-names-tip": "Fix the login",
     "m1-agent-names-list": "Refund route",
@@ -1793,6 +1794,21 @@ with tempfile.TemporaryDirectory() as made:
     link_menu = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0],
                  ["right", ["example.com/notes", 6]], ["wait", 0.6]]
     shoot("50-comment-link-menu", link_menu, NOTE_FILE, size="150x44", cellix=True)
+    # Comments naming each other: each card's number, muted, last in its header, and a mention
+    # of another, "#1" in a comment and "Comment 1" in an agent's answer, a link.
+    mentions = [
+        {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
+         "text": "Say which normaliser this assumes.", "replies": [],
+         "resolved": False, "told": 0, "asked": False, "kind": "Clarity", "suggested_by": ""},
+        {"id": 2, "file": NOTE_FILE, "line": 3, "quote": "for inputs of $n$ tokens",
+         "text": "The same gap as #1, for the cost claim.",
+         "replies": [{"author": "Claude", "text": "Agree: one sentence covers both, as Comment 1 asks."}],
+         "resolved": False, "told": 1, "asked": False, "kind": "Evidence", "suggested_by": ""},
+    ]
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(mentions, f)
+    mentioned = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0]]
+    shoot("50-comment-mentions", mentioned, NOTE_FILE, size="150x44", cellix=True)
     # A review the agent has checked: a verdict on the reviewer's comment and a suggestion.
     review = [
         {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",

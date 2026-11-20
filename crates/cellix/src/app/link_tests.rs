@@ -374,3 +374,116 @@ fn a_terminals_link_has_open_and_copy_on_a_right_click() {
         "line 2"
     );
 }
+
+/// Three comments, the second naming the first as "#1" and one that isn't there, and an
+/// agent's answer naming the third, which is resolved, as "Comment 3".
+fn mentioning() -> (TempDir, App) {
+    let (dir, mut app, _) = project();
+    app.show_sidebar = false;
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    let threads = r#"[
+      {"id": 1, "file": "alpha.txt", "line": 1, "quote": "first", "text": "Rename this."},
+      {"id": 2, "file": "alpha.txt", "line": 2, "quote": "second",
+       "text": "Same as #1, and comment 9.",
+       "replies": [{"author": "Claude", "text": "Done, as in Comment 3."}]},
+      {"id": 3, "file": "alpha.txt", "line": 1, "quote": "line", "text": "Old one.",
+       "resolved": true}
+    ]"#;
+    app.threads = serde_json::from_str(threads).unwrap();
+    app.run(Command::ShowComments);
+    (dir, app)
+}
+
+/// Each card says its number, muted, last in its header, as VS Code's says its metadata;
+/// agents are told "Comment 2 on …" and name comments so. A mention in a comment or an answer
+/// is a link: a click opens the Comments pane on that comment, lit and in view, as a press on
+/// a line's ◆ does; one resolved is listed with the resolved ones and says so, and one that
+/// isn't there says that. A right click on one has Go to Comment (the user, 20 November:
+/// "since comment boxes are not showing them it's impossible to find that #33").
+#[test]
+fn a_mention_of_a_comment_goes_to_it() {
+    let (_dir, mut app) = mentioning();
+    let grid = screen(&app);
+    let (x, y) = find(&grid, "#2");
+    assert!(
+        grid.row_text(y).contains("You · #2"),
+        "{}",
+        grid.row_text(y)
+    );
+    let gutter = app.theme.gutter.fg;
+    assert_eq!(grid.cell(x, y).style.fg, gutter, "muted");
+    // Painted in its own run, after who wrote it.
+    assert!(
+        grid.paint.iter().any(
+            |p| matches!(p, Paint::Text { text, color, .. } if text == " · #2" && *color == gutter)
+        ),
+        "its number in its own muted run"
+    );
+    // The mention is a link, in the accent.
+    let (x, y) = find(&grid, "#1,");
+    assert_eq!(grid.cell(x, y).style.fg, app.theme.accent);
+
+    click(&mut app, (x, y));
+    assert_eq!(app.lit_thread, Some(1), "{}", screen(&app).text());
+    assert!(app.dock.open && app.dock.front == crate::dock::Front::Comments);
+
+    let (x, y) = find(&screen(&app), "comment 9");
+    click(&mut app, (x + 2, y));
+    assert_eq!(
+        *app.message.borrow(),
+        "There's no comment #9 in this project"
+    );
+    assert_eq!(app.lit_thread, Some(1), "it stays where it was");
+
+    // The answer's mention of a resolved comment lists the resolved ones, on its card.
+    assert!(!screen(&app).text().contains("Old one."));
+    let (x, y) = find(&screen(&app), "Comment 3");
+    click(&mut app, (x + 2, y));
+    assert_eq!(app.lit_thread, Some(3));
+    assert!(app.show_resolved);
+    assert!(screen(&app).text().contains("Old one."));
+    assert!(app.message.borrow().contains("#3 is resolved"));
+
+    // A right click on a mention has Go to Comment.
+    let (x, y) = find(&screen(&app), "#1,");
+    right(&mut app, (x, y));
+    menu_rows(&app, &["Go to Comment #1"]);
+    choose(&mut app, "Go to Comment #1");
+    assert_eq!(app.lit_thread, Some(1));
+}
+
+/// An agent's mention of a comment in a terminal's output: Ctrl+click goes to it, and a right
+/// click has Go to Comment.
+#[test]
+#[cfg(unix)]
+fn a_terminals_mention_of_a_comment_goes_to_it() {
+    let (_dir, mut app) = mentioning();
+    terminal(
+        &mut app,
+        "echo 'I fixed #2 as asked.'; echo ready; sleep 60",
+        "ready",
+    );
+    let (x, y) = find(&screen(&app), "#2 as");
+    let ctrl = Mods {
+        ctrl: true,
+        ..Mods::default()
+    };
+    press(&mut app, MouseKind::Left, (x + 1, y), ctrl);
+    press(&mut app, MouseKind::Up, (x + 1, y), ctrl);
+    assert_eq!(app.lit_thread, Some(2));
+    assert_eq!(app.dock.front, crate::dock::Front::Comments);
+    // Back to the terminal, and its menu.
+    app.dock.front = crate::dock::Front::Session;
+    let (x, y) = find(&screen(&app), "#2 as");
+    right(&mut app, (x + 1, y));
+    choose(&mut app, "Go to Comment #2");
+    assert_eq!(app.dock.front, crate::dock::Front::Comments);
+}
+
+/// The review handed on names each comment by its number too, as its card does.
+#[test]
+fn the_review_says_each_comments_number() {
+    let (_dir, app) = mentioning();
+    let review = super::report::markdown(&app.threads).unwrap();
+    assert!(review.contains("#### Line 2 · Open · #2"), "{review}");
+}

@@ -67,6 +67,8 @@ pub enum Action {
     CopyLink(String),
     /// Opens a file a link names, at a line counting from one where it names one.
     OpenFile(PathBuf, Option<usize>),
+    /// Goes to a comment a mention of it names.
+    ShowComment(u32),
     CloseTab(usize),
     CloseOtherTabs(usize),
     CloseAllTabs,

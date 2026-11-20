@@ -1650,6 +1650,18 @@ impl Session {
         Some(text[start..end].to_string())
     }
 
+    /// The comment a mention under `spot` names, as an agent writes one: "#33", "comment 33".
+    pub fn comment_at(&self, (x, y): Spot) -> Option<u32> {
+        let rows = self.rows();
+        let row = rows.get(y as usize)?;
+        let chars: Vec<char> = row.chars().collect();
+        let at: usize = chars.get(..x as usize)?.iter().map(|c| c.len_utf8()).sum();
+        let refs = crate::threads::comment_refs(row);
+        refs.into_iter()
+            .find(|(start, end, _)| (*start..*end).contains(&at))
+            .map(|(.., id)| id)
+    }
+
     /// The word under `spot` that could be an agent's name: its letters, digits, `-` and `_`.
     pub fn word_at(&self, (x, y): Spot) -> Option<String> {
         let rows = self.rows();

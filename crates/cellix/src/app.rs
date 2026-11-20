@@ -11640,6 +11640,10 @@ impl App {
             self.open_page(address);
             return;
         }
+        if let Some(id) = self.dock.session().and_then(|s| s.comment_at(spot)) {
+            self.go_to_comment(id);
+            return;
+        }
         let word = self.dock.session().and_then(|s| s.word_at(spot));
         if let (Some(word), Some(from)) = (word, self.dock.active)
             && self.look_at_name(&word, from)
@@ -16750,6 +16754,7 @@ impl App {
                 self.open_page(address);
             }
             MenuAction::CopyLink(address) => self.copy_text(address, "Copied the link"),
+            MenuAction::ShowComment(id) => self.go_to_comment(id),
             MenuAction::OpenFile(path, line) => {
                 self.peek = None;
                 self.open_file_at(&path, line);

@@ -23,6 +23,8 @@ pub(super) enum Linked {
     File(PathBuf, Option<usize>),
     /// A picture a comment names, by the name it's given there.
     Picture(String),
+    /// Another comment, by its number: "#33", "comment 33".
+    Comment(u32),
 }
 
 impl App {
@@ -44,6 +46,10 @@ impl App {
                     MenuItem::new("Copy Path", MenuAction::CopyPath(path)),
                 ]
             }
+            Linked::Comment(id) => vec![MenuItem::new(
+                format!("Go to Comment #{id}"),
+                MenuAction::ShowComment(id),
+            )],
         }
     }
 
@@ -69,6 +75,29 @@ impl App {
             Linked::Web(address) => self.open_page(address),
             Linked::File(path, line) => self.open_file_at(&path, line),
             Linked::Picture(name) => self.open_comment_picture(&name),
+            Linked::Comment(id) => self.go_to_comment(id),
+        }
+    }
+
+    /// Goes to the comment a mention names, as a press on a line's ◆ does: the Comments pane
+    /// on its card, lit and in view, and its words in the file. One resolved is listed with the
+    /// resolved ones, and one not here says so.
+    pub(super) fn go_to_comment(&mut self, id: u32) {
+        let Some(thread) = self.threads.iter().find(|t| t.id == id) else {
+            self.say(format!("There's no comment #{id} in this project"));
+            return;
+        };
+        let resolved = thread.resolved;
+        // A kind listed alone would hide it.
+        if self.comment_kind.is_some_and(|kind| kind != thread.kind) {
+            self.comment_kind = None;
+        }
+        if resolved {
+            self.show_resolved = true;
+        }
+        self.show_thread(id);
+        if resolved {
+            self.say(format!("Comment #{id} is resolved. Reopen brings it back"));
         }
     }
 
@@ -91,7 +120,9 @@ impl App {
         let view = self.comments_view();
         let thread = self.threads.iter().find(|t| t.id == id)?;
         let link = threads::links(thread, view).into_iter().nth(index)?;
-        Some(if link.contains("://") {
+        Some(if let Some(id) = threads::comment_ref(&link) {
+            Linked::Comment(id)
+        } else if link.contains("://") {
             Linked::Web(link)
         } else {
             Linked::Picture(link)
@@ -124,6 +155,9 @@ impl App {
         let session = self.dock.sessions.get(index)?;
         if let Some(address) = session.link_at(spot) {
             return Some(Linked::Web(address));
+        }
+        if let Some(id) = session.comment_at(spot) {
+            return Some(Linked::Comment(id));
         }
         let (file, line) = session.path_at(spot)?;
         let (path, _) = self.file_named(&file)?;

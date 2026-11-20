@@ -58,6 +58,8 @@ pub const KINDS: [&str; 5] = [
 /// How far the summary and Check My Review are lifted in their row, so the pills under
 /// them have half a row of clear air.
 const CHECK_LIFT: f32 = 0.25;
+/// What stands between a card's header and its number, which comes last.
+const NUMBER_GAP: &str = " \u{b7} #";
 /// How far a file's heading is lifted in its row, clear of the card under it.
 const FILE_LIFT: f32 = 0.3;
 const BUTTON_PADDING: usize = 1;
@@ -1480,13 +1482,70 @@ pub fn web_spans(text: &str) -> Vec<(usize, usize)> {
 }
 
 /// Each thing in a run of words that a click opens, as the bytes it takes: a web address,
-/// or the name of a picture's file. Where a picture stands on its card its name isn't among
-/// the words, so the names left are of pictures that can't be shown.
+/// the name of a picture's file, or a mention of another comment. Where a picture stands on
+/// its card its name isn't among the words, so the names left are of pictures that can't be
+/// shown.
 pub fn link_spans(text: &str) -> Vec<(usize, usize)> {
     let mut spans = web_spans(text);
     spans.extend(picture_spans(text));
+    let refs = comment_refs(text)
+        .into_iter()
+        .map(|(start, end, _)| (start, end));
+    spans.extend(refs.filter(|(start, end)| {
+        // One inside an address is part of the address.
+        !spans_hold(&web_spans(text), *start, *end)
+    }));
     spans.sort_unstable();
+    spans.dedup();
     spans
+}
+
+fn spans_hold(spans: &[(usize, usize)], start: usize, end: usize) -> bool {
+    spans.iter().any(|(s, e)| *s <= start && end <= *e)
+}
+
+/// Each mention of a comment by its number in a run of words, as the bytes it takes and the
+/// number: "#33", "comment 33", "Comment #33". An agent is told "Comment 33 on …", and
+/// answers in those words; the number is on every card. A "#" inside a word or an address,
+/// as "page#33", is no mention.
+pub fn comment_refs(text: &str) -> Vec<(usize, usize, u32)> {
+    let mut refs = Vec::new();
+    let mut at = 0;
+    while at < text.len() {
+        let rest = &text[at..];
+        let before = text[..at].chars().next_back();
+        let starts = before.is_none_or(|c| !(c.is_alphanumeric() || "_/&#-".contains(c)));
+        let named = rest
+            .get(..8)
+            .is_some_and(|word| word.eq_ignore_ascii_case("comment "));
+        let lead = match () {
+            _ if !starts => None,
+            _ if rest.starts_with('#') => Some(1),
+            _ if named => Some(8 + usize::from(rest[8..].starts_with('#'))),
+            _ => None,
+        };
+        if let Some(lead) = lead {
+            let digits = rest[lead..].bytes().take_while(u8::is_ascii_digit).count();
+            let after = rest[lead + digits..].chars().next();
+            let ends = after.is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+            let number = rest[lead..lead + digits].parse::<u32>().ok();
+            if let Some(number) = number.filter(|_| ends && digits <= 6) {
+                refs.push((at, at + lead + digits, number));
+                at += lead + digits;
+                continue;
+            }
+        }
+        at += rest.chars().next().map_or(1, char::len_utf8);
+    }
+    refs
+}
+
+/// The comment a link's words name, where they're a mention of one and nothing more.
+pub fn comment_ref(link: &str) -> Option<u32> {
+    match comment_refs(link).as_slice() {
+        [(0, end, id)] if *end == link.len() => Some(*id),
+        _ => None,
+    }
 }
 
 /// Every link on a comment's card, in its words and then its answers in order.
@@ -1984,7 +2043,7 @@ fn lay_out(
         let done = if thread.resolved { " · Resolved" } else { "" };
         // And how long ago it was made, where that's known.
         let ago = age(thread.at, view.now).map_or_else(String::new, |ago| format!(" · {ago}"));
-        let label = format!("{by}{kind}{done}{ago}");
+        let label = format!("{by}{kind}{done}{ago}{NUMBER_GAP}{id}");
         let (words, _) = words_of(thread);
         let fits = |pill: &String| {
             measure.width(&label, small()) + PILL_AIR + pill_width(pill, measure) <= width
@@ -3084,7 +3143,20 @@ pub fn draw(
                     draw_pill(grid, x, y, text, (right, inner, tone), measure);
                     end = x.floor() as u16;
                 }
-                grid.label_at(a.text, text_x, y, label, style, end, SMALL);
+                // Its number, last and muted, as VS Code's comment says when it was made: a
+                // suggestion's who is in the accent, and its number isn't.
+                let (who, number) = label.rsplit_once(NUMBER_GAP).unwrap_or((label, ""));
+                grid.label_at(a.text, text_x, y, who, style, end, SMALL);
+                if !number.is_empty() {
+                    let at = a.text + measure.width(who, small());
+                    let cell = text_x + who.chars().count() as u16;
+                    let muted = Style {
+                        fg: theme.gutter.fg,
+                        ..inner
+                    };
+                    let tail = format!("{NUMBER_GAP}{number}");
+                    grid.label_at(at, cell, y, &tail, muted, end, SMALL);
+                }
             }
             Line::Pill(_, text, words) => {
                 let tone = pill_tone(*words, theme);
@@ -3881,6 +3953,47 @@ mod tests {
 
     /// An answer that begins with a link or a file's name keeps its spelling, and its links
     /// are counted as its card shows them, so a click opens the one under it.
+    /// A comment named by its number, as agents write it, and nothing that only looks so.
+    #[test]
+    fn a_comment_is_mentioned_by_its_number() {
+        let ids = |text: &str| -> Vec<(String, u32)> {
+            let refs = comment_refs(text).into_iter();
+            refs.map(|(s, e, id)| (text[s..e].to_string(), id))
+                .collect()
+        };
+        assert_eq!(
+            ids("See #33, comment 4 and Comment #5."),
+            [
+                ("#33".to_string(), 33),
+                ("comment 4".to_string(), 4),
+                ("Comment #5".to_string(), 5)
+            ]
+        );
+        assert_eq!(ids("(#7)"), [("#7".to_string(), 7)]);
+        for none in [
+            "page#33",
+            "a/#3",
+            "#33a",
+            "#",
+            "comment",
+            "comments 3",
+            "x_#2",
+            "#1234567",
+        ] {
+            assert!(ids(none).is_empty(), "{none}");
+        }
+        // One inside an address is the address's.
+        let text = "https://example.com/spec#3 and #4";
+        let spans = link_spans(text);
+        let words: Vec<&str> = spans.iter().map(|(s, e)| &text[*s..*e]).collect();
+        assert_eq!(words, ["https://example.com/spec#3", "#4"]);
+        assert_eq!(comment_ref("#4"), Some(4));
+        assert_eq!(comment_ref("comment 12"), Some(12));
+        assert_eq!(comment_ref("https://example.com/spec#3"), None);
+        // Letters that take more than a byte don't trip the search.
+        assert_eq!(ids("Ünïcødé, then #8 — ok"), [("#8".to_string(), 8)]);
+    }
+
     #[test]
     fn an_answers_links_are_counted_as_its_card_shows_them() {
         let fields =

@@ -74,8 +74,8 @@ fn resting_on_commented_words_shows_their_comment_until_the_pointer_leaves() {
     let grid = screen(&app);
     let text = grid.text();
     assert!(
-        text.contains("You · Clarity"),
-        "who made it and its kind:\n{text}"
+        text.contains("You · Clarity · #1"),
+        "who made it, its kind and its number, which answers name it by:\n{text}"
     );
     assert!(
         text.contains("Why first? Measure it before deciding."),
@@ -226,7 +226,7 @@ fn painted_the_card_stands_on_its_own_rows_under_the_words() {
         .paint
         .iter()
         .find_map(|p| match p {
-            Paint::Text { text, y, .. } if text == "You · Clarity" => Some(*y),
+            Paint::Text { text, y, .. } if text == "You · Clarity · #1" => Some(*y),
             _ => None,
         })
         .expect("its head painted");

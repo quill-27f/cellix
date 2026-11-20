@@ -152,7 +152,8 @@ fn entry(thread: &Thread) -> String {
     });
     // When it was made, where that's known: in UTC, since a review is read anywhere.
     let made = utc(thread.at).map_or_else(String::new, |made| format!(" · {made}"));
-    let mut text = format!("#### {at} · {state}{earlier}{made}\n");
+    // Its number last, as its card says it, which answers name it by.
+    let mut text = format!("#### {at} · {state}{earlier}{made} · #{}\n", thread.id);
     let about = match &thread.about {
         Some(About::Problem { message }) => message.as_str(),
         _ if !thread.selection.is_empty() => thread.selection.as_str(),

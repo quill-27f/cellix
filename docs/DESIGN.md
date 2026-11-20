@@ -632,6 +632,20 @@ on every row it wraps onto, and a click on it opens it the way Open in Browser o
 side pane's browser where one is set up, the system's otherwise. A click anywhere else on the
 comment is still the comment's.
 
+Each card says its comment's number, last in its header and muted, as VS Code's comment says
+when it was made: "You · Clarity · 5 min · #33". The comment glance card says it after who made
+it, and the review's Markdown at the end of each comment's heading. Agents are told "Comment 33
+on …" and answer "#33" or "comment 33", which no card showed (the user, 20 November 2026:
+"there are references like comment #33, etc., but since comment boxes are not showing them it's
+impossible to find that #33"). Such a mention, "#33", "comment 33" or "Comment #33", in a
+comment's words, a reply or an agent's answer, is a link, drawn as a web address is; a "#" inside
+a word or an address isn't one. A click on it opens the Comments pane on that comment, lit and in
+view, its words selected in the file, as a press on a line's ◆ does; a kind listed alone gives
+way, a resolved comment is listed with the resolved ones and the bar says it's resolved, and one
+that isn't in the project says so. A right click on it has Go to Comment #33. In a terminal's
+output in the side pane, Ctrl+click on a mention goes there too, and a right click has the same
+row. The Comments pane has no filter of words to find "#33" by, so none was added.
+
 A right click on a link, wherever one can be clicked, opens a menu with Open Link and Copy Link
 (decided 18 November 2026: the user found a link opened in the terminal's browser hard to
 share). It drops from under the pointer's row, at the pointer's column, so the link it's about

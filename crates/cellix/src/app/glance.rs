@@ -282,6 +282,8 @@ impl App {
         } else {
             format!("{by} · {}", thread.kind)
         };
+        // Its number, as its card in the pane says it, for a mention of it to be found by.
+        let head = format!("{head} · #{}", thread.id);
         let mut rows = vec![Row::Head(head)];
         rows.extend(
             cut(&thread.text, width, COMMENT_ROWS, measure)
