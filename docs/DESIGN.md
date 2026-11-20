@@ -674,7 +674,10 @@ November 2026: "I cannot do copy paste from comments, which is a crucial feature
 them goes to the comment's words in the file as it always did and begins a selection, a drag
 carries it on, a double click selects a word, a triple click the line of the comment or answer
 it's on, every row it wraps into, and Shift+click reaches from where it began. It's tinted in the
-selection's colour, as a page's is. The copy key, Command::Copy as Cmd+C or Ctrl+Shift+C reach it,
+selection's colour taken toward the accent until it stands 1.8 to 1 from the card under it, about
+as far as a page's stands from the sheet (`Theme::selection_on`): in the selection's own colour it
+was 1.27 to 1 from a lit card and could hardly be seen. The words on it are deepened where they'd
+read under 4.5 to 1 there, as the light theme's are. The copy key, Command::Copy as Cmd+C or Ctrl+Shift+C reach it,
 copies it, the way every copy goes, by OSC 52 through the terminal: as written, with the new lines
 it had where rows wrapped and a new line between a comment's words and an answer's. Any other key,
 or a press off the cards, lets it go, and the copy key is the file's again. A right click on a

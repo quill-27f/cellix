@@ -1772,8 +1772,12 @@ pub fn words_mark(area: Rect, shown: Shown, measure: &dyn Measure) -> u64 {
     hasher.finish()
 }
 
-/// Tints what's selected of a row of words, `index` in the list, set at `size` from `from`:
-/// under its letters where there are pictures, and behind them in the cells.
+/// Tints what's selected of a row of words, `index` in the list, set at `size` from `from`, on
+/// a card of colour `ground`: under its letters where there are pictures, and behind them in
+/// the cells. The tint stands 1.8 to 1 from the card (`Theme::selection_on`), and words that
+/// wouldn't read on it at 4.5 to 1 are deepened there: in the cells' own colour, and where
+/// there are pictures painted again over themselves, after them (`under` false).
+#[allow(clippy::too_many_arguments)]
 fn tint_selected(
     grid: &mut Grid,
     (index, text): (usize, &str),
@@ -1781,6 +1785,7 @@ fn tint_selected(
     (size, right, over_line): (u8, u16, bool),
     view: View,
     (measure, theme): (&dyn Measure, &Theme),
+    (ground, words): (cellix_render::Rgb, cellix_render::Rgb),
     under: bool,
 ) {
     let Some((first, last)) = view.selected else {
@@ -1803,22 +1808,24 @@ fn tint_selected(
     if start >= end {
         return;
     }
+    let band = theme.selection_on(ground);
     if measure.in_cells() {
         if !under {
             let left = cell + start as u16;
             let wide = ((end - start) as u16).min(right.saturating_sub(left));
             grid.set_style(Rect::new(left, y, wide, 1), |style| Style {
-                bg: theme.selection,
+                fg: theme.on_selection(style.fg, band),
+                bg: band,
                 ..style
             });
         }
         return;
     }
+    let font = Font {
+        size,
+        ..Font::default()
+    };
     if under {
-        let font = Font {
-            size,
-            ..Font::default()
-        };
         let advances = measure.advances(text, font);
         let x = from + stretch(&advances, 0, start);
         let wide = stretch(&advances, start, end - start);
@@ -1829,8 +1836,36 @@ fn tint_selected(
             SELECTION_INSET
         };
         let tall = 1.0 - SELECTION_INSET - foot;
-        let band = Bounds::cells(x, f32::from(y) + SELECTION_INSET, wide, tall);
-        grid.panel(band, 0, Some(theme.selection), None);
+        let shape = Bounds::cells(x, f32::from(y) + SELECTION_INSET, wide, tall);
+        grid.panel(shape, 0, Some(band), None);
+        return;
+    }
+    // The selected words again, in pieces split where a link starts or ends, each in its own
+    // colour deepened for the band, where that differs from what was painted.
+    let byte = |chars: usize| {
+        text.char_indices()
+            .nth(chars)
+            .map_or(text.len(), |(b, _)| b)
+    };
+    let (first, last) = (byte(start), byte(end));
+    let links = link_spans(text);
+    let mut cuts = vec![first, last];
+    for (a, b) in &links {
+        cuts.extend([*a, *b].into_iter().filter(|c| *c > first && *c < last));
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    for piece in cuts.windows(2) {
+        let (a, b) = (piece[0], piece[1]);
+        let linked = links.iter().any(|(s, e)| a >= *s && a < *e);
+        let was = if linked { theme.accent } else { words };
+        let ink = theme.on_selection(was, band);
+        if ink == was {
+            continue;
+        }
+        let x = from + measure.width(&text[..a], font);
+        let at = (x, f32::from(y));
+        grid.text_run(at, f32::from(right), &text[a..b], (ink, false), font);
     }
 }
 
@@ -3585,7 +3620,7 @@ pub fn draw(
                     x += wide;
                 }
             }
-            Line::Text(_, text) => {
+            Line::Text(id, text) => {
                 let place = (a.text, text_x, y);
                 let tint = |grid: &mut Grid, under| {
                     let sizes = (100, right, over_answer(&all, index));
@@ -3596,6 +3631,7 @@ pub fn draw(
                         sizes,
                         view,
                         (measure, theme),
+                        (card_fill(*id), inner.fg),
                         under,
                     );
                 };
@@ -3648,7 +3684,7 @@ pub fn draw(
                 // `LINE_AIR`: up with the box, it stood 10 px under the line.
                 grid.lift_since(lines_from, words_lift);
             }
-            Line::Reply(_, text) => {
+            Line::Reply(id, text) => {
                 let place = (a.text, text_x, y);
                 let tint = |grid: &mut Grid, under| {
                     let sizes = (SMALL, right, over_answer(&all, index));
@@ -3659,6 +3695,7 @@ pub fn draw(
                         sizes,
                         view,
                         (measure, theme),
+                        (card_fill(*id), inner.fg),
                         under,
                     );
                 };
@@ -3686,6 +3723,7 @@ pub fn draw(
                         sizes,
                         view,
                         (measure, theme),
+                        (style.bg, style.fg),
                         under,
                     );
                 };

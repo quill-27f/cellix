@@ -7432,5 +7432,12 @@
     "title": "A card over a picture or drawing hides only what it covers; past its line the picture shows whole",
     "test": "a_card_over_a_picture_hides_only_what_it_covers",
     "passes": true
+  },
+  {
+    "id": "card-selection-seen",
+    "milestone": 15,
+    "title": "A selection on a comment card stands 1.8 to 1 from the card, its words at 4.5 to 1",
+    "test": "a_selection_on_a_card_is_seen_and_its_words_read_on_it",
+    "passes": true
   }
 ]

@@ -373,6 +373,25 @@ impl Theme {
         }
     }
 
+    /// A selection on `ground`: the selection's colour where it stands `SELECTION_APART` to 1
+    /// or more from it, or else taken a step at a time toward the accent until it does. On a
+    /// comment card the selection's own colour was 1.27 to 1 from the lit card (dark) and 1.26
+    /// (light), and could hardly be seen, where a page's is 1.78 from the sheet (0.12.0's last
+    /// review, 50-comment-selected).
+    pub fn selection_on(&self, ground: Rgb) -> Rgb {
+        (0..=100)
+            .map(|step| mix(self.selection, self.accent, step as f32 / 100.0))
+            .find(|band| contrast(*band, ground) >= SELECTION_APART)
+            .unwrap_or(self.accent)
+    }
+
+    /// Words of colour `fg` on a selection of colour `band`: themselves where they read at 4.5
+    /// to 1 there, or else deepened (lightened, on a dark band) until they do. Light, a band
+    /// 1.8 to 1 from a card is too deep for the words' own colour, which read 3.8 to 1 on it.
+    pub fn on_selection(&self, fg: Rgb, band: Rgb) -> Rgb {
+        readable(fg, band, 4.5)
+    }
+
     /// What can't be done here but has to be read, as an agent that isn't installed and the
     /// note that says so: the secondary words' colour (`secondary_words`). A row in the light
     /// theme's quiet words read as one that can be picked.
@@ -698,6 +717,10 @@ impl Default for Theme {
         }
     }
 }
+
+/// How far apart, as WCAG counts it, a selection stands from the ground it's on, at least:
+/// about what a page's selection is from the sheet (1.78), where it's seen at a glance.
+pub(crate) const SELECTION_APART: f32 = 1.8;
 
 /// `by` of the way from `from` to `to`: a wash of one colour over another.
 pub(crate) fn mix(from: Rgb, to: Rgb, by: f32) -> Rgb {

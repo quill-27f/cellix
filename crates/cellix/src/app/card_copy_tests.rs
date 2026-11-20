@@ -12,6 +12,7 @@ use cellix_render::Grid;
 use tempfile::TempDir;
 
 use super::{App, Overlay};
+use crate::theme::{SELECTION_APART, Theme, contrast};
 
 /// A file with a comment of two lines on its first line, answered by an agent.
 fn commented() -> (TempDir, App) {
@@ -108,20 +109,20 @@ fn a_cards_words_are_selected_with_the_mouse_and_copied() {
     drag(&mut app, from, to);
     let grid = screen(&app);
     let panel = app.dock_panel().unwrap();
-    assert_eq!(
+    // On the card's ground, which the words after it keep, and 1.8 to 1 or more from it.
+    let (band, ground) = (
         grid.cell(from.0, from.1).style.bg,
-        app.theme.selection,
-        "tinted: {:?} shown {:?} at {from:?} in {:?}\n{}",
+        grid.cell(to.0, to.1).style.bg,
+    );
+    assert!(
+        band != ground && contrast(band, ground) >= SELECTION_APART,
+        "tinted {band:?} on {ground:?}: {:?} shown {:?} at {from:?} in {:?}\n{}",
         app.card_selection,
         app.card_selected(panel),
         app.dock.tops.of(crate::dock::Front::Comments),
         grid.text()
     );
-    assert_ne!(
-        grid.cell(to.0, to.1).style.bg,
-        app.theme.selection,
-        "to there"
-    );
+    assert!(contrast(grid.cell(from.0, from.1).style.fg, band) >= 4.5);
     app.run(Command::Copy);
     assert_eq!(copied(&mut app).as_deref(), Some("thing"));
     // As the terminal sends Cmd+C, and Ctrl+Shift+C.
@@ -177,7 +178,7 @@ fn a_cards_words_are_selected_with_the_mouse_and_copied() {
             .cell(find(&grid, "Rename").0, find(&grid, "Rename").1)
             .style
             .bg,
-        app.theme.selection
+        band
     );
 }
 
@@ -248,9 +249,20 @@ fn where_there_are_pictures_a_cards_selection_is_tinted_under_its_words() {
     drag(&mut app, from, (from.0 + 12, from.1));
     let grid = screen(&app);
     let panel = app.dock_panel().unwrap();
-    let tinted = grid.paint.iter().any(|p| {
-        matches!(p, cellix_render::Paint::Panel { fill: Some(fill), .. } if *fill == app.theme.selection)
-    });
+    // A band in the selection's colour for the ground of one of the panels painted, the card.
+    let fills: Vec<_> = grid
+        .paint
+        .iter()
+        .filter_map(|p| match p {
+            cellix_render::Paint::Panel {
+                fill: Some(fill), ..
+            } => Some(*fill),
+            _ => None,
+        })
+        .collect();
+    let tinted = fills
+        .iter()
+        .any(|band| fills.iter().any(|g| *band == app.theme.selection_on(*g)));
     assert!(
         tinted,
         "{:?} shown {:?}",
@@ -260,6 +272,52 @@ fn where_there_are_pictures_a_cards_selection_is_tinted_under_its_words() {
     app.run(Command::Copy);
     let words = copied(&mut app).unwrap_or_default();
     assert!(words.contains("ename the"), "{words:?}");
+}
+
+/// A selection on a card stands 1.8 to 1 or more from the card, about as far as a page's
+/// does from the sheet, and the words on it read at 4.5 to 1: dark and light, on a card and on
+/// the lit one, measured in the picture the tour's terminal shows. It was the selection's own
+/// colour, 1.27 to 1 from the lit card dark and 1.26 light, and could hardly be seen (0.12.0's
+/// last review, 50-comment-selected).
+#[test]
+fn a_selection_on_a_card_is_seen_and_its_words_read_on_it() {
+    for light in [false, true] {
+        for lit in [false, true] {
+            let (_dir, mut app) = commented();
+            if light {
+                app.theme = Theme::named(Some("light"));
+            }
+            app.set_measure(std::rc::Rc::new(
+                cellix_render::FontMeasure::new(17, 50).with_type_row(36),
+            ));
+            let grid = screen(&app);
+            let from = find(&grid, "Rename");
+            drag(&mut app, from, end_of(&grid, "Rename the thing"));
+            app.lit_thread = lit.then_some(4);
+            let grid = screen(&app);
+            let rows = super::strip_tests::picture(&grid, from.1);
+            let left = usize::from(from.0) * 17;
+            // The card's ground, in its padding before the words; the band, the colour most of
+            // the selected words' middle stands on; the words, as far from it as they get.
+            let ground = rows[25][left - 8];
+            let mut seen = std::collections::HashMap::new();
+            for row in &rows[15..35] {
+                for pixel in &row[left + 4..left + 120] {
+                    *seen.entry(*pixel).or_insert(0) += 1;
+                }
+            }
+            let band = *seen.iter().max_by_key(|(_, n)| **n).unwrap().0;
+            let ink = seen
+                .keys()
+                .map(|pixel| contrast(*pixel, band))
+                .fold(0.0, f32::max);
+            let case = format!("light {light}, lit {lit}: {band:?} on {ground:?}");
+            assert!(contrast(band, ground) >= SELECTION_APART, "{case}");
+            assert!(ink >= 4.5, "{case}: the words at {ink}");
+            // And the card is the one meant: lit, the accent's tint.
+            assert_eq!(lit, ground != app.theme.popup, "{case}");
+        }
+    }
 }
 
 /// Picks a row of the menu that's open.
