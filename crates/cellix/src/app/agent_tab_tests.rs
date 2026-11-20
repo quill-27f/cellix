@@ -75,6 +75,7 @@ fn said(state: AgentState, detail: &str) -> Request {
         pid: None,
         transcript: String::new(),
         name: String::new(),
+        prompt: String::new(),
     })
 }
 
@@ -265,6 +266,7 @@ fn the_tile_says_what_the_most_urgent_tab_says() {
             pid,
             transcript: String::new(),
             name: String::new(),
+            prompt: String::new(),
         })
     };
     app.serve(news(
@@ -312,6 +314,7 @@ fn the_agents_list_shows_only_agents_with_a_tab_here() {
             pid: None,
             transcript: String::new(),
             name: String::new(),
+            prompt: String::new(),
         })
     };
     // In other terminals: Codex idle and Gemini CLI asking, by their hooks, and OpenCode,
@@ -382,4 +385,131 @@ fn the_agents_list_shows_only_agents_with_a_tab_here() {
     app.handle(mouse(MouseKind::Left, x, heading + 1));
     assert_eq!(app.dock.active, Some(tab));
     assert_eq!(app.dock.front, Front::Session);
+}
+
+/// Agents' tabs whose own titles say only which program they are go by their conversation's
+/// title, which Claude Code keeps in its transcript, or else by the first thing asked of them,
+/// cut short, with the whole name in the tab's tip; the Agents list calls them the same. Two
+/// that would still read alike are told apart. A real title and a Rename still win (the user,
+/// 20 November: "All the tabs say claude code and it's hard to distinguish them").
+#[test]
+#[cfg(unix)]
+fn agents_tabs_with_no_title_go_by_their_topic_or_what_was_asked() {
+    let (dir, mut app) = project();
+    app.dock.width = Some(100);
+    app.handle(Event::Resize(130, 30));
+    let first = start(dir.path(), &mut app, "✳ Claude Code");
+    let second = start(dir.path(), &mut app, "Claude Code");
+    let third = start(dir.path(), &mut app, "claude");
+    let shown = |app: &App| -> Vec<String> {
+        let names = app.dock.session_names().into_iter();
+        names.map(|(shown, _)| shown).collect()
+    };
+    assert_eq!(
+        shown(&app),
+        ["Claude Code", "Claude Code (2)", "Claude Code (3)"],
+        "told apart before anything names them"
+    );
+    // The tab in front whole; one behind cut short keeps its number, and has the whole in
+    // its tip.
+    let (grid, y) = tab_row(&app);
+    assert!(
+        grid.row_text(y).contains("Claude Code (3)"),
+        "{}",
+        grid.row_text(y)
+    );
+    assert!(grid.row_text(y).contains("… (2)"), "{}", grid.row_text(y));
+    let title = app.title_of(app.dock_area().unwrap());
+    let tips: Vec<String> = (title.x..title.right())
+        .filter_map(|x| app.dock.cut_name(title, x))
+        .collect();
+    assert!(
+        tips.iter().any(|tip| tip == "Claude Code (2)"),
+        "{tips:?} {}",
+        grid.row_text(y)
+    );
+
+    // Each linked to its own session, as the hooks link them.
+    for (index, id) in [(first, "s1"), (second, "s2"), (third, "s3")] {
+        app.dock.sessions[index].agent_session = Some(id.into());
+    }
+    let transcript = dir.path().join("s1.jsonl");
+    fs::write(
+        &transcript,
+        "{\"type\":\"ai-title\",\"aiTitle\":\"Refund route and its tests\",\"sessionId\":\"s1\"}\n",
+    )
+    .unwrap();
+    let asked = |session: &str, prompt: &str, transcript: &Path| {
+        Request::Agent(AgentEvent {
+            session: session.into(),
+            agent: "Claude Code".into(),
+            state: AgentState::Working,
+            detail: "Working".into(),
+            folder: "/w".into(),
+            pid: None,
+            transcript: transcript.display().to_string(),
+            name: String::new(),
+            prompt: prompt.into(),
+        })
+    };
+    let nowhere = Path::new("");
+    app.serve(asked("s1", "Add a refund route", &transcript));
+    app.serve(asked(
+        "s2",
+        "Fix the login redirect after a password reset, and add a test for it",
+        nowhere,
+    ));
+    app.serve(asked(
+        "s3",
+        "Fix the login redirect after a password change",
+        nowhere,
+    ));
+    // Only the first prompt names a tab.
+    app.serve(asked("s2", "And the logout too", nowhere));
+    // The transcript is read away from the screen, a little at a time.
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while app.dock.sessions[first].topic.is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "the transcript's title was never read"
+        );
+        app.follow_transcripts();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        shown(&app),
+        [
+            "Refund route and its tests",
+            "Fix the login redirect…",
+            "Fix the login redirect… (2)",
+        ]
+    );
+
+    // The tab's tip has its whole name.
+    let area = app.dock_area().unwrap();
+    let title = app.title_of(area);
+    let whole = "Fix the login redirect after a password reset, and add a test for it";
+    let x = (title.x..title.right())
+        .find(|&x| app.dock.cut_name(title, x).as_deref() == Some(whole))
+        .expect("the second tab's tip has its whole name");
+    app.handle(mouse(MouseKind::Move, x, area.y));
+    let text = screen(&app).text();
+    assert!(text.contains("password reset"), "{text}");
+
+    // The Agents list calls each what its tab does.
+    app.run(cellix_input::Command::ListAgents);
+    let text = screen(&app).text();
+    assert!(text.contains("Refund route and its tests"), "{text}");
+    assert!(text.contains("Fix the login redirect… (2)"), "{text}");
+
+    // A title that says what it works on wins over both, and a Rename over that.
+    app.dock.sessions[first].title = Some("✳ pricing page".into());
+    assert_eq!(app.dock.sessions[first].label(), "pricing page");
+    app.dock.sessions[second].renamed = Some("login".into());
+    assert_eq!(shown(&app)[1], "login");
+    assert_eq!(
+        shown(&app)[2],
+        "Fix the login redirect…",
+        "nothing reads like it now"
+    );
 }

@@ -1035,7 +1035,11 @@ fn walk(folder: &Path, depth: usize, found: &mut dyn FnMut(&Path) -> bool) -> bo
     false
 }
 
-/// Follows a transcript as it grows, reading only what's new, for the context on a tab.
+/// Longer than any line that titles a conversation: longer ones aren't looked at for one.
+const TITLE_LINE: usize = 4096;
+
+/// Follows a transcript as it grows, reading only what's new, for the context on a tab, and
+/// its title, which names the tab while the agent's terminal title doesn't.
 #[derive(Debug, Default)]
 pub struct Meter {
     pub path: PathBuf,
@@ -1045,6 +1049,11 @@ pub struct Meter {
     codex: Option<bool>,
     counted: String,
     pub usage: Usage,
+    /// The conversation's titles as Claude Code keeps them, the latest of each kind: one the
+    /// person gave it (/rename), one Claude Code wrote, and an older version's summary.
+    custom_title: Option<String>,
+    ai_title: Option<String>,
+    summary: Option<String>,
 }
 
 impl Meter {
@@ -1087,7 +1096,51 @@ impl Meter {
         }
     }
 
+    /// The conversation's title, as Claude Code's /resume lists it: the one the person gave
+    /// it, or the one it wrote, or else its summary.
+    pub fn title(&self) -> Option<&str> {
+        (self.custom_title.as_deref())
+            .or(self.ai_title.as_deref())
+            .or(self.summary.as_deref())
+    }
+
+    /// Notes a line that titles the conversation: `custom-title`, `ai-title` or `summary`,
+    /// each with its words in a field of its own.
+    fn take_title(&mut self, line: &str) -> bool {
+        let kinds = [
+            ("\"custom-title\"", "customTitle"),
+            ("\"ai-title\"", "aiTitle"),
+            ("\"summary\"", "summary"),
+        ];
+        let Some(at) = kinds.iter().position(|(kind, _)| line.contains(kind)) else {
+            return false;
+        };
+        let Ok(entry) = serde_json::from_str::<Value>(line) else {
+            return false;
+        };
+        let kind = kinds[at].0.trim_matches('"');
+        if entry["type"].as_str() != Some(kind) {
+            return false;
+        }
+        let words = entry[kinds[at].1].as_str().map(str::trim).unwrap_or("");
+        let words = words.split_whitespace().collect::<Vec<_>>().join(" ");
+        if words.is_empty() {
+            return true;
+        }
+        let slot = match at {
+            0 => &mut self.custom_title,
+            1 => &mut self.ai_title,
+            _ => &mut self.summary,
+        };
+        *slot = Some(words);
+        true
+    }
+
     fn take(&mut self, line: &str) {
+        // A title is short, and the only line that says one.
+        if line.len() < TITLE_LINE && self.take_title(line) {
+            return;
+        }
         // Most lines say nothing about tokens, and aren't worth reading whole.
         let codex = *self
             .codex
@@ -1288,6 +1341,71 @@ pub mod tests {
         assert_eq!(meter.usage.context, 88_002);
         assert_eq!(meter.usage.input, 41_002 + 62_002 + 83_002 + 88_002);
         assert_eq!(meter.usage, parse(CLAUDE).usage);
+    }
+
+    /// Claude Code keeps the conversation's title in its transcript, as lines of their own,
+    /// written again as it changes: the latest one it wrote, and over it one the person gave.
+    #[test]
+    fn the_meter_reads_the_conversations_title() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.jsonl");
+        let summary = r#"{"type":"summary","summary":"Older  summary","leafUuid":"u0"}"#;
+        // The session without the title its first line gives it.
+        let untitled: String = CLAUDE
+            .lines()
+            .skip(1)
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert!(!untitled.contains("custom-title"));
+        std::fs::write(&path, format!("{summary}\n{untitled}")).unwrap();
+        let mut meter = Meter::new(path.clone());
+        meter.refresh();
+        assert_eq!(meter.title(), Some("Older summary"), "spaces made single");
+        assert_eq!(
+            meter.usage,
+            parse(CLAUDE).usage,
+            "and the context still counted"
+        );
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        use std::io::Write as _;
+        writeln!(
+            file,
+            r#"{{"type":"ai-title","aiTitle":"Refund route","sessionId":"s"}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"ai-title","aiTitle":"Refund route and its tests","sessionId":"s"}}"#
+        )
+        .unwrap();
+        meter.refresh();
+        assert_eq!(
+            meter.title(),
+            Some("Refund route and its tests"),
+            "the latest"
+        );
+        writeln!(
+            file,
+            r#"{{"type":"custom-title","customTitle":"refunds","sessionId":"s"}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"ai-title","aiTitle":"Something else","sessionId":"s"}}"#
+        )
+        .unwrap();
+        meter.refresh();
+        assert_eq!(meter.title(), Some("refunds"), "the person's own outranks");
+        // Words that only mention a title's kind aren't one.
+        let other = dir.path().join("o.jsonl");
+        let user = r#"{"type":"user","kind":"ai-title","aiTitle":"not a title"}"#;
+        std::fs::write(&other, format!("{user}\n")).unwrap();
+        let mut meter = Meter::new(other);
+        meter.refresh();
+        assert_eq!(meter.title(), None);
     }
 
     #[test]

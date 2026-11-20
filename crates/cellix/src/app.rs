@@ -9664,6 +9664,19 @@ impl App {
         if let Some(word) = stopped.or_else(held) {
             return Some((word.agent, word.session, word.transcript));
         }
+        // Its hooks' news, once they've linked it to the session: with two tabs of one agent,
+        // each knows its own transcript.
+        let linked = session.agent_session.as_deref().and_then(|id| {
+            let mut running = self.agents.running.iter().rev();
+            running.find(|e| e.session == id && !e.transcript.is_empty())
+        });
+        if let Some(event) = linked.filter(|_| !session.exited) {
+            return Some((
+                event.agent.clone(),
+                event.session.clone(),
+                event.transcript.clone(),
+            ));
+        }
         let alike = self.dock.sessions.iter().filter(|s| s.name == session.name);
         if session.exited || alike.filter(|s| !s.exited).count() != 1 {
             return None;
@@ -9713,6 +9726,11 @@ impl App {
                 session.usage = meter
                     .map(|m| m.usage.clone())
                     .filter(|usage| usage.percent().is_some());
+                // Its conversation's title, which names its tab while its terminal's says only
+                // which program it is.
+                if let Some(title) = meter.and_then(crate::transcript::Meter::title) {
+                    session.topic = Some(title.to_string());
+                }
             }
         }
         // Open pages whose transcripts grew are written again, and read again from disk.
@@ -13982,6 +14000,10 @@ impl App {
             self.dock.open && self.dock.front == Front::Session && self.dock.active == Some(index);
         let session = &mut self.dock.sessions[index];
         session.agent_session = Some(event.session.clone());
+        // The first thing asked of it names its tab while it has no title of its own.
+        if session.asked.is_none() && !event.prompt.is_empty() {
+            session.asked = Some(event.prompt.clone());
+        }
         let doing = match event.state {
             AgentState::Working => crate::dock::Doing::Working,
             AgentState::NeedsYou => crate::dock::Doing::NeedsYou,
@@ -14114,9 +14136,12 @@ impl App {
                 // An agent goes by its tab's name; what runs in a shell, by its own; a helper
                 // by the name the agent that started it gave it.
                 let named = tab.filter(|s| !s.shell);
+                let index = (self.dock.sessions.iter())
+                    .position(|s| named.is_some_and(|t| std::ptr::eq(s, t)));
                 let name = match (parent.as_ref(), tab.and_then(Session::called)) {
                     (Some(_), Some(called)) => called.to_string(),
-                    _ => named.map_or_else(|| event.agent.clone(), Session::label),
+                    // As its tab says, told apart from one that would read alike.
+                    _ => index.map_or_else(|| event.agent.clone(), |i| self.dock.session_label(i)),
                 };
                 Row {
                     icon: tab.map_or(icon, Session::icon),
@@ -17792,8 +17817,12 @@ impl App {
         let cut = self.dock_area().filter(|a| y == a.y);
         let cut = cut.and_then(|area| {
             let title = self.title_of(area);
+            // Its whole name where the tab shows less of it, over what its context is.
             let context = self.dock.context_tip(title, x);
-            let name = context.or_else(|| self.dock.cut_name(title, x))?;
+            let whole = self.dock.cut_name(title, x);
+            if context.is_none() && whole.is_none() {
+                return None;
+            }
             let start = f32::from(self.dock.tab_start_at(title, x).unwrap_or(x));
             // `LINE_AIR` from a line, its own included, as `tip_end` keeps from the side.
             let near = f32::from(self.size.0) - self.tip_end(0.0);
@@ -17802,8 +17831,9 @@ impl App {
                 .fold(start.max(0.5), |left, line| left.max(line + near));
             let end = f32::from(area.right()) - near;
             let room = end - left - wide("");
-            let said = wrap_tip(&name, room, |text| self.measure.width(text, font));
-            Some((said, left))
+            let wrap = |text: &str| wrap_tip(text, room, |text| self.measure.width(text, font));
+            let said: Vec<String> = whole.iter().chain(&context).map(|t| wrap(t)).collect();
+            Some((said.join("\n"), left))
         });
         // Where each one goes: its name, left edge and top, in cells and rows.
         let spot = match &self.overlay {
@@ -21311,6 +21341,7 @@ impl App {
         }
         for session in &self.dock.sessions {
             session.name.hash(&mut mark);
+            session.label().hash(&mut mark);
             session.exited.hash(&mut mark);
             session.context().hash(&mut mark);
         }
@@ -27049,6 +27080,7 @@ mod tests {
             pid: None,
             transcript: String::new(),
             name: String::new(),
+            prompt: String::new(),
         }
     }
 
@@ -40922,7 +40954,9 @@ while True:
         event.session = "abc-123".into();
         event.transcript = log.display().to_string();
         app.serve(Request::Agent(event));
-        ticks_until(&mut app, "Claude Code 8%");
+        // Named by its conversation's title, which its transcript keeps, read with its context.
+        ticks_until(&mut app, "Add a refund route");
+        assert_eq!(app.context_percent(), Some(8));
         app.dock.focused = true;
         assert!(app.dock.session().unwrap().keeps_own_screen());
 
@@ -40943,10 +40977,12 @@ while True:
     #[test]
     fn an_agents_tab_shows_its_context_and_opens_its_transcript_as_a_page() {
         let (dir, mut app) = agent_with_transcript();
-        // 88k of Opus 5.5's million, from the last reply's tokens.
-        ticks_until(&mut app, "Claude Code 8%");
+        // 88k of Opus 5.5's million, from the last reply's tokens. The tab goes by the
+        // conversation's title its transcript keeps, its terminal's being only "Claude Code";
+        // with that name the pane has no room for the context beside it, so its tip has it.
+        ticks_until(&mut app, "Add a refund route");
         assert_eq!(app.context_percent(), Some(8));
-        let (x, y) = find(&screen(&app), "Claude Code 8%");
+        let (x, y) = find(&screen(&app), "Add a refund route");
         app.handle(mouse(MouseKind::Move, x + 1, y));
         let tip = screen(&app).text();
         assert!(tip.contains("Context 88k of 1M (8%)"), "{tip}");
@@ -40995,7 +41031,8 @@ while True:
     #[test]
     fn asking_the_agent_about_a_step_of_its_transcript_names_the_step() {
         let (dir, mut app) = agent_with_transcript();
-        ticks_until(&mut app, "8%");
+        ticks_until(&mut app, "Add a refund route");
+        assert_eq!(app.context_percent(), Some(8));
         app.run(Command::CommandPalette);
         typed(&mut app, "Agent Transcript");
         enter(&mut app);

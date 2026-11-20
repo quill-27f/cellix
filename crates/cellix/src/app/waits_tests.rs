@@ -226,6 +226,7 @@ fn the_bar_and_the_picker_have_the_marks_tabs_have() {
         pid: None,
         transcript: String::new(),
         name: String::new(),
+        prompt: String::new(),
     }));
     let (row, grid) = status(&app);
     assert!(row.contains("An agent needs you"), "{row}");

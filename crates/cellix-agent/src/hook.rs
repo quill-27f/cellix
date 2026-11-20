@@ -14,6 +14,8 @@ use crate::{AgentEvent, AgentState, TestRun, request, socket_path};
 /// Longest test output kept, from the end, where failures are.
 const MAX_OUTPUT: usize = 20_000;
 const LABEL_LENGTH: usize = 60;
+/// The most of a prompt's first line a tab's tip shows as its name.
+const ASKED_LENGTH: usize = 120;
 /// Where `handle_for` leaves the agent's name in a hook's input.
 const AGENT_KEY: &str = "cellix_agent";
 /// Set by Cellix's session host to its socket, for a program it holds.
@@ -162,6 +164,11 @@ fn log(roots: &[PathBuf], event: &Event) {
 }
 
 fn tell(roots: &[PathBuf], input: &Value, state: AgentState, detail: &str) {
+    tell_asked(roots, input, state, detail, String::new());
+}
+
+/// `tell`, with what the person asked: the prompt's words a tab can be named by.
+fn tell_asked(roots: &[PathBuf], input: &Value, state: AgentState, detail: &str, asked: String) {
     let event = AgentEvent {
         session: session_of(input),
         agent: agent_of(input),
@@ -176,6 +183,7 @@ fn tell(roots: &[PathBuf], input: &Value, state: AgentState, detail: &str) {
         // The session Cellix started it in, so its news is told from another agent's of the
         // same kind. Cellix checks it against the session's own process.
         name: std::env::var(crate::team::NAME_VAR).unwrap_or_default(),
+        prompt: asked,
     };
     if let Ok(json) = serde_json::to_string(&event) {
         ask(roots, &format!("event {json}"));
@@ -360,6 +368,21 @@ pub fn comments_message(comments: &[Comment]) -> String {
     text
 }
 
+/// What a tab can be named by from a prompt: its first line that says anything, its spaces
+/// made single, cut at `ASKED_LENGTH` letters with "…". A command, as "/clear", names nothing.
+pub fn asked(prompt: &str) -> String {
+    let line = prompt.lines().map(str::trim).find(|line| !line.is_empty());
+    let Some(line) = line.filter(|line| !line.starts_with('/')) else {
+        return String::new();
+    };
+    let words = line.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut asked: String = words.chars().take(ASKED_LENGTH).collect();
+    if words.chars().count() > ASKED_LENGTH {
+        asked.push('…');
+    }
+    asked
+}
+
 fn label(prompt: &str) -> String {
     let line = prompt.lines().next().unwrap_or("Prompt").trim();
     let mut label: String = line.chars().take(LABEL_LENGTH).collect();
@@ -389,7 +412,8 @@ fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
         });
         checkpoint_briefly(root, &label(prompt), event);
     }
-    tell(roots, input, AgentState::Working, "Working");
+    let prompt = input["prompt"].as_str().unwrap_or("");
+    tell_asked(roots, input, AgentState::Working, "Working", asked(prompt));
     if !takes_context(&agent_of(input)) {
         return None;
     }
@@ -1424,6 +1448,49 @@ mod tests {
             Request::Agent(event) => assert_eq!(event.agent, "Codex"),
             other => panic!("{other:?}"),
         }
+    }
+
+    /// A prompt tells Cellix what was asked, its first line that says anything, so a tab
+    /// whose agent's title is only its program's name can go by it. A command names nothing.
+    #[test]
+    fn a_prompt_tells_cellix_what_was_asked() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let server = start(&root, Arc::default()).unwrap();
+        let asked_of = |prompt: &str| {
+            handle_for("Codex", "prompt", &input(&root, json!({"prompt": prompt})));
+            loop {
+                match server
+                    .requests
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                {
+                    Request::Agent(event) => return event,
+                    _ => continue,
+                }
+            }
+        };
+        let event = asked_of("\n  Fix the   login redirect\nand its test");
+        assert_eq!(event.state, AgentState::Working);
+        assert_eq!(event.prompt, "Fix the login redirect");
+        assert_eq!(asked_of("/clear").prompt, "", "a command names nothing");
+        let long = "word ".repeat(40);
+        let cut = asked_of(&long).prompt;
+        assert_eq!(cut.chars().count(), ASKED_LENGTH + 1, "{cut}");
+        assert!(cut.ends_with('…'));
+        // Every other piece of news carries no prompt.
+        handle_for("Codex", "stop", &input(&root, json!({})));
+        let stop = loop {
+            match server
+                .requests
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+            {
+                Request::Agent(event) => break event,
+                _ => continue,
+            }
+        };
+        assert_eq!(stop.prompt, "");
     }
 
     #[test]

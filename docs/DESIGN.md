@@ -2759,9 +2759,24 @@ working on this project outside the pane (`Agents::outside`).
 
 An agent's tab is named by the agent: by the title it gives its terminal, as Claude Code sets
 it to what it's working on, with the glyph it puts first while busy taken off (one braille
-letter, or one of `· ✢ ✳ ✶ ✻ ✽ ◐ ◓ ◑ ◒`, and the spaces after it; `dock::own_name`), and until it
-gives one, by the program's name. A shell's title isn't used: it names the machine and the
-folder. Rename… on the tab's menu, or Agent: Rename Pane Tab, names it over that; the name is
+letter, or one of `· ✢ ✳ ✶ ✻ ✽ ◐ ◓ ◑ ◒`, and the spaces after it; `dock::own_name`). A title
+that's only the program's name ("Claude Code", "claude", or "Gemini" for Gemini CLI) names
+nothing, and every tab read "Claude Code" (the user, 20 November 2026: "Can we have meaningful
+chat titles similar to Claude Code when there are multiple chat sessions?"). Such a tab goes by
+its conversation's title, as Claude Code keeps it in its transcript and its /resume lists it:
+the latest `custom-title` line (one the person gave it), else the latest `ai-title`, else an
+older version's `summary`, read with the context meter as the transcript grows; and until one is
+written, by the first thing asked of it, the prompt hook's first line that says anything (a
+command, as `/clear`, names nothing). Codex and Gemini CLI keep no title we could find in their
+own files, so theirs go by the first prompt. Either is cut to 32 letters at a word's end, not
+on a word that leads into the next ("Fix the login redirect…"), and the tab's tip has it whole,
+over what its context is. The Agents list calls each agent what its tab says. Two agents' tabs
+that would still read alike are told apart by the order they started: the later one's name has
+" (2)" after it, the next " (3)", kept after the "…" where a narrow row cuts the name short
+("Cla… (2)"; " · 2" after a "…" read as four dots); a shell's, the browser's and a renamed
+tab's never do. Until
+any of these, a tab goes by the program's name. A shell's title isn't used: it names the
+machine and the folder. Rename… on the tab's menu, or Agent: Rename Pane Tab, names it over that; the name is
 kept with the pane in the folder's `state.json`, by the session's host's socket, so the tab has
 it again when the next run joins the session, and named nothing it takes its own name again.
 What a tab's mark says comes from the agent's hooks, through the tab whose agent has that

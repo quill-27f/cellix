@@ -351,6 +351,13 @@ pub struct Session {
     pub title: Option<String>,
     /// What the person named its tab, which outranks anything the program says.
     pub renamed: Option<String>,
+    /// Its agent's own title for the conversation, as its transcript keeps it: what Claude
+    /// Code's /resume lists it by. Its tab goes by it when its terminal's title is only the
+    /// program's name.
+    pub topic: Option<String>,
+    /// The first thing the person asked it, as its prompt hook said: its tab's name when it
+    /// has neither a title of its own nor a topic.
+    pub asked: Option<String>,
     /// What the program in it called itself (OSC 7501's `app`), until it takes that back: the
     /// name the Agents list and the inbox know it by, which its tab goes by too.
     pub reported: Option<String>,
@@ -482,6 +489,67 @@ pub fn own_name(title: &str) -> Option<String> {
     let name = rest.trim();
     (!name.is_empty()).then(|| name.to_string())
 }
+
+/// The most letters an agent's tab's name has when it comes from its conversation's title or
+/// its first prompt; the rest is in its tip.
+const NAME_LETTERS: usize = 32;
+
+/// Whether an agent's own name for itself is only its program's: "Claude Code", or the
+/// command it runs as, "claude", or the name its hooks give it, "Gemini" for Gemini CLI.
+fn only_program(name: &str, program: &str) -> bool {
+    let name = name.trim().to_lowercase();
+    let command = crate::agents::AGENTS
+        .iter()
+        .find(|(shown, _)| *shown == program)
+        .map(|(_, command)| *command);
+    name == program.to_lowercase()
+        || command.is_some_and(|command| name == command)
+        || program
+            .to_lowercase()
+            .strip_suffix(" cli")
+            .is_some_and(|short| name == short)
+}
+
+/// A name cut to `NAME_LETTERS` at the end of a word, with "…" where it was cut; a first word
+/// longer than that is cut inside it.
+pub fn short_name(name: &str) -> String {
+    if name.chars().count() <= NAME_LETTERS {
+        return name.to_string();
+    }
+    let mut kept = String::new();
+    for word in name.split_whitespace() {
+        let longer = kept.chars().count() + usize::from(!kept.is_empty()) + word.chars().count();
+        if longer > NAME_LETTERS - 1 {
+            break;
+        }
+        if !kept.is_empty() {
+            kept.push(' ');
+        }
+        kept.push_str(word);
+    }
+    if kept.is_empty() {
+        kept = name.chars().take(NAME_LETTERS - 1).collect();
+    }
+    // Not ending on a word that leads into the next, "after a…", nor on a comma.
+    loop {
+        let trimmed = kept.trim_end_matches([',', ';', ':', '-', '.', '…', '—', ' ']);
+        let (head, last) = trimmed.rsplit_once(' ').unwrap_or(("", trimmed));
+        let leads = LEADING_WORDS.contains(&last.to_lowercase().as_str());
+        if leads && !head.is_empty() {
+            kept = head.to_string();
+        } else {
+            kept = trimmed.to_string();
+            break;
+        }
+    }
+    format!("{kept}…")
+}
+
+/// Words that lead into the next, which a name cut short doesn't end on.
+const LEADING_WORDS: [&str; 18] = [
+    "a", "an", "the", "and", "or", "of", "to", "for", "in", "on", "at", "with", "by", "from",
+    "after", "before", "into", "about",
+];
 
 /// Cellix's own mark for a program in the side pane, by what the pane calls it. One meaning
 /// each: an agent with no mark of its own is a filled square with its initial, a shell and a
@@ -672,6 +740,8 @@ impl Session {
             serial: SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             title: None,
             renamed: None,
+            topic: None,
+            asked: None,
             reported: None,
             doing: Doing::Idle,
             done_unseen: false,
@@ -688,19 +758,52 @@ impl Session {
     }
 
     /// What its tab is called: what the person named it, or for an agent the name its own
-    /// title gives it, or else the program's name.
+    /// title gives it, or else the program's name. Where the title says only which program it
+    /// is, as Claude Code's does before it has a topic, it goes by its conversation's title, or
+    /// the first thing asked of it, cut to `NAME_LETTERS` at a word's end: every tab read
+    /// "Claude Code" (the user, 20 November).
     pub fn label(&self) -> String {
+        let (whole, fallback) = self.named();
+        if fallback { short_name(&whole) } else { whole }
+    }
+
+    /// Its tab's name uncut, which its tip shows where the tab shows less.
+    pub fn whole_label(&self) -> String {
+        self.named().0
+    }
+
+    /// Its tab's name whole, and whether it's one an agent with no title of its own goes by,
+    /// its topic or what was first asked, which is cut short on the tab.
+    fn named(&self) -> (String, bool) {
         if let Some(name) = self.renamed.as_ref().or(self.reported.as_ref()) {
-            return name.clone();
+            return (name.clone(), false);
         }
         // A shell's is the program running in it, as VS Code names a terminal's tab.
         if let Some(program) = self.running_program() {
-            return program.to_string();
+            return (program.to_string(), false);
         }
-        let own = (!self.shell && !self.browser)
-            .then(|| self.title.as_deref().and_then(own_name))
-            .flatten();
-        own.unwrap_or_else(|| self.name.clone())
+        if self.shell || self.browser {
+            return (self.name.clone(), false);
+        }
+        let own = self.title.as_deref().and_then(own_name);
+        if let Some(own) = own.filter(|name| !only_program(name, &self.name)) {
+            return (own, false);
+        }
+        match self.topic.clone().or_else(|| self.asked.clone()) {
+            Some(fallback) => (fallback, true),
+            None => (self.name.clone(), false),
+        }
+    }
+
+    /// Whether two tabs whose names read alike are told apart by a number: an agent's are,
+    /// unless the person named it so; a shell's and the browser's are not.
+    pub fn numbered(&self) -> bool {
+        self.renamed.is_none() && !self.shell && !self.browser && self.reported.is_none()
+    }
+
+    /// The order it started in, among the pane's tabs.
+    pub fn serial(&self) -> u64 {
+        self.serial
     }
 
     /// The mark its tab shows after its name, if any: nothing while idle or once it's ended.
@@ -2433,6 +2536,44 @@ impl Dock {
         self.active = self.active.map(|active| moved(active, from, to));
     }
 
+    /// What each session's tab says, in order, and its name whole, for its tip. Where two
+    /// agents' tabs would read alike, the later one to start has " (2)" after its name, the
+    /// next " (3)", so tabs with no title and nothing asked yet are told apart.
+    pub fn session_names(&self) -> Vec<(String, String)> {
+        let named: Vec<(String, String)> = (self.sessions.iter())
+            .map(|session| (session.label(), session.whole_label()))
+            .collect();
+        let numbered = |index: usize| {
+            let session = &self.sessions[index];
+            session.numbered() && session.tabbed
+        };
+        (0..self.sessions.len())
+            .map(|index| {
+                let (shown, whole) = &named[index];
+                let serial = self.sessions[index].serial();
+                let before = (0..self.sessions.len())
+                    .filter(|&other| numbered(other) && named[other].0 == *shown)
+                    .filter(|&other| self.sessions[other].serial() < serial)
+                    .count();
+                if !numbered(index) || before == 0 {
+                    return (shown.clone(), whole.clone());
+                }
+                let number = before + 1;
+                (format!("{shown} ({number})"), format!("{whole} ({number})"))
+            })
+            .collect()
+    }
+
+    /// What session `index`'s tab says, told apart from any that would read alike.
+    pub fn session_label(&self, index: usize) -> String {
+        let names = self.session_names();
+        names
+            .into_iter()
+            .nth(index)
+            .map(|(shown, _)| shown)
+            .unwrap_or_default()
+    }
+
     /// What a view's tab is called.
     pub fn view_name(&self, view: Front) -> &'static str {
         let views = self.views();
@@ -2468,13 +2609,18 @@ impl Dock {
                 state: None,
             }
         });
-        let sessions = self.sessions.iter().map(|session| Face {
-            text: session.label(),
-            icon: session.has_icon(pictures).then(|| session.icon()),
-            mark: session.icon(),
-            context: session.context(),
-            state: session.mark(),
-        });
+        let names = self.session_names();
+        let sessions = self
+            .sessions
+            .iter()
+            .zip(names)
+            .map(|(session, (text, _))| Face {
+                text,
+                icon: session.has_icon(pictures).then(|| session.icon()),
+                mark: session.icon(),
+                context: session.context(),
+                state: session.mark(),
+            });
         views.chain(sessions).collect()
     }
 
@@ -2660,11 +2806,11 @@ impl Dock {
     /// Columns a tab behind takes to show `letters` of its name and the "…", or the whole
     /// name where that's no longer.
     fn letters_wide(&self, face: &Face, letters: usize) -> u16 {
-        if letters >= face.text.chars().count() {
+        let head = numbered_name(&face.text).map_or(face.text.as_str(), |(head, _)| head);
+        if letters >= head.chars().count() {
             return self.stub(face);
         }
-        let kept: String = face.text.chars().take(letters).collect();
-        let cut = format!("{}…", kept.trim_end());
+        let cut = cut_to(&face.text, letters);
         self.stub_of(&cut, face).min(self.stub(face))
     }
 
@@ -2687,12 +2833,8 @@ impl Dock {
             let end = CUT_AIR + if marked { CUT_SIDE } else { 0.0 };
             f32::from(width) - lead - end
         };
-        let text = crate::context::elide(&face.text, room, measure);
-        if text == face.text {
-            text.chars().count()
-        } else {
-            text.chars().count().saturating_sub(1)
-        }
+        let text = elide_name(&face.text, room, measure);
+        shown_letters(&face.text, &text)
     }
 
     /// What each tab behind the one in front gets in a row too short for them whole, `rest`
@@ -2971,9 +3113,10 @@ impl Dock {
             };
             (PaneTab::View(view), name)
         });
-        let sessions = (self.sessions.iter().enumerate())
-            .filter(|(_, session)| session.tabbed)
-            .map(|(index, session)| (PaneTab::Session(index), session.label()));
+        let names = self.session_names();
+        let sessions = (self.sessions.iter().zip(names).enumerate())
+            .filter(|(_, (session, _))| session.tabbed)
+            .map(|(index, (_, (shown, _)))| (PaneTab::Session(index), shown));
         let all = views.chain(sessions).enumerate();
         all.map(|(index, (tab, name))| (tab, name, Some(index) == front))
             .collect()
@@ -2999,26 +3142,30 @@ impl Dock {
         under.map(|tab| tab.x)
     }
 
-    /// The full name of a tab too narrow to show it, for a tooltip.
+    /// The full name of a tab that shows less of it, for a tooltip: one too narrow to show it,
+    /// or an agent's named by its topic or what was first asked, cut short.
     pub fn cut_name(&self, area: Rect, x: u16) -> Option<String> {
         let wanted = self.wanted_widths();
         let widths = self.tab_widths(area);
         let views = self.views();
-        let names = views
-            .iter()
-            .map(|view| view.1.to_string())
-            .chain(self.sessions.iter().map(Session::label));
+        // A view's name is whole on its tab, with its count; a session's may be cut short.
+        let names = (views.iter().map(|view| (view.1.to_string(), false))).chain(
+            self.session_names()
+                .into_iter()
+                .map(|(_, whole)| (whole, true)),
+        );
         let mut at = self.tabs_start(area);
         let pick = if self.picking(area) { PICK_WIDTH } else { 0 };
         let cuts = self.cut_short(area);
         let faces = self.faces();
         let tabs = names.zip(widths).zip(wanted).zip(cuts).zip(faces);
-        for ((((name, width), full), cut), face) in tabs {
+        for (((((name, session), width), full), cut), face) in tabs {
             if x >= at && x < at + width {
                 // Standing as a name alone, it's cut when that name has no room.
                 let short = cut && self.stub(&face) > width;
                 let stub = pick > 0 && width < full + pick;
-                return (short || stub).then_some(name);
+                let shortened = session && name != face.text;
+                return (short || stub || shortened).then_some(name);
             }
             at += width;
         }
@@ -3275,7 +3422,7 @@ impl Dock {
         let said = (face.context.as_deref())
             .map(|text| (text, CONTEXT_AIR + self.small_width(text)))
             .filter(|(_, wide)| full + wide <= room);
-        let text = crate::context::elide(&face.text, room - said.map_or(0.0, |s| s.1), measure);
+        let text = elide_name(&face.text, room - said.map_or(0.0, |s| s.1), measure);
         let name_end = name_x + measure.width(&text, font);
         let mut after = name_end;
         let context = said.map(|(text, wide)| {
@@ -3900,12 +4047,11 @@ fn cut_words(
     let (icon, marked) = (face.icon.is_some(), face.state.is_some());
     // As many letters as a name cut short shows at the least.
     let least = least_cut(&face.text).chars().count();
-    let named = |text: &str| text == face.text || text.chars().count() >= least;
+    let named = |text: &str| text == face.text || shown_letters(&face.text, text) + 1 >= least;
     // Cut short, no more letters than every name cut short shows.
     let alike = |text: String| match letters {
-        Some(most) if text != face.text && text.chars().count() > most + 1 => {
-            let kept: String = face.text.chars().take(most).collect();
-            format!("{}…", kept.trim_end())
+        Some(most) if text != face.text && shown_letters(&face.text, &text) > most => {
+            cut_to(&face.text, most)
         }
         _ => text,
     };
@@ -3920,7 +4066,7 @@ fn cut_words(
         let to = right - CUT_AIR - if marked { CUT_SIDE } else { 0.0 };
         to - from
     };
-    let text = alike(crate::context::elide(&face.text, room, measure));
+    let text = alike(elide_name(&face.text, room, measure));
     named(&text).then_some(text)
 }
 
@@ -4075,6 +4221,52 @@ fn marks_alone(
 }
 
 /// The least of a name a tab cut short shows: `CUT_LETTERS` and the "…".
+/// A name a number tells apart from another that reads alike: what's before its " (2)", and
+/// the number.
+fn numbered_name(text: &str) -> Option<(&str, &str)> {
+    let (head, number) = text.strip_suffix(')')?.rsplit_once(" (")?;
+    let digits = !number.is_empty() && number.chars().all(|c| c.is_ascii_digit());
+    (digits && !head.is_empty()).then_some((head, number))
+}
+
+/// `letters` of a tab's name and the "…", with its number after them where it has one.
+fn cut_to(text: &str, letters: usize) -> String {
+    let (head, number) = numbered_name(text).map_or((text, None), |(h, n)| (h, Some(n)));
+    let kept: String = head.chars().take(letters).collect();
+    match number {
+        Some(number) => format!("{}… ({number})", kept.trim_end()),
+        None => format!("{}…", kept.trim_end()),
+    }
+}
+
+/// A tab's name cut with "…" until it fits `room`. One told apart by a number keeps its
+/// " (2)" after the "…": cut at its end, two tabs read alike again ("Claude Co…").
+fn elide_name(text: &str, room: f32, measure: &dyn cellix_render::Measure) -> String {
+    let cut = crate::context::elide(text, room, measure);
+    let Some((head, _)) = numbered_name(text).filter(|_| cut != text) else {
+        return cut;
+    };
+    let font = cellix_render::Font::default();
+    for letters in (1..head.chars().count()).rev() {
+        let tried = cut_to(text, letters);
+        if measure.width(&tried, font) <= room {
+            return tried;
+        }
+    }
+    cut
+}
+
+/// How many letters of `text` its cut form `shown` has, before its "…".
+fn shown_letters(text: &str, shown: &str) -> usize {
+    if shown == text {
+        return text.chars().count();
+    }
+    shown
+        .split('…')
+        .next()
+        .map_or(0, |kept| kept.chars().count())
+}
+
 fn least_cut(text: &str) -> String {
     let letters: String = text.chars().take(CUT_LETTERS).collect();
     format!("{}…", letters.trim_end())
@@ -4178,6 +4370,47 @@ mod tests {
         assert_eq!(own_name("refunds").as_deref(), Some("refunds"));
         assert_eq!(own_name("✶ ").as_deref(), None, "nothing left is no name");
         assert_eq!(own_name("").as_deref(), None);
+    }
+
+    /// A topic or a prompt naming a tab is cut at a word's end, not on a word that leads into
+    /// the next nor on a comma; a name that fits is whole. Only a program's name is no name.
+    #[test]
+    fn a_name_cut_short_ends_on_a_word_that_says_something() {
+        assert_eq!(
+            short_name("Refund route and its tests"),
+            "Refund route and its tests"
+        );
+        assert_eq!(
+            short_name("Fix the login redirect after a password reset"),
+            "Fix the login redirect…"
+        );
+        assert_eq!(
+            short_name("Rename every handler, then the routes and docs"),
+            "Rename every handler, then…"
+        );
+        assert_eq!(
+            short_name("Supercalifragilisticexpialidocious-and-more-words"),
+            "Supercalifragilisticexpialidoci…"
+        );
+        // Cut on a tab, a name told apart by a number keeps it.
+        let cells = cellix_render::CellMeasure;
+        assert_eq!(elide_name("Claude Code (2)", 8.0, &cells), "Cla… (2)");
+        assert_eq!(elide_name("Claude Code", 8.0, &cells), "Claude…");
+        assert_eq!(
+            elide_name("Claude Code (2)", 20.0, &cells),
+            "Claude Code (2)"
+        );
+        assert_eq!(shown_letters("Claude Code (2)", "Cla… (2)"), 3);
+        assert_eq!(cut_to("Claude Code (12)", 2), "Cl… (12)");
+        assert_eq!(
+            numbered_name("Notes (draft)"),
+            None,
+            "words in brackets aren't a number"
+        );
+        assert!(only_program("Claude Code", "Claude Code"));
+        assert!(only_program("claude", "Claude Code"));
+        assert!(only_program("Gemini", "Gemini CLI"));
+        assert!(!only_program("pricing page", "Claude Code"));
     }
     use cellix_input::Mods;
     #[cfg(unix)]

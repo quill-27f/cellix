@@ -7362,5 +7362,12 @@
     "title": "A state diagram's labelled edge to the state right under it goes straight down with its label beside it, clear of the arrowhead",
     "test": "a_labelled_edge_straight_down_has_its_label_beside_it",
     "passes": true
+  },
+  {
+    "id": "agent-tabs-named-by-topic",
+    "milestone": 15,
+    "title": "An agent's tab whose own title is only its program's name goes by its conversation's title or first prompt, told apart from one that reads alike",
+    "test": "agents_tabs_with_no_title_go_by_their_topic_or_what_was_asked",
+    "passes": true
   }
 ]

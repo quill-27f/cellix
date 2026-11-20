@@ -1808,6 +1808,7 @@ mod tests {
             pid: None,
             transcript: String::new(),
             name: name.into(),
+            prompt: String::new(),
         }));
     }
 

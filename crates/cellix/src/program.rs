@@ -188,6 +188,7 @@ pub fn event(report: &Report, session: &str, name: &str, folder: &str) -> AgentE
         pid: None,
         transcript: String::new(),
         name: String::new(),
+        prompt: String::new(),
     }
 }
 

@@ -65,6 +65,10 @@ pub struct AgentEvent {
     /// The name Cellix gave the session it runs in, which other agents reach it by.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
+    /// What the person asked, as its prompt hook saw it: the first line, cut short. A tab
+    /// whose agent's own title is only its program's name goes by the first one it hears.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub prompt: String,
 }
 
 /// A test command an agent ran.

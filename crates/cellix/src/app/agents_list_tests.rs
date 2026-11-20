@@ -52,6 +52,7 @@ fn the_agents_list_puts_who_needs_you_first() {
             pid: None,
             transcript: String::new(),
             name: String::new(),
+            prompt: String::new(),
         })
     };
     // Each with a tab here: the list shows no agent running outside Cellix.
@@ -134,6 +135,7 @@ fn the_agents_lists_times_stand_in_one_column() {
             pid: None,
             transcript: String::new(),
             name: String::new(),
+            prompt: String::new(),
         })
     };
     for (agent, session) in [
@@ -311,6 +313,7 @@ fn the_needs_you_chip_has_room_for_its_words_tails() {
         pid: None,
         transcript: String::new(),
         name: String::new(),
+        prompt: String::new(),
     }));
     app.run(cellix_input::Command::ListAgents);
     let grid = screen(&app);
@@ -465,6 +468,7 @@ fn a_lists_lines_end_where_its_rows_end() {
         pid: None,
         transcript: String::new(),
         name: String::new(),
+        prompt: String::new(),
     }));
     app.run(cellix_input::Command::ListAgents);
     let px = |units: i32| units as f32 / UNIT as f32 * 17.0;
@@ -618,6 +622,7 @@ fn a_chips_words_read_at_four_and_a_half_to_one_in_every_theme() {
             pid: None,
             transcript: String::new(),
             name: String::new(),
+            prompt: String::new(),
         }));
         app.run(cellix_input::Command::ListAgents);
         let (ink, ground) = chip(&screen(&app), "needs you");
@@ -651,6 +656,7 @@ fn a_rows_band_has_the_same_air_either_side_of_what_it_holds() {
             pid: None,
             transcript: String::new(),
             name: String::new(),
+            prompt: String::new(),
         })
     };
     // Done behind another tab, so its row ends in the green dot.

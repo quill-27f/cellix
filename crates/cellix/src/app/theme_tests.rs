@@ -73,6 +73,7 @@ fn said(state: AgentState) -> Request {
         pid: None,
         transcript: String::new(),
         name: String::new(),
+        prompt: String::new(),
     })
 }
 

@@ -603,6 +603,7 @@ fn with_the_agents_conversation_asks_in_a_copy_of_it() {
         pid: None,
         transcript: String::new(),
         name: String::new(),
+        prompt: String::new(),
     }));
     select(&mut app, "ICL");
     app.run(Command::AskAgent);

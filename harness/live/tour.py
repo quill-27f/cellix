@@ -156,6 +156,10 @@ EXPECT = {
     "50-comment-picture": "yours",
     "50-comment-picture-light": "yours",
     "50-comment-link-menu": "Copy Link",
+    "m1-agent-names": "Fix the login",
+    "m1-agent-names-tip": "Fix the login",
+    "m1-agent-names-list": "Refund route",
+    "m1-agent-names-light": "Fix the login",
     "50-plan-versions": "yours",
     "57-flow-dock": "Addressed",
     "50-flow-next": "Comment 2 of",
@@ -1042,9 +1046,10 @@ def transcripts(scratch):
     opened = [*start, *command("Agent Transcript", F1), ["until", "Show Source"], ["wait", 1.0]]
     scenes = [
         ("64-transcript-tab", start, [CODE_FILE], {}),
-        # A tab is as wide as what it paints, so its cells hold the start of its name.
-        ("64-transcript-tab-hover", [*start, ["move", *ON("Claude Co")], ["wait", 0.6]], [CODE_FILE], {}),
-        ("64-transcript-tab-menu", [*start, ["right", *ON("Claude Co")], ["wait", 0.4]], [CODE_FILE], {}),
+        # A tab is as wide as what it paints, so its cells hold the start of its name: the
+        # conversation's title its transcript keeps, its terminal's being only "Claude Code".
+        ("64-transcript-tab-hover", [*start, ["move", *ON("Add a ref")], ["wait", 0.6]], [CODE_FILE], {}),
+        ("64-transcript-tab-menu", [*start, ["right", *ON("Add a ref")], ["wait", 0.4]], [CODE_FILE], {}),
         ("64-transcript-tab-full", start, [CODE_FILE], {"TRANSCRIPT": full}),
         ("64-transcript-tab-light", start, [CODE_FILE], {"background": "eff1f5"}),
         ("65-transcript-page", opened, [], {}),
@@ -1114,6 +1119,60 @@ def agent_tabs(scratch):
         background = extra.pop("background", DARK)
         env.update(extra)
         shoot(name, steps, CODE_FILE, size=size, env=env, background=background)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+
+
+def agent_names(scratch):
+    """Three Claude Codes whose titles say only "Claude Code": the first goes by its
+    conversation's title, which its made-up transcript keeps, the second by the first thing
+    asked of it, cut short, and the third, asked much the same, by that and " (2)". Each is a
+    stand-in that reports its prompt through Cellix's real hook, from its own process, so
+    Cellix takes it for its tab."""
+    tools = f"{scratch}/names-bin"
+    os.makedirs(tools)
+    log = f"{tools}/titled.jsonl"
+    with open(log, "w") as f:
+        f.write(json.dumps({"type": "ai-title", "aiTitle": "Refund route for unpaid orders",
+                            "sessionId": "names-1"}) + "\n")
+    asked = ["Add a refund route for unpaid orders",
+             "Fix the login redirect after a password reset, and add a test for it",
+             "Fix the login redirect after a password change"]
+    for n, prompt in enumerate(asked, 1):
+        said = {"session_id": f"names-{n}", "cwd": ROOT, "prompt": prompt}
+        if n == 1:
+            said["transcript_path"] = log
+        with open(f"{tools}/prompt-{n}.json", "w") as f:
+            f.write(json.dumps(said))
+    # Each start takes the next prompt, by a count kept beside them.
+    with open(f"{tools}/claude", "w") as f:
+        f.write("#!/bin/sh\nprintf '\\033]0;\\342\\234\\263 Claude Code\\007'\n"
+                "printf 'Claude Code (stand-in)\\n'\n"
+                f"n=$(( $(cat '{tools}/count' 2>/dev/null || echo 0) + 1 )); echo $n > '{tools}/count'\n"
+                f"sh -c \"'{binary}' hook prompt < '{tools}/prompt-$n.json'\"\n"
+                "exec sleep 300\n")
+    os.chmod(f"{tools}/claude", 0o755)
+    # A retake starts the count again, so each start has its own prompt again.
+    # The cells hold as much of a tab's name as its columns do, so the third's " (2)", painted
+    # after its words, isn't among the screen's words: it's given a moment instead.
+    opened = [["run", f"rm -f '{tools}/count'", ""]]
+    for words in ("Refund route", "Fix the login", "Fix the login"):
+        opened += [*command("Open Claude Code", F1), ["until", words], ["wait", 1.0]]
+    scenes = [
+        ("m1-agent-names", opened, {}),
+        # The one in front, cut short, has what was asked whole in its tip.
+        ("m1-agent-names-tip", [*opened, ["move", *ON("Fix the login", 3)], ["wait", 0.8]], {}),
+        ("m1-agent-names-list", [*opened, *command("List Agents", F1), ["until", "WORKING"],
+                                 ["wait", 0.6]], {}),
+        ("m1-agent-names-light", opened, {"background": "eff1f5"}),
+    ]
+    for name, steps, extra in scenes:
+        if os.path.exists(f"{tools}/count"):
+            os.unlink(f"{tools}/count")
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        background = extra.pop("background", DARK)
+        shoot(name, steps, CODE_FILE, size="150x44", env=env, background=background)
         subprocess.run(["pkill", "-9", "-f", cache])
         shutil.rmtree(cache, ignore_errors=True)
 
@@ -1461,6 +1520,7 @@ with tempfile.TemporaryDirectory() as made:
     install_card(scratch)
     transcripts(scratch)
     agent_tabs(scratch)
+    agent_names(scratch)
     agents_by_urgency(scratch)
     waits(scratch)
     task_scenes(scratch)
