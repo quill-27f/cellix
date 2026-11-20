@@ -183,6 +183,32 @@ pub fn line_pixels(measure: &dyn Measure) -> f32 {
     let line = row as f32 / measure.row_air().max(1.0);
     (line / 24.0).ceil().max(1.0)
 }
+
+/// The interface font's ink in ems, from the top of its tallest letters, a bracket's or an
+/// ascender's, to the foot of its tails, with the pixel of blend at each end: Inter's, 24 px
+/// at a tip's 23 px words. A tip's box is sized by it (`tip_box`).
+pub const TIP_INK: f32 = 1.03;
+
+/// Where a tip's box of one line stands in its row where a row has room, as how far under the
+/// row's top it starts and how tall it is, in whole pixels, for words `size` per cent of the
+/// interface's: the font's ink (`TIP_INK`) with `LINE_AIR` and the box's line over and under
+/// it, and a pixel more for the ink's half pixel under the row's middle, in the middle of the
+/// row. As a control's 39 px it held a tip's words 7 px under its line and 6 over its foot
+/// (the release review of 0.12.0, 64-transcript-tab-hover). None on the terminal's line, which
+/// a tip covers whole.
+pub fn tip_box(measure: &dyn Measure, size: u8) -> Option<(f32, f32)> {
+    if !roomy(measure) || measure.in_cells() {
+        return None;
+    }
+    let (_, row) = measure.cell_pixels()?;
+    let row = row as f32;
+    let line = row / measure.row_air().max(1.0);
+    let words = cellix_render::INTERFACE_SIZE * line * f32::from(size) / 100.0;
+    let air = LINE_AIR + 1.0;
+    let tall = ((TIP_INK * words).ceil() + 2.0 * air + 1.0).min(row);
+    Some((((row - tall) / 2.0).round(), tall))
+}
+
 /// How many columns along a panel that floats from column `left` to `right` moves so that
 /// neither of its edges stands within `LINE_AIR` of one of the upright `lines` (in columns,
 /// with their fractions): nearest first, to the right before the left, and not at all where

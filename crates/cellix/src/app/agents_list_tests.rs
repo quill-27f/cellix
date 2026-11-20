@@ -116,12 +116,12 @@ fn the_agents_list_puts_who_needs_you_first() {
     assert!(!text.contains("DONE") && text.contains("IDLE 2"), "{text}");
 }
 
-/// How long ago stands in one column down the rows that have something at their end: each
-/// keeps room there as wide as the "needs you" chip, where the row that needs you had its time
-/// pushed six columns left of the others'. An idle row has nothing at its end, so its time is
-/// its last word and ends where every row's last does, the chip's end: kept in the chip's
-/// empty room, it stood 139 px short of every other row's end (the release review of 0.12.0,
-/// 14-agents). This test had every row's time in the one column, idle ones too.
+/// How long ago stands in one column down the list, an idle row's too: every row keeps room at
+/// its end as wide as the "needs you" chip, whatever its state, and an idle row's is empty. The
+/// row that needs you had its time pushed six columns left of the others', and an idle row's
+/// time, moved to its row's end, stood 139 px right of every other row's, in the column the
+/// states are in (the release review of 0.12.0, m2-agents-urgency). For a while this test had
+/// an idle row's time end where the chip does; it's back to one column for every row.
 #[test]
 fn the_agents_lists_times_stand_in_one_column() {
     let (_dir, mut app) = project();
@@ -151,39 +151,26 @@ fn the_agents_lists_times_stand_in_one_column() {
     app.serve(event("c", "Gemini", AgentState::NeedsYou, "Allow Bash?"));
     app.serve(event("d", "Codex", AgentState::Idle, "Ready"));
     app.run(cellix_input::Command::ListAgents);
-    // On cells: where each row's "<1m" ends, the idle rows' apart, and where the chip ends.
+    // On cells: where each row's "<1m" ends, and nothing after an idle row's.
     let grid = screen(&app);
-    let (mut busy, mut idle, mut chip) = (Vec::new(), Vec::new(), None);
-    // An idle row has nothing after its time; the others their state.
     let is_idle = |row: &str, at: usize| row[at + 3..].trim().is_empty();
+    let mut ends = Vec::new();
     for y in 0..grid.height() {
         let row = grid.row_text(y);
         let Some(at) = row.find("<1m") else { continue };
-        if let Some(chip_at) = row.find("needs you") {
-            chip = Some(row[..chip_at].chars().count() + "needs you".len());
-        }
-        let end = row[..at].chars().count() + 3;
-        if is_idle(&row, at) {
-            idle.push(end)
-        } else {
-            busy.push(end)
-        }
+        ends.push((row[..at].chars().count() + 3, is_idle(&row, at)));
     }
-    // Gemini asking, a Codex done unseen and Claude Code working; the other Codex idle.
-    assert_eq!((busy.len(), idle.len()), (3, 1), "{}", grid.text());
+    // Gemini asking, a Codex done unseen and Claude Code working; the other Codex idle, its
+    // state's room empty.
+    let idle = ends.iter().filter(|(_, idle)| *idle).count();
+    assert_eq!((ends.len(), idle), (4, 1), "{}", grid.text());
     assert!(
-        busy.windows(2).all(|w| w[0] == w[1]),
-        "{busy:?}\n{}",
+        ends.windows(2).all(|w| w[0].0 == w[1].0),
+        "{ends:?}\n{}",
         grid.text()
     );
-    let chip = chip.expect("the chip");
-    assert!(
-        idle.iter().all(|end| *end == chip),
-        "{idle:?} against the chip's end {chip}\n{}",
-        grid.text()
-    );
-    // With pictures: the same right edge for the times of rows with a state, and an idle
-    // row's at the end of the chip's.
+    // With pictures: the same right edge for every painted time, the idle row's too, short of
+    // the chip's end by the chip's room.
     app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
     let grid = screen(&app);
     let unit = cellix_render::UNIT;
@@ -199,6 +186,8 @@ fn the_agents_lists_times_stand_in_one_column() {
         })
         .collect();
     assert_eq!(times.len(), 4, "{times:?}");
+    assert_eq!(times.iter().filter(|t| t.1).count(), 1, "{times:?}");
+    assert!(times.windows(2).all(|w| w[0].0 == w[1].0), "{times:?}");
     let chip_end = (grid.paint.iter())
         .find_map(|p| match p {
             cellix_render::Paint::Panel {
@@ -215,16 +204,11 @@ fn the_agents_lists_times_stand_in_one_column() {
             _ => None,
         })
         .expect("the chip's wash");
-    let busy: Vec<i32> = (times.iter()).filter(|t| !t.1).map(|t| t.0).collect();
-    assert!(busy.windows(2).all(|w| w[0] == w[1]), "{times:?}");
-    for (x, idle) in times {
-        if idle {
-            assert!(
-                (x - chip_end).abs() <= unit / 17,
-                "an idle row's time ends at {x}, the chip at {chip_end}"
-            );
-        }
-    }
+    assert!(
+        chip_end - times[0].0 > unit * 3,
+        "the times end at {}, the chip at {chip_end}",
+        times[0].0
+    );
 }
 
 #[test]

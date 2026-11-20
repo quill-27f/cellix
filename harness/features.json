@@ -7294,9 +7294,9 @@
     "passes": true
   },
   {
-    "id": "idle-agent-time-at-row-end",
+    "id": "agent-times-one-column",
     "milestone": 15,
-    "title": "An idle agent's time ends at its row's end, where every row's last item does",
+    "title": "Every agent's time stands in one column in the Agents list, an idle row's too, its state's room empty",
     "test": "the_agents_lists_times_stand_in_one_column",
     "passes": true
   },
@@ -7389,6 +7389,34 @@
     "milestone": 15,
     "title": "A right click on a comment's card has Copy, Copy Comment and Copy Quote, with a link's rows over them",
     "test": "a_right_click_on_a_card_copies_it_its_quote_or_whats_selected",
+    "passes": true
+  },
+  {
+    "id": "settings-button-label-still",
+    "milestone": 15,
+    "title": "A language server's button keeps its label where it stands at rest when its row is pointed at, its chip in the middle of the row's wash, and the count ends on the labels' line",
+    "test": "a_server_rows_button_keeps_its_label_still_when_pointed_at",
+    "passes": true
+  },
+  {
+    "id": "tip-words-eight-px-air",
+    "milestone": 15,
+    "title": "A tip's box keeps 8 px between its lines and its words' ink, ascenders and tails, and a terminal's row under a tip's top shows nothing over it",
+    "test": "a_tips_words_keep_eight_pixels_over_and_under_them",
+    "passes": true
+  },
+  {
+    "id": "install-card-one-paragraph",
+    "milestone": 15,
+    "title": "The install card's words are one paragraph, its command in the code font on the code's ground",
+    "test": "the_install_card_keeps_room_around_its_words_and_buttons",
+    "passes": true
+  },
+  {
+    "id": "ask-field-on-card-insets",
+    "milestone": 15,
+    "title": "The Ask card's title, field and buttons keep 24 px inside its line",
+    "test": "every_floating_card_keeps_24_px_inside_its_edges",
     "passes": true
   }
 ]

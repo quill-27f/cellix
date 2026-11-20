@@ -730,8 +730,8 @@ fn a_tip_stands_eight_pixels_under_its_line() {
             _ => None,
         });
         let tip = tip.expect("a tip");
-        let (top, _) = cellix_render::stood(tip.y, tip.h, row as f32, words as f32);
-        top.round()
+        // Drawn exactly where it's placed (`Grid::exact_popup`), on a pixel.
+        (tip.y as f32 * row as f32 / cellix_render::UNIT as f32).round()
     };
     let line = |at: u16| f32::from(at) * row as f32;
     // 8 px of air under a line a pixel thick.
@@ -1665,14 +1665,20 @@ fn a_tips_round_corners_cover_the_letters_under_them() {
                 bounds,
                 shadow: true,
                 fill: Some(fill),
+                inset,
                 ..
-            } if *fill == theme.popup => Some(*bounds),
+            } if *fill == theme.popup => Some((*bounds, *inset)),
             _ => None,
         });
-        let tip = tip.unwrap_or_else(|| panic!("{width}: a tip under the cut tab"));
-        // Where the rasterizer stands it: a control's height, on whole pixels.
+        let (tip, exact) = tip.unwrap_or_else(|| panic!("{width}: a tip under the cut tab"));
+        // Where the rasterizer stands it: exactly where it's placed (`Grid::exact_popup`), or a
+        // control's height, on whole pixels.
         let unit = UNIT as f32;
-        let (top, high) = cellix_render::stood(tip.y, tip.h, 50.0, 36.0);
+        let (top, high) = if exact {
+            (tip.y as f32 * 50.0 / unit, tip.h as f32 * 50.0 / unit)
+        } else {
+            cellix_render::stood(tip.y, tip.h, 50.0, 36.0)
+        };
         let left = (tip.x as f32 * 17.0 / unit).round();
         let right = ((tip.x + tip.w) as f32 * 17.0 / unit).round();
         let (top, bottom) = (top.round(), (top + high).round());
@@ -1768,6 +1774,90 @@ fn the_panes_program_stands_clear_of_the_line_under_its_tabs() {
         matches!(paint, Paint::Image { bounds, .. } if bounds.y == i32::from(area.y) * UNIT)
     });
     assert!(!fills, "nothing over the program on cells");
+}
+
+/// The air over and under a tip's words in the picture, as the pixels from the line over
+/// them to their ink's top, and from their ink's foot to the line under them: the last tip
+/// painted, drawn exactly where it's placed (`Grid::exact_popup`), its lines on the first
+/// and last of its pixels.
+fn tip_air(app: &App, grid: &Grid) -> (i32, i32) {
+    let popup = app.theme().popup;
+    let tip = (grid.paint.iter()).rev().find_map(|paint| match paint {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            inset: true,
+            fill: Some(fill),
+            ..
+        } if *fill == popup => Some(*bounds),
+        _ => None,
+    });
+    let tip = tip.expect("a tip, drawn where it's placed");
+    let pixels = |units: i32, size: f32| (units as f32 * size / UNIT as f32).round() as i32;
+    let (top, foot) = (pixels(tip.y, 50.0), pixels(tip.y + tip.h, 50.0) - 1);
+    let first = (top / 50) as u16;
+    let rows: Vec<Vec<cellix_render::Rgb>> = (first..=(foot / 50) as u16)
+        .flat_map(|row| super::strip_tests::picture(grid, row))
+        .collect();
+    let at = |y: i32| &rows[(y - i32::from(first) * 50) as usize];
+    // Clear of its round corners.
+    let (left, right) = (pixels(tip.x, 17.0) + 12, pixels(tip.x + tip.w, 17.0) - 12);
+    let inked: Vec<i32> = (top + 1..foot)
+        .filter(|y| {
+            at(*y)[left as usize..right as usize]
+                .iter()
+                .any(|p| super::strip_tests::apart(*p, popup))
+        })
+        .collect();
+    let (ink_top, ink_foot) = (inked[0], inked[inked.len() - 1]);
+    (ink_top - top - 1, foot - ink_foot - 1)
+}
+
+/// A tip's words keep 8 px of air over and under their ink, ascenders, brackets and tails, in
+/// the middle of its box: as a control's 39 px a tip held them 7 px under its line and 6 over
+/// its foot (the release review of 0.12.0, 64-transcript-tab-hover, 13-quit-hover). Quit's
+/// over the bar at the foot, raised to the top of its row, and a pane tab's under the tab
+/// row's line, over a terminal, measured in the picture.
+#[test]
+#[cfg(unix)]
+fn a_tips_words_keep_eight_pixels_over_and_under_them() {
+    let (dir, mut app) = project((150, 44));
+    app.set_measure(Rc::new(
+        cellix_render::FontMeasure::new(17, 50).with_type_row(36),
+    ));
+    let check = |app: &App, what: &str| {
+        let (over, under) = tip_air(app, &screen(app));
+        assert!(
+            over >= 8 && under >= 8 && over.abs_diff(under) <= 1,
+            "{what}: {over} px over its words and {under} under them"
+        );
+    };
+    let quit = app.quit_button().expect("Quit");
+    mouse(&mut app, MouseKind::Move, quit.x, quit.y);
+    check(&app, "Quit");
+    app.open_agent(crate::agents::SHELL.1);
+    // Brackets, ascenders and tails: the font's whole height of ink.
+    app.dock.sessions[0].renamed = Some("the documentation (pricing)".to_string());
+    let agent = start_agent(dir.path(), &mut app, "✳ pricing page");
+    app.dock.active = Some(agent);
+    app.dock.front = Front::Session;
+    // The pane's tab "the documentation (pricing)", cut short, has its name in a tip.
+    let mut seen = false;
+    for width in (30..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let _ = screen(&app);
+        let row = title(&app);
+        let (from, _) = tab_span(&app, row, 0);
+        if app.dock.cut_name(row, from).is_none() {
+            continue;
+        }
+        mouse(&mut app, MouseKind::Move, from + 1, row.y);
+        check(&app, "the pane's tab");
+        seen = true;
+        break;
+    }
+    assert!(seen, "some width cuts the first tab short");
 }
 
 /// With the button that maximizes the pane right after it, the + stands in the middle of the

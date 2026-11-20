@@ -530,10 +530,11 @@ impl SoftwareRasterizer {
                 dashed,
                 inset: on_a_wash,
             } => {
-                let (y, h) = if *on_a_wash {
-                    inset(bounds.y, bounds.h, ch, th)
-                } else {
-                    self.stand(bounds.y, bounds.h)
+                let (y, h) = match (*on_a_wash, *shadow) {
+                    // A floating panel held to its bounds (`Grid::exact_popup`).
+                    (true, true) => (scale(bounds.y, ch), scale(bounds.h, ch)),
+                    (true, false) => inset(bounds.y, bounds.h, ch, th),
+                    _ => self.stand(bounds.y, bounds.h),
                 };
                 let mut shape = Shape {
                     x: scale(bounds.x, cw),

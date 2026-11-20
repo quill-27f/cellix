@@ -147,7 +147,8 @@ EXPECT = {
     "42-hover-install": "files save",
     # The pointed row says all it needs, in small letters as at rest.
     "42-settings-needs": "npm, or Homebrew",
-    "108-install-card-needs": "Run it in a terminal",
+    # One paragraph, set in pixels: a line's cells hold its first 42 letters.
+    "108-install-card-needs": "Copies brew install",
     "43-light-hover-menu": "Rename Symbol",
     "50-comments": "yours",
     "50-comment-emoji": ":rock",

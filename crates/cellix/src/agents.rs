@@ -929,17 +929,12 @@ fn draw_row(
     if row.urgency == Urgency::NeedsYou {
         draw_needs_you(grid, (row_end, right, y), (measure, theme));
     }
-    // A row with something at its end keeps the chip's room for it, so how long ago is one
-    // column on them. An idle row has nothing there, and how long ago is its last word, at
-    // the row's end with every row's last: in the chip's empty room it stood 139 px short
-    // of the rest (the release review of 0.12.0, 14-agents). Its letters keep the cells
-    // they had, before the chip's own.
-    let idle = row.urgency == Urgency::Idle;
-    let room = if idle {
-        0.0
-    } else {
-        chip_width(measure) + AGO_GAP
-    };
+    // Every row keeps the chip's room for its state, an idle row's empty, so how long ago is
+    // one column down the list: one kind of value to a column. At an idle row's end, its time
+    // stood 139 px right of every other row's, in the column the states are in (the release
+    // review of 0.12.0, m2-agents-urgency). Its letters keep the cells they had, before the
+    // chip's own.
+    let room = chip_width(measure) + AGO_GAP;
     let end = row_end - room;
     let mut cells = f32::from(right) - room;
     let dim = Style {

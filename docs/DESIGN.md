@@ -1245,11 +1245,14 @@ Evenly apart as rows, the two weren't as what's drawn: the status bar draws on 3
 the chips. On rows with room the status bar's paint is 0.04 of a row lower in its row and
 the workspaces' 0.06 higher (`PAIR`), which makes that 30, 29 and 29.
 
-A tip over the bar, the app's or the one over New Workspace, stands at the top of its row on
-rows with room (`TIP_RAISE`) and not in its middle. A tip is 39 px of a row of 50 and its
-shadow reaches 11 px under it, and the row under it is the bar's, drawn lower than it begins:
-the shadow can't run on into it, and stopped dead after 5 px. From the row's top all of it is
-in the row. The one over New Workspace is kept to its own row there, the status bar's where
+A tip over the bar, the app's or the one over New Workspace, stands high in its row on rows
+with room, its words raised with it, and not in its middle. Its shadow reaches 11 px under it,
+and the row under it is the bar's, drawn lower than it begins: the shadow can't run on into it,
+and stopped dead after 5 px in the middle of the row. The app's stands with its foot `LINE_AIR`
+over the sheets' line at its row's foot, reaching up into the row over it: a box of 43 px from
+the row's top stood 6 px over the line. The one over New Workspace stands at its row's top, and
+where the foot is one row, so that the row is a sheet's with the line at its foot, it's no
+taller than keeps it 8 px over the line. The one over New Workspace is kept to its own row there, the status bar's where
 the foot is two rows, since the row over it is a sheet's and isn't drawn where it is.
 
 So that little is left over, a row's height is fitted to the window (`fitted`): of the
@@ -1659,7 +1662,9 @@ panel half a column into its first column (`App::card_lead`), so its words' ink 
 its buttons painted right of their cells so the last ends as far from its right
 (`App::card_button_nudge`), its title's capitals 24 px under its top and its buttons' foot 24
 over its foot, and a command's box on those insets, ending where the buttons do, with the
-command 12 px into it (`COMMAND_PADDING`). The install card over the file had 32 px and 29, and
+command 12 px into it (`COMMAND_PADDING`), as the Ask card's question's field is, with what's
+typed 12 px into it: a column into the card's cells it stood 20 px from its line (the release
+review of 0.12.0, q1-ask-field). The install card over the file had 32 px and 29, and
 over the pane the buttons ended 32 to 34 px from the right; 12 px outside the words, the box ran
 22 px past them (the release review of next), and 24 px from the edge, the buttons kept 22 of
 ground. Over the side pane every card is the asking
@@ -1725,6 +1730,12 @@ where one leaves the first line within the room: cut on one line it lost what it
 "right-click to open the tra…", with 48 px empty after it (0.11.0's release check, P7). Broken
 there, the second line is a phrase of its own and starts with a capital, "Right-click to open the
 transcript" (the release review of 0.12.0, 64-transcript-tab-hover). While a
+tip's box is its words' ink, ascenders, brackets and tails (`measures::TIP_INK`), with
+`LINE_AIR` and its line over and under it and a pixel for the ink's half pixel under the row's
+middle (`measures::tip_box`): 43 px of a row of 50, drawn exactly there (`Grid::exact_popup`),
+where a panel shorter than its row is otherwise stood as a control, 39 px, which held the words 7
+px under its line and 6 over its foot (the release review of 0.12.0, 64, 166, 13-quit-hover,
+105). While a
 tip covers the side pane's terminal's cursor, the cursor goes: a tip covers the row under its
 line but the top 10 px of it, and a sliver of the cursor stood on the tip's edge (R4). Nothing
 covers part of a row. A tip's corners are round over plain ground: where a letter of the cells
@@ -2142,15 +2153,27 @@ ending at one edge a column before it; the program stops 24 px before those word
 with a "…" where it's longer. Tags ended at their own buttons, 85 px apart down the list,
 "…-wrapper" ran to 10 px from "needs Homebrew" in the same grey, and pointed at, a row's words
 went to a capital in the words' own white (the release review of 0.12.0, 42-settings-needs).
-The row pointed at is washed whole, which leaves its button 8 px and more over and under. The
-offer card says what its Install runs on a line of its own under what the server adds, a build
-by its program's name, each a sentence with its stop; where it can't install here, what it
-needs, then what Copy Command copies and what to do with it: "Needs Homebrew." "Copies brew
-install jdtls." "Run it in a terminal, then open Main.java again." The card never said what went
-on the clipboard or where to run it (108-install-card-needs). Opening a file again that's open
+The row pointed at is washed whole, which leaves its button 8 px and more over and under, its
+chip in the middle of the wash, where gone down onto the words' baseline it stood 10 px under the
+wash's top and 8 over its foot. A button's label stands where it stands at rest, `BUTTON_ROOM`
+in from the page's end, and pointing only adds its chip behind it (`Grid::row_chip`), reaching
+that far past the label either side to the page's end: centred in a chip of whole columns,
+Install moved 26 px left when its row was pointed at and Copy Command 31. Found, what's being
+installed and the list's count end on that line too (`words_end`; the release review of 0.12.0,
+42-settings-needs). The offer card says what its Install runs after what the server adds, a
+build by its program's name, each a sentence with its stop; where it can't install here, what
+it needs, then what Copy Command copies and what to do with it: "Needs Homebrew. Copies `brew
+install jdtls`. Run it in a terminal, then open Main.java again." The card never said what went
+on the clipboard or where to run it (108-install-card-needs). Its words are one paragraph, each
+sentence running on from the one before, where a sentence to a line left the wrapped end of one,
+"into ~/.local/bin.", a row under it as one more sentence (108-install-card-pane). A command is
+set in the code font on a pill of the code's ground, as a page sets inline code, and wraps as
+one word: as words of the sentence, "Copies brew install jdtls." read the command as part of
+it. Opening a file again that's open
 looks once more for its language's server where it was missing, and starts it once it's there;
-the bar keeps the next step after the card goes. A path on the card never stands alone on a line:
-the word before it goes with it ("into ~/.local/bin"). What a row says pointed at: "Runs npm
+the bar keeps the next step after the card goes. A path or a command on the card never stands
+alone on a line: the word before it goes with it ("into ~/.local/bin", "Runs `npm install -g
+pyright`"). What a row says pointed at: "Runs npm
 install -g --prefix ~/.local pyright", "Fetches marksman-linux-musl-x64 from GitHub into
 ~/.local/bin", "needs Homebrew, or sudo dnf install clang-tools-extra".
 
@@ -2749,12 +2772,11 @@ design's chip of 20/28 of a taller row with room under its words' tails (it was 
 of "you" a pixel over its foot), saying "needs you" in the attention colour with what it's
 asking on the row under it, its words' ink in its middle, raised the 2 px their tails reach
 further down than their heads reach up (they had 11 px over them and 7 under), a green
-dot, or nothing. Every row with something at its end keeps room there as wide as that chip, so
-how long ago stands in one column down those rows (it moved six columns left on the row that
-needs you); an idle row has nothing there, so how long ago is its last word and ends where
-every row's last does (kept in the chip's empty room, it stood 139 px short of the rest: the
-release review of 0.12.0, 14-agents). What stands at a row's end, the chip, the spinner, the dot
-or an idle row's time, ends as far in from the pane's right edge as the marks start from its
+dot, or nothing. Every row keeps room there as wide as that chip, an idle row's empty, so how
+long ago stands in one column down the list, one kind of value to a column (it moved six
+columns left on the row that needs you, and at an idle row's end it stood 139 px right of the
+rest: the release review of 0.12.0, m2-agents-urgency). What stands at a row's end, the chip,
+the spinner or the dot, ends as far in from the pane's right edge as the marks start from its
 left (`measures::row_end`), so the band under the pointer has 15 px either side of what it
 holds (it had 36 at its end). A line that parts the list, the one under Terminal in START, runs
 from where the rows' marks start to where their ends end, 25 px in from the pane's edge either

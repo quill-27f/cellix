@@ -1766,7 +1766,9 @@ impl SettingsPage {
             bold: false,
             ..heading
         };
-        grid.label_right(page.right(), line_y, &found, plain, NOTE_SIZE);
+        // Ending where the rows' words at their ends do (`words_end`).
+        let (end, cell) = words_end(page, measure);
+        grid.label_right_at(end, cell, line_y, &found, plain, NOTE_SIZE);
         for (row, index) in self.server_rows(page).into_iter().enumerate() {
             let y = page.y + SERVERS_ROW + row as u16;
             let place = (y, index, SERVER_DETAIL.0);
@@ -1855,12 +1857,14 @@ impl SettingsPage {
             let words = cut_middle(&words, f32::from(end) - named, measure, font);
             grid.label_right(end, y, &words, style, NOTE_SIZE);
         }
+        // What ends the row ends where a button's label does, at rest and pointed at alike.
+        let (words, cell) = words_end(page, measure);
         if found {
             let state = Style {
                 fg: theme.git_added,
                 ..theme.text
             };
-            grid.label_right(page.right(), y, "Found", state, NOTE_SIZE);
+            grid.label_right_at(words, cell, y, "Found", state, NOTE_SIZE);
             return;
         }
         // Being installed, where its button was: a spinner and what it's doing.
@@ -1873,10 +1877,9 @@ impl SettingsPage {
                 size: NOTE_SIZE,
                 ..Font::default()
             };
-            let words = measure.width("Installing", font);
-            let at = f32::from(page.right()) - words - 1.6;
+            let at = words - measure.width("Installing", font) - 1.6;
             grid.spinner(at, y, crate::measures::WAIT_SPIN, theme.accent, theme.text);
-            grid.label_right(page.right(), y, "Installing", quiet, NOTE_SIZE);
+            grid.label_right_at(words, cell, y, "Installing", quiet, NOTE_SIZE);
             return;
         }
         let Some((control, _)) = control else {
@@ -1901,18 +1904,29 @@ impl SettingsPage {
                     (theme.secondary(theme.page_hover, on_it), theme.text.fg)
                 };
                 let style = Style { fg, ..theme.text };
-                // On the row's wash, and inside it where a row has room: the wash is the
-                // row's whole height, so the button keeps `LINE_AIR` from its foot.
-                let from = grid.painted_so_far();
-                grid.row_button((x, rect.y), &cells, label, fill, style);
-                grid.lift_since(from, crate::measures::row_button_foot_lift(measure));
+                if measure.in_cells() {
+                    // A column either side of its word, which ends where it does at rest.
+                    grid.row_button((x, rect.y), &cells, label, fill, style);
+                } else {
+                    // Its label where it stands at rest, and the chip behind it reaching
+                    // `BUTTON_ROOM` past it either side, to the page's end, in the middle of
+                    // the row's wash: pointing adds the fill and moves nothing.
+                    let font = Font {
+                        size: NOTE_SIZE,
+                        ..Font::default()
+                    };
+                    let room = crate::measures::BUTTON_ROOM;
+                    let left = words - measure.width(label, font) - room;
+                    grid.row_chip((left, words + room), rect.y, fill);
+                    grid.label_right_at(words, cell, y, label, style, NOTE_SIZE);
+                }
             } else {
                 // Its word where Found stands on the rows beside it.
                 let word = Style {
                     fg: theme.accent,
                     ..theme.text
                 };
-                grid.label_right(page.right(), y, label, word, NOTE_SIZE);
+                grid.label_right_at(words, cell, y, label, word, NOTE_SIZE);
             }
         }
     }
@@ -2264,6 +2278,20 @@ fn cut_middle(words: &str, room: f32, measure: &dyn Measure, font: Font) -> Stri
         }
     }
     String::new()
+}
+
+/// Where the words at a language server's row's end end, between cells and in cells: Found,
+/// what's being installed, a button's label, and the count on the list's heading. A button's
+/// label stands there at rest and pointed at, `BUTTON_ROOM` in from the page's end where its
+/// chip ends, so pointing at a row only adds the chip: centred in a chip of whole columns,
+/// Install moved 26 px left and Copy Command 31 (the release review of 0.12.0, 42-settings-
+/// needs). On cells, a column in, where a button's word has a column of its chip after it.
+fn words_end(page: Rect, measure: &dyn Measure) -> (f32, u16) {
+    let cell = page.right().saturating_sub(1);
+    if measure.in_cells() {
+        return (f32::from(cell), cell);
+    }
+    (f32::from(page.right()) - crate::measures::BUTTON_ROOM, cell)
 }
 
 fn button_place(rect: Rect, label: &str, measure: &dyn Measure) -> (u16, u16) {

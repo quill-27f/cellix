@@ -355,12 +355,6 @@ const TOOLTIP_HEIGHT: f32 = 1.0;
 /// How far a tip's box stops short of its row, over and under: nothing on the terminal's own
 /// line, and on a taller row what makes it a box in the row and not the row itself.
 pub(crate) const TIP_INSET: f32 = 0.01;
-/// How far up its row a tip over the bar at the foot stands on a row with room, in rows. A
-/// tip is a control, 39 px in the middle of a row of 50, and its shadow reaches 11 px under
-/// it: more than the row has left. The bar's row is drawn lower than it begins, so the
-/// shadow can't run on into it and was cut where the rows meet, a hard edge under the tip.
-/// Five pixels higher, at the top of its row, all of the shadow is in the row.
-pub(crate) const TIP_RAISE: f32 = 0.1;
 const TOOLTIP_SIZE: u8 = 92;
 /// How round a tip's corners are, in hundredths of the terminal's line.
 const TIP_RADIUS: u8 = 24;
@@ -1383,6 +1377,32 @@ pub(crate) fn sheet_edge(grid: &mut Grid, bounds: Bounds, frame: Rgb, line: Rgb)
 /// after it (0.11.0's release check, P7, 64-transcript-tab-hover). Broken at a " · ", the
 /// second line is a phrase of its own and starts with a capital: it read "right-click to open
 /// the transcript" (the release review of 0.12.0, 64-transcript-tab-hover).
+/// Where a card's command keeps its spaces while its words are wrapped, so it's one word.
+const HELD_SPACE: char = '\u{1f}';
+
+/// Words set in lines of `width` columns, measured by `wide`: a line takes words until the
+/// next would go past it.
+fn wrap_words(text: &str, width: f32, wide: &dyn Fn(&str) -> f32) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let tried = if line.is_empty() {
+            word.to_string()
+        } else {
+            format!("{line} {word}")
+        };
+        if !line.is_empty() && wide(&tried) > width {
+            lines.push(std::mem::replace(&mut line, word.to_string()));
+        } else {
+            line = tried;
+        }
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
 fn wrap_tip(text: &str, room: f32, width: impl Fn(&str) -> f32) -> String {
     if width(text) <= room {
         return text.to_string();
@@ -2352,13 +2372,18 @@ impl App {
     }
 
     /// The card's words under its title, as lines: what the server adds, and what its Install
-    /// runs here, so what a press does is said before it's pressed.
+    /// runs here, so what a press does is said before it's pressed. One paragraph, each
+    /// sentence running on from the one before: a sentence to a line, the end of one that
+    /// wrapped stood a row under it as one more sentence, "into ~/.local/bin." (the release
+    /// review of 0.12.0, 108-install-card-pane). A command is between backticks, set in the code
+    /// font where it's drawn (`card_words`).
     fn offer_detail_lines(&self, detail: &str) -> Vec<String> {
-        let mut lines = self.offer_lines(detail);
+        let mut paragraph = detail.to_string();
         for runs in self.offer_runs() {
-            lines.extend(self.offer_lines(&runs));
+            paragraph.push(' ');
+            paragraph.push_str(&runs);
         }
-        lines
+        self.offer_lines(&paragraph)
     }
 
     /// What the card's Install runs ("Runs brew install ….", "Fetches … into ~/.local/bin."),
@@ -2382,12 +2407,15 @@ impl App {
                 let from = plan.tag();
                 vec![format!("Fetches {program} from {from} into ~/.local/bin.")]
             }
-            Plan::Run { says, .. } => vec![format!("{says}.")],
+            Plan::Run { says, .. } => match says.strip_prefix("Runs ") {
+                Some(command) => vec![format!("Runs `{command}`.")],
+                None => vec![format!("{says}.")],
+            },
             // Or, where it can't install here, what it needs, on that line, and what to run.
             Plan::Needs { says, copy } => {
                 let mut lines = vec![format!("{says}.")];
                 if let Some(copy) = copy {
-                    lines.push(format!("Copies {copy}."));
+                    lines.push(format!("Copies `{copy}`."));
                     lines.push(self.offer_next_step());
                 }
                 lines
@@ -2409,15 +2437,26 @@ impl App {
     }
 
     /// A line of the corner card's words as the lines it takes inside the card, two cells
-    /// in from either edge. A path never stands alone on a line: the word before it goes
-    /// with it ("into ~/.local/bin"), where "~/.local/bin" stood on a line of its own in the
-    /// side pane (the release review of 0.12.0, 108-install-card-pane).
+    /// in from either edge. A command between backticks is never broken, and it and a path
+    /// never stand alone on a line: the word before goes with it ("into ~/.local/bin"), where
+    /// "~/.local/bin" stood on a line of its own in the side pane (the release review of
+    /// 0.12.0, 108-install-card-pane).
     fn offer_lines(&self, words: &str) -> Vec<String> {
         let width = f32::from(self.corner_frame(OFFER_WIDTH).1.saturating_sub(4));
-        let mut lines = self.wrap(words, width);
+        // A command's spaces held till it's set, so it wraps as one word.
+        let mut code = false;
+        let held: String = (words.chars())
+            .map(|c| {
+                code ^= c == '`';
+                if code && c == ' ' { HELD_SPACE } else { c }
+            })
+            .collect();
+        let wide = |line: &str| self.card_words_width(&line.replace(HELD_SPACE, " "));
+        let mut lines = wrap_words(&held, width, &wide);
         let alone = |line: &str| {
             let path = line.trim_end_matches('.');
-            !line.contains(' ') && (path.starts_with("~/") || path.starts_with('/'))
+            let set = path.starts_with("~/") || path.starts_with('/') || path.starts_with('`');
+            !line.contains(' ') && set
         };
         for at in 1..lines.len() {
             if !alone(&lines[at]) {
@@ -2427,12 +2466,73 @@ impl App {
                 continue;
             };
             let joined = format!("{moved} {}", lines[at]);
-            if self.measure.width(&joined, Font::default()) <= width {
+            if wide(&joined) <= width {
                 lines[at - 1] = kept.to_string();
                 lines[at] = joined;
             }
         }
-        lines
+        (lines.into_iter())
+            .map(|line| line.replace(HELD_SPACE, " "))
+            .collect()
+    }
+
+    /// How wide a line of a card's words is, in columns, its commands between backticks in
+    /// the code font (`card_words`).
+    fn card_words_width(&self, line: &str) -> f32 {
+        (line.split('`').enumerate())
+            .map(|(n, part)| {
+                let font = Font {
+                    mono: n % 2 == 1,
+                    ..Font::default()
+                };
+                self.measure.width(part, font)
+            })
+            .sum()
+    }
+
+    /// A line of a card's words from column `x`, a command between backticks in the code
+    /// font on a pill of the code's ground, as a page draws inline code: "Copies brew install
+    /// jdtls." read the command as words of the sentence (the release review of 0.12.0,
+    /// 108-install-card-needs). On cells, the words without their backticks.
+    fn card_words(
+        &self,
+        grid: &mut Grid,
+        (x, y): (u16, u16),
+        line: &str,
+        (style, right): (Style, u16),
+    ) {
+        let plain = line.replace('`', "");
+        if !line.contains('`') || self.measure.in_cells() {
+            grid.label(x, y, &plain, style, right);
+            return;
+        }
+        let theme = &self.theme;
+        let hidden = Style {
+            painted: true,
+            ..style
+        };
+        grid.put_str(x, y, &plain, hidden, right);
+        let (mut at, row, end) = (f32::from(x), f32::from(y), f32::from(right));
+        for (n, part) in line.split('`').enumerate() {
+            let code = n % 2 == 1;
+            let font = Font {
+                mono: code,
+                ..Font::default()
+            };
+            if part.is_empty() {
+                continue;
+            }
+            let wide = self.measure.width(part, font);
+            let color = if code {
+                let pill = Bounds::cells(at - 0.2, row + 0.05, wide + 0.4, 0.9);
+                grid.panel(pill, 14, Some(theme.code_bg), None);
+                theme.string
+            } else {
+                style.fg
+            };
+            grid.text_run((at, row), end, part, (color, false), font);
+            at += wide;
+        }
     }
 
     /// The card's place, as tall as its words: an edge, the title, the detail, a gap, the
@@ -2659,7 +2759,8 @@ impl App {
         let words = grid.painted_so_far();
         grid.label(area.x + 2, area.y + 1, &title, strong, right);
         for (i, line) in self.offer_detail_lines(&detail).iter().enumerate() {
-            grid.label(area.x + 2, area.y + 2 + i as u16, line, dim, right);
+            let at = (area.x + 2, area.y + 2 + i as u16);
+            self.card_words(grid, at, line, (dim, right));
         }
         let lift = self.card_lift(measures::DialogLast::Words, self.card_lead(area));
         grid.lift_since(words, lift);
@@ -10727,24 +10828,7 @@ impl App {
     /// Breaks text into lines that fit `width` cells, by words.
     fn wrap(&self, text: &str, width: f32) -> Vec<String> {
         let font = Font::default();
-        let mut lines = Vec::new();
-        let mut line = String::new();
-        for word in text.split_whitespace() {
-            let tried = if line.is_empty() {
-                word.to_string()
-            } else {
-                format!("{line} {word}")
-            };
-            if !line.is_empty() && self.measure.width(&tried, font) > width {
-                lines.push(std::mem::replace(&mut line, word.to_string()));
-            } else {
-                line = tried;
-            }
-        }
-        if !line.is_empty() {
-            lines.push(line);
-        }
-        lines
+        wrap_words(text, width, &|line: &str| self.measure.width(line, font))
     }
 
     /// Acts on the card of the session showing: resumes it, starts it fresh, or closes it.
@@ -18136,12 +18220,10 @@ impl App {
             && rail.contains(x, y)
             && (self.view_at(x, y).is_some() || on_hide);
         let top = if on_view { top } else { top.round() };
-        // Over the bar at the foot, at the top of its row where a row has room: `TIP_RAISE`.
+        // Over the bar at the foot, at the top of its row where a row has room (`tip_box`).
         let foot = self.size.1.saturating_sub(1);
         let over_bar = top + TOOLTIP_HEIGHT >= f32::from(foot);
-        let top = if over_bar && measures::roomy(&*self.measure) {
-            top - TIP_RAISE
-        } else if over_bar || on_view {
+        let top = if over_bar || on_view {
             top
         } else {
             // Its row's top is where the line over it is, under a tab row or a bar.
@@ -18164,12 +18246,25 @@ impl App {
         // row and stand in the middle of it, clear of a line over or under. A line more is
         // the terminal's line more, in rows, the box growing down by it.
         let more = (said.len() - 1) as f32;
-        let (box_top, box_tall, line) = self.tip_box(top, more);
-        let bounds = Bounds::cells(left, box_top, tip_wide, box_tall);
+        let ((box_top, box_tall), line, raised) = self.tip_box(top, more, over_bar);
         let painted = grid.painted_so_far();
-        self.cover_tip_corners(grid, bounds, TIP_RADIUS);
-        grid.popup(bounds, TIP_RADIUS, theme.popup, theme.popup_border);
+        let bounds = match box_top {
+            Some(units) => {
+                let mut bounds = Bounds::cells(left, 0.0, tip_wide, 0.0);
+                (bounds.y, bounds.h) = (units, box_tall as i32);
+                self.cover_tip_corners(grid, (bounds, true), TIP_RADIUS);
+                grid.exact_popup(bounds, TIP_RADIUS, theme.popup, theme.popup_border);
+                bounds
+            }
+            None => {
+                let bounds = Bounds::cells(left, top + TIP_INSET, tip_wide, box_tall);
+                self.cover_tip_corners(grid, (bounds, false), TIP_RADIUS);
+                grid.popup(bounds, TIP_RADIUS, theme.popup, theme.popup_border);
+                bounds
+            }
+        };
         self.cover_cursor(grid, bounds);
+        let top = top - raised;
         // A tip over the bar at the foot keeps to the rows over it. The bar's row is moved
         // down to stand in what's under the sheets, and the part of a tip's shadow that
         // reached into it went down with it, away from its tip.
@@ -18183,23 +18278,46 @@ impl App {
     }
 
     /// Where a tip's box stands, `top` being its row's and `more` the lines it has past its
-    /// first, as its top and height in rows, and how far one line of its words is from the
-    /// next. One line, a hair short of its row; each line more is the terminal's line more,
-    /// under it, so a tip of two lines is its words and no row of air between them.
-    fn tip_box(&self, top: f32, more: f32) -> (f32, f32, f32) {
-        let single = (top + TIP_INSET, TOOLTIP_HEIGHT - TIP_INSET * 2.0);
-        let Some((_, row)) = self.measure.cell_pixels().filter(|_| more > 0.0) else {
-            return (single.0, single.1 + more, 1.0);
+    /// first: its top and height, how far one line of its words is from the next, in rows, and
+    /// how far it and its words are raised, in rows. Where a row has room, the top is in paint
+    /// units and the box is drawn exactly there (`Grid::exact_popup`): one line is
+    /// `measures::tip_box`, its words' ink with `LINE_AIR` over and under it, and each line
+    /// more is the terminal's line more, under it, so a tip of two lines is its words and no
+    /// row of air between them. Over the bar at the foot (`raised`) it stands as high as keeps
+    /// it `LINE_AIR` over the sheets' line at its row's foot, with the rest of the row under it
+    /// for its shadow, which the bar's row, drawn lower than it begins, would cut off at a hard
+    /// edge. On the terminal's line it's a
+    /// hair short of its row, and nothing is raised.
+    fn tip_box(&self, top: f32, more: f32, raised: bool) -> ((Option<i32>, f32), f32, f32) {
+        let tip = measures::tip_box(&*self.measure, TOOLTIP_SIZE);
+        let (Some((over, tall)), Some((_, row))) = (tip, self.measure.cell_pixels()) else {
+            return ((None, TOOLTIP_HEIGHT - TIP_INSET * 2.0 + more), 1.0, 0.0);
         };
         let row = row as f32;
         let line = row / self.measure.row_air().max(1.0);
-        // The one line's box as a taller row stands it, from where it starts, and the lines
-        // after it: from where it stands in its rows, its top rounded twice to a 64th of a row.
-        let units = |rows: f32| (rows * cellix_render::UNIT as f32).round() as i32;
-        let (over, tall) = cellix_render::stood(0, units(single.1), row, line);
-        let first = single.0 + over / row;
-        let step = line / row;
-        (first, (tall + line * more) / row, step)
+        let unit = cellix_render::UNIT as f32;
+        // Its top and foot each on the 64th of a row nearest its pixel, so its line stands on
+        // that pixel.
+        let at = |px: f32| (px * unit / row).round() as i32;
+        // Over the bar, its foot `LINE_AIR` over the sheets' line at its row's foot, reaching
+        // up into the row over it: from its row's top, 43 px tall, it stood 6 px over the line
+        // (13-quit-hover). Its words go up with it.
+        let middle = over;
+        let over = if raised {
+            let line = measures::line_pixels(&*self.measure);
+            (row - line - measures::LINE_AIR - tall - row / self.measure.row_air().max(1.0) * more)
+                .min(0.0)
+        } else {
+            over
+        };
+        let lift = if raised { (middle - over) / row } else { 0.0 };
+        let base = cellix_render::units(top);
+        let foot = at(over + tall + line * more);
+        (
+            (Some(base + at(over)), (foot - at(over)) as f32),
+            line / row,
+            lift,
+        )
     }
 
     /// One line of a tip's words, from `left`: what it does, and then, quieter, the other way
@@ -18246,7 +18364,7 @@ impl App {
     /// covers it there, that corner of the square is filled with the cell's ground first, so
     /// the tip is round over plain ground. A colour under a corner shows past it, as a round
     /// corner over a colour does.
-    fn cover_tip_corners(&self, grid: &mut Grid, tip: Bounds, radius: u8) {
+    fn cover_tip_corners(&self, grid: &mut Grid, (tip, exact): (Bounds, bool), radius: u8) {
         use cellix_render::{BOTTOM_LEFT, BOTTOM_RIGHT, TOP_LEFT, TOP_RIGHT, UNIT};
         let Some((wide, tall)) = self.measure.cell_pixels() else {
             return;
@@ -18254,9 +18372,13 @@ impl App {
         let (wide, tall) = (wide as f32, tall as f32);
         let line = tall / self.measure.row_air().max(1.0);
         let unit = UNIT as f32;
-        // Where the rasterizer stands it: a control's height in its row, and with a line round
-        // it, on whole pixels.
-        let (top, high) = cellix_render::stood(tip.y, tip.h, tall, line);
+        // Where the rasterizer stands it: exactly where it's placed (`Grid::exact_popup`), or a
+        // control's height in its row, and with a line round it, on whole pixels.
+        let (top, high) = if exact {
+            (tip.y as f32 * tall / unit, tip.h as f32 * tall / unit)
+        } else {
+            cellix_render::stood(tip.y, tip.h, tall, line)
+        };
         let left = (tip.x as f32 * wide / unit).round();
         let right = ((tip.x + tip.w) as f32 * wide / unit).round();
         let (top, bottom) = (top.round(), (top + high).round());
@@ -18375,11 +18497,19 @@ impl App {
         let line = row / self.measure.row_air().max(1.0);
         let unit = cellix_render::UNIT as f32;
         let tall = TOOLTIP_HEIGHT - TIP_INSET * 2.0;
-        let (top, drawn) =
-            cellix_render::stood((TIP_INSET * unit) as i32, (tall * unit) as i32, row, line);
-        // The air, and the line, in whole sixty-fourths of a row as paint places them.
+        // Where its box stands in its row: `measures::tip_box` where a row has room, on the
+        // 64th of a row paint puts it at (`tip_box`), or as a control stands.
+        let (top, drawn) = match measures::tip_box(&*self.measure, TOOLTIP_SIZE) {
+            Some((over, drawn)) => ((over * unit / row).round() * row / unit, drawn),
+            None => {
+                let (top, high) = (TIP_INSET * unit, tall * unit);
+                cellix_render::stood(top as i32, high as i32, row, line)
+            }
+        };
+        // The air, and the line, in whole sixty-fourths of a row as paint places them, and
+        // half a pixel more, so a box placed between pixels isn't drawn a pixel short of it.
         let air = measures::LINE_AIR + measures::line_pixels(&*self.measure);
-        let drop = ((air - top) / row * unit).ceil() / unit;
+        let drop = ((air + 0.5 - top) / row * unit).ceil() / unit;
         // Into the row under it only as far as that row's air over its words.
         let fits = air + drawn <= row + (row - line) / 2.0;
         if drop > 0.0 && fits { drop } else { 0.0 }
@@ -25733,10 +25863,11 @@ mod tests {
             .filter(|line| rows[*line][from + 10] == fill.1)
             .collect();
         let (top, foot) = (filled[0], filled[filled.len() - 1] + 1);
-        // "Comma" of "Command", from the button's middle, which has no tails and no "d".
+        // "Command", from 24 px before the button's middle, past "Copy" and its tails, to its
+        // last 26 px, its room after the words: its capital and its "d".
         let inked: Vec<usize> = (top..foot)
             .filter(|line| {
-                rows[*line][(from + to) / 2..to - 32]
+                rows[*line][(from + to) / 2 - 24..to - 26]
                     .iter()
                     .any(|p| super::strip_tests::apart(*p, fill.1))
             })
@@ -25747,6 +25878,125 @@ mod tests {
             over.abs_diff(under) <= 1,
             "{over} px over Command's capital and {under} under its foot, in {top} to {foot}"
         );
+    }
+
+    /// A language server's button keeps its label where it stands at rest when its row is
+    /// pointed at, so pointing only adds the chip behind it: centred in a chip of whole
+    /// columns, Install moved 26 px left and Copy Command 31 (the release review of 0.12.0,
+    /// 42-settings-needs). The list's count ends where the labels do, and the chip stands in
+    /// the middle of the row's wash, where it stood 10 px under its top and 8 over its foot.
+    /// Measured in what's painted, in the picture and on cells.
+    #[cfg(unix)]
+    #[test]
+    fn a_server_rows_button_keeps_its_label_still_when_pointed_at() {
+        use cellix_render::{Paint, UNIT};
+        // Nothing here installs with npm or Homebrew; builds fetched from GitHub install.
+        // None of these stand-ins runs: nothing is pressed.
+        let tools = ["curl", "tar", "gunzip", "unzip", "xz", "go"].map(|tool| (tool, "exit 1"));
+        let (dir, machine) = stand_in_linux(&tools);
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        let open = |pictures: bool| {
+            let mut app = App::new(project.clone(), (150, 70));
+            app.machine = machine.clone();
+            if pictures {
+                let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+                app.set_measure(Rc::new(measure));
+            }
+            app.run(Command::OpenSettings);
+            app.settings_page.as_mut().unwrap().section = crate::settings_page::Section::Editor;
+            app
+        };
+        let rows = [
+            (
+                "Python",
+                Control::CopyServer(server_index("Python")),
+                "Copy Command",
+            ),
+            (
+                "Markdown",
+                Control::InstallServer(server_index("Markdown")),
+                "Install",
+            ),
+        ];
+        // On cells: the column its label ends at, at rest and pointed at.
+        let mut app = open(false);
+        for (language, control, label) in rows {
+            let spot = settings_spot(&app, control).expect(language);
+            let end = |app: &App| {
+                let row = screen(app).row_text(spot.y);
+                let at = row.find(label).unwrap_or_else(|| panic!("{label}: {row}"));
+                row[..at].chars().count() + label.chars().count()
+            };
+            let rest = end(&app);
+            app.handle(mouse(MouseKind::Move, spot.x + 1, spot.y));
+            assert_eq!(end(&app), rest, "{language}'s {label}, on cells");
+            app.handle(mouse(MouseKind::Move, 1, 1));
+        }
+        // With pictures: where its painted label ends, and its ink in the picture.
+        let mut app = open(true);
+        let px = |units: i32| units as f32 / UNIT as f32 * 17.0;
+        for (language, control, label) in rows {
+            let spot = settings_spot(&app, control).expect(language);
+            let painted = |grid: &Grid| {
+                (grid.paint.iter())
+                    .find_map(|p| match p {
+                        Paint::Text { x, y, text, .. }
+                            if text == label && *y / UNIT == i32::from(spot.y) =>
+                        {
+                            Some(px(*x))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| panic!("{language}'s {label}"))
+            };
+            // The columns of its ink from `from`, its first and its last, on what's at its row's
+            // end: the page at rest, and pointed at its chip, from 12 px before where its ink
+            // starts at rest, which the chip reaches past.
+            let to = (f32::from(spot.right()) * 17.0) as usize - 6;
+            let ink = |grid: &Grid, from: usize| {
+                let rows = super::strip_tests::picture(grid, spot.y);
+                let ground = rows[25][to];
+                let inked: Vec<usize> = (from..to)
+                    .filter(|x| (10..40).any(|y| super::strip_tests::apart(rows[y][*x], ground)))
+                    .collect();
+                (inked[0], inked[inked.len() - 1])
+            };
+            let grid = screen(&app);
+            let rest = painted(&grid);
+            let rest_ink = ink(&grid, (f32::from(spot.x) * 17.0) as usize);
+            app.handle(mouse(MouseKind::Move, spot.x + 1, spot.y));
+            let grid = screen(&app);
+            let (pointed, pointed_ink) = (painted(&grid), ink(&grid, rest_ink.0 - 12));
+            assert!(
+                (pointed - rest).abs() < 0.01 && pointed_ink == rest_ink,
+                "{language}'s {label}: ends at {rest} at rest, at {pointed} pointed at; its ink \
+                 {rest_ink:?} and {pointed_ink:?}"
+            );
+            // The chip in the middle of the row's wash, from its full rows, clear of its words.
+            let rows = super::strip_tests::picture(&grid, spot.y);
+            let chip = rows[25][rest_ink.0 - 8];
+            let full: Vec<usize> = (0..50)
+                .filter(|y| rows[*y][rest_ink.0 - 8] == chip)
+                .collect();
+            let (over, under) = (full[0], 50 - (full[full.len() - 1] + 1));
+            assert!(
+                over.abs_diff(under) <= 1,
+                "{language}: {over} px of wash over its chip, {under} under it"
+            );
+            app.handle(mouse(MouseKind::Move, 1, 1));
+        }
+        // The list's count ends where the labels do.
+        let grid = screen(&app);
+        let count = (grid.paint.iter()).find_map(|p| match p {
+            Paint::Text { x, text, .. } if text.ends_with(" found") => Some(px(*x)),
+            _ => None,
+        });
+        let label = (grid.paint.iter()).find_map(|p| match p {
+            Paint::Text { x, text, .. } if text == "Install" => Some(px(*x)),
+            _ => None,
+        });
+        assert_eq!(count, label, "the count and the labels end on one line");
     }
 
     /// The card that offers a language's server, where this machine can't install it: what it
@@ -25770,8 +26020,10 @@ mod tests {
         assert!(!text.contains("Install Java support?"), "{text}");
         assert!(text.contains("Needs Homebrew."), "{text}");
         assert!(!text.contains("[Install]"), "{text}");
-        // What Copy Command copies, on a line of its own as what Install runs is on its card,
-        // and what to do with it: the card said neither (the release review of 0.12.0, 108).
+        // What Copy Command copies, as what Install runs is on its card, and what to do with
+        // it: the card said neither (the release review of 0.12.0, 108). One paragraph, its
+        // sentences running on: "Copies brew install jdtls." stood on a line of its own, and
+        // a sentence's wrapped end a row lower read as one more (108-install-card-pane).
         let grid = screen(&app);
         let area = app.offer_area();
         let card: Vec<String> = (area.y..area.bottom())
@@ -25786,8 +26038,8 @@ mod tests {
             said.contains("Needs Homebrew. Copies brew install jdtls. Run it in a terminal, then open Main.java again."),
             "{card:#?}"
         );
-        let copies = (card.iter()).position(|line| line.starts_with("Copies brew install jdtls."));
-        assert!(copies.is_some(), "a line of its own: {card:#?}");
+        let runs_on = (card.iter()).any(|line| line.contains("Homebrew. Copies brew"));
+        assert!(runs_on, "one paragraph: {card:#?}");
         let (x, y) = find(&screen(&app), "Copy Command");
         app.handle(mouse(MouseKind::Left, x + 1, y));
         assert_eq!(app.clipboard, "brew install jdtls");
@@ -25829,7 +26081,7 @@ mod tests {
         app.note_missing("Python");
         let text = screen(&app).text();
         assert!(text.contains("Install Python support?"), "{text}");
-        // What Install runs, said before it's pressed, on a line of its own.
+        // What Install runs, said before it's pressed, the command whole on its line.
         let runs = (text.lines()).find(|line| line.contains("Runs npm install -g pyright"));
         let runs = runs.unwrap_or_else(|| panic!("what Install runs: {text}"));
         assert!(!runs.contains("adds completion"), "{runs}");
@@ -25920,25 +26172,65 @@ mod tests {
             bold,
             ..Font::default()
         };
-        for (words, bold) in [
-            ("Install Java support?", true),
-            ("jdtls adds completion, errors and rename.", false),
-        ] {
-            let x = grid
-                .paint
-                .iter()
-                .find_map(|p| match p {
-                    Paint::Text { x, text, .. } if text == words => Some(*x as f32 / unit),
-                    _ => None,
-                })
-                .unwrap_or_else(|| panic!("no {words} painted"));
-            let end = x + app.measure.width(words, font(bold));
-            let inset = measures::card_inset(&*app.measure) - 0.05;
+        let inset = measures::card_inset(&*app.measure) - 0.05;
+        let words = "Install Java support?";
+        let x = grid
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                Paint::Text { x, text, .. } if text == words => Some(*x as f32 / unit),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no {words} painted"));
+        let end = x + app.measure.width(words, font(true));
+        assert!(
+            x >= left + inset && end <= right - inset,
+            "{words}: {x} to {end}"
+        );
+        // The lines under it, what the server adds and what Install runs, one paragraph in runs
+        // of words: the command in the code font, on a pill of the code's ground, as a page
+        // sets inline code ("Runs install-jdtls." read as words of the sentence: the release
+        // review of 0.12.0, 108-install-card-needs).
+        let line: Vec<(f32, String, Font, f32)> = (grid.paint.iter())
+            .filter_map(|p| match p {
+                Paint::Text {
+                    x, y, text, font, ..
+                } => Some((*x as f32 / unit, text.clone(), *font, *y as f32 / unit)),
+                _ => None,
+            })
+            .filter(|(x, .., y)| *x >= left && *x < right && *y > title + 0.75)
+            .filter(|(.., y)| *y < title + 2.75)
+            .collect();
+        let mut said = String::new();
+        for (n, (_, text, _, y)) in line.iter().enumerate() {
+            if n > 0 && *y != line[n - 1].3 {
+                said.push(' ');
+            }
+            said.push_str(text);
+        }
+        assert_eq!(
+            said, "jdtls adds completion, errors and rename. Runs install-jdtls.",
+            "{line:?}"
+        );
+        let line: Vec<(f32, String, Font)> = (line.into_iter())
+            .map(|(x, text, font, _)| (x, text, font))
+            .collect();
+        for (x, words, font) in &line {
+            let end = x + app.measure.width(words, *font);
             assert!(
-                x >= left + inset && end <= right - inset,
+                *x >= left + inset && end <= right - inset,
                 "{words}: {x} to {end}"
             );
         }
+        let code = (line.iter()).find(|(_, text, _)| text == "install-jdtls");
+        let (at, _, font) = code.unwrap_or_else(|| panic!("the command: {line:?}"));
+        assert!(font.mono, "in the code font: {line:?}");
+        let pill = (grid.paint.iter()).any(|p| {
+            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
+                if *fill == app.theme.code_bg
+                    && (bounds.x as f32 / unit - at).abs() < 0.5)
+        });
+        assert!(pill, "on the code's ground");
 
         // Its top and bottom lines stand on whole pixels, as sharp as its sides'.
         for edge in [top, bottom] {
@@ -25998,7 +26290,7 @@ mod tests {
             second.contains("completion, errors and rename."),
             "{second}"
         );
-        // Then what Install runs, on a line of its own.
+        // Then what Install runs, the command with the word before it on the line it takes.
         let third = grid.row_text(y + 3);
         assert!(third.contains("Runs exit 0"), "{third}");
         assert_eq!(
@@ -33855,8 +34147,13 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             !grid.paint_on_row(quit.y).any(shadowed),
             "and none of it on the bar's"
         );
-        // On a row with room it stands at the top of its row, so all of its shadow is in the
-        // row: in the middle, 5 px of the shadow's 11 were left, cut off where the rows meet.
+        // On a row with room it stands high in its row, so its shadow has the rest of the row:
+        // in the middle, 5 px of the shadow's 11 were left, cut off where the rows meet. As
+        // tall as its words' ink and 8 px over and under it make it, 43 px (the release review
+        // of 0.12.0, 13-quit-hover), it reaches up into the row over it, so its foot is 8 px
+        // over the sheets' line at its row's foot: from its row's top it stood 6 px over it.
+        // This test had it at the top of its row with 10 px under it, when the tip was a
+        // control's 39 px and its words 6 px over its foot.
         let top = |app: &App| {
             let grid = screen(app);
             let tip = grid.paint.iter().find_map(|p| match p {
@@ -33871,20 +34168,32 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             let row = i32::from(quit.y - 1) * cellix_render::UNIT;
             (tip.y - row, tip.h)
         };
-        let (line, height) = top(&app);
+        let (line, _) = top(&app);
         assert_eq!(line, cellix_render::units(TIP_INSET));
         let tall = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
         app.set_measure(Rc::new(tall));
         let quit = app.quit_button().expect("the button at the foot");
         app.handle(mouse(MouseKind::Move, quit.x + 1, quit.y));
-        let (raised, _) = top(&app);
-        // To the nearest paint unit, of which a row has 64.
-        let by = line - raised - cellix_render::units(TIP_RAISE);
-        assert!(by.abs() <= 1, "raised a tenth of a row: {line} to {raised}");
-        // Where it's drawn in a row of 50 px: from its top, with 11 px under it or all but.
-        let (y, h) = cellix_render::stood(raised, height, 50.0, 36.0);
-        assert!((0.0..1.0).contains(&y), "at the top of its row: {y}");
-        assert!(50.0 - (y + h) >= 10.0, "room for its shadow: {}", y + h);
+        let (raised, height) = top(&app);
+        // Where it's drawn in a row of 50 px, exactly where it's placed (`Grid::exact_popup`):
+        // from its top, with the rest of the row under it.
+        let (y, h) = (raised as f32 * 50.0 / 64.0, height as f32 * 50.0 / 64.0);
+        let tall = measures::tip_box(&*app.measure, TOOLTIP_SIZE)
+            .expect("a box")
+            .1;
+        assert!((h - tall).abs() < 0.5, "{h} px tall");
+        // The sheets' line is the row's last pixels; drawn on whole pixels, the box's foot
+        // keeps `LINE_AIR` from it.
+        let line = measures::line_pixels(&*app.measure);
+        let under = 50.0 - line - (y + h).round();
+        assert!(
+            under >= measures::LINE_AIR,
+            "{under} px over the line: {y} and {h}"
+        );
+        assert!(
+            y < 0.0 && under <= measures::LINE_AIR + 1.0,
+            "no higher than that: {y}"
+        );
         assert!(
             !screen(&app).paint_on_row(quit.y).any(shadowed),
             "and still none of it on the bar's"

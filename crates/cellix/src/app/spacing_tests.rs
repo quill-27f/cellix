@@ -1142,7 +1142,8 @@ fn every_floating_card_keeps_24_px_inside_its_edges() {
         let ends = panels(&grid)
             .into_iter()
             .filter(|(b, fill, ..)| {
-                fill.is_some() && b.h < UNIT && b.w > UNIT && b.y > card.y && b.x > card.x
+                let inside = b.y > card.y && b.y < card.y + card.h;
+                fill.is_some() && b.h < UNIT && b.w > UNIT && inside && b.x > card.x
             })
             .map(|(b, ..)| px(b.x + b.w))
             .fold(0.0, f32::max);
@@ -1171,6 +1172,58 @@ fn every_floating_card_keeps_24_px_inside_its_edges() {
     assert!(
         (22.5..=26.5).contains(&left) && (right - room).abs() <= 1.0,
         "the logout card: words {left} px in, buttons {right} px from its right"
+    );
+    // The Ask card, its question's field on the same insets as its title and its buttons:
+    // a column into its cells, the field reached 20 px from its line and its title 33
+    // (the release review of 0.12.0, q1-ask-field). A stand-in for Claude Code, so it asks;
+    // nothing runs it.
+    app.linger = Linger::Settled;
+    let bin = dir.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    fs::write(bin.join("claude"), "#!/bin/sh\nexit 0\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let ready = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(bin.join("claude"), ready).unwrap();
+    }
+    app.side_path = Some(bin.into_os_string());
+    app.run(Command::AskAgent);
+    let (left, right) = sides(&app, "Ask Claude");
+    assert!(
+        (22.5..=26.5).contains(&left) && (right - room).abs() <= 1.0,
+        "the Ask card: words {left} px in, buttons {right} px from its right"
+    );
+    let grid = screen(&app);
+    let words = words_at(&grid, "Ask Claude");
+    let card = (grid.paint.iter().rev())
+        .find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                shadow: true,
+                ..
+            } if px(bounds.x) <= words && words < px(bounds.x + bounds.w) => Some(*bounds),
+            _ => None,
+        })
+        .expect("the Ask card");
+    let field = (grid.paint.iter())
+        .find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                border: Some(_),
+                ..
+            } if *fill == app.theme.popup_input() && bounds.y > card.y => Some(*bounds),
+            _ => None,
+        })
+        .expect("its field");
+    let (from_left, from_right) = (
+        px(field.x) - px(card.x),
+        px(card.x + card.w) - px(field.x + field.w),
+    );
+    assert!(
+        (from_left - room).abs() <= 1.0 && (from_right - room).abs() <= 1.0,
+        "the Ask card's field: {from_left} px from its left, {from_right} from its right"
     );
 }
 
@@ -1278,18 +1331,25 @@ fn the_table_pickers_label_stands_under_its_squares() {
 }
 
 /// The tip on screen, the last raised panel painted, as its left and right edges and its top
-/// and foot in pixels.
+/// and foot in pixels: where it's placed, where it's drawn exactly there
+/// (`Grid::exact_popup`), or as a row of 50 stands it.
 fn tip_pixels(grid: &Grid) -> (f32, f32, f32, f32) {
     let tip = grid.paint.iter().rev().find_map(|p| match p {
         Paint::Panel {
             bounds,
             shadow: true,
+            inset,
             ..
-        } => Some(*bounds),
+        } => Some((*bounds, *inset)),
         _ => None,
     });
-    let tip = tip.expect("a tip");
-    let (top, high) = tall(tip);
+    let (tip, exact) = tip.expect("a tip");
+    let (top, high) = if exact {
+        let rows = |units: i32| units as f32 * ROW / UNIT as f32;
+        (rows(tip.y), rows(tip.h))
+    } else {
+        tall(tip)
+    };
     (px(tip.x), px(tip.x + tip.w), top, top + high)
 }
 

@@ -1070,16 +1070,38 @@ impl Workspaces {
         let wide = self.measure().width(NEW_WORKSPACE_TIP, font) + 2.0;
         let left = start.min(f32::from(self.size.0) - wide - 1.0).max(0.0);
         // The row above the bar: a tip covers a row whole, never part of one. On a row with
-        // room it stands at the top of it, so its shadow ends inside the row: see `TIP_RAISE`.
+        // room it's as tall as its words' ink and `LINE_AIR` over and under it make it
+        // (`measures::tip_box`), at the top of its row with its words, so its shadow ends
+        // inside the row, as the app's tips over the bar stand.
         let roomy = crate::measures::roomy(self.measure().as_ref());
-        let raise = if roomy { crate::app::TIP_RAISE } else { 0.0 };
-        let top = f32::from(y) - 1.0 - raise;
-        let inset = crate::app::TIP_INSET;
-        let bounds = Bounds::cells(left, top + inset, wide, 1.0 - inset * 2.0);
+        let row = f32::from(y) - 1.0;
+        let tip = crate::measures::tip_box(self.measure().as_ref(), TIP_SIZE);
+        let pixels = self.measure().cell_pixels().map(|(_, row)| row as f32);
+        let painted = grid.painted_so_far();
+        let top = match (tip, pixels) {
+            (Some((_, tall)), Some(pixels)) => {
+                // Where the foot is one row, the row it's on is a sheet's, with the sheets' line
+                // at its foot: it's no taller than keeps it `LINE_AIR` over that line.
+                let measure = self.measure();
+                let line = crate::measures::line_pixels(measure.as_ref());
+                let room = pixels - line - crate::measures::LINE_AIR;
+                let tall = if self.one_bar() { tall.min(room) } else { tall };
+                let mut bounds = Bounds::cells(left, row, wide, 0.0);
+                let unit = cellix_render::UNIT as f32;
+                bounds.h = (tall * unit / pixels).round() as i32;
+                grid.exact_popup(bounds, CHIP_RADIUS, theme.popup, theme.popup_border);
+                // Its words in its middle.
+                row - ((pixels - tall) / 2.0).round() / pixels
+            }
+            _ => {
+                let inset = crate::app::TIP_INSET;
+                let bounds = Bounds::cells(left, row + inset, wide, 1.0 - inset * 2.0);
+                grid.popup(bounds, CHIP_RADIUS, theme.popup, theme.popup_border);
+                row
+            }
+        };
         // Kept to the rows over the bar: see the tips the app draws there. Raised, it's kept
         // to its own row: the row over that one may not be drawn where this one is.
-        let painted = grid.painted_so_far();
-        grid.popup(bounds, CHIP_RADIUS, theme.popup, theme.popup_border);
         let first = if roomy { y.saturating_sub(1) } else { 0 };
         grid.keep_to_rows(painted, first, y);
         let colour = (theme.popup_dim, false);
@@ -1892,8 +1914,8 @@ mod tests {
             } => Some(bounds.y - status),
             _ => None,
         });
-        let raised = units(crate::app::TIP_INSET - crate::app::TIP_RAISE);
-        assert_eq!(tip, Some(raised), "at the top of the status bar's row");
+        // Drawn exactly where it's placed (`Grid::exact_popup`), from the row's top.
+        assert_eq!(tip, Some(0), "at the top of the status bar's row");
         assert!(grid.paint_on_row(28).any(shadowed));
         assert!(
             !grid.paint_on_row(27).any(shadowed),

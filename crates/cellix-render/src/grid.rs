@@ -576,6 +576,29 @@ impl Grid {
         self.beside_words(from);
     }
 
+    /// The chip of a button at a row's end, from `left` to `right` between cells, behind words
+    /// its caller sets where they stand with the row at rest: as tall as `row_button`'s and in
+    /// the middle of the row, so in the middle of a pointed row's wash, where a row has room.
+    /// Gone down onto the words' baseline, as a `row_button` goes, it stood 10 px under the
+    /// wash's top and 8 over its foot.
+    pub fn row_chip(&mut self, (left, right): (f32, f32), y: u16, fill: Rgb) {
+        let (_, top, _, bottom) = button_span((BUTTON_HEIGHT, 0.0), (0, y), 1);
+        let (radius, inset) = if self.roomy {
+            (ROW_BUTTON_RADIUS, true)
+        } else {
+            (22, false)
+        };
+        self.paint.push(Paint::Panel {
+            bounds: Bounds::cells(left, top, right - left, bottom - top),
+            radius,
+            fill: Some(fill),
+            border: None,
+            shadow: false,
+            dashed: false,
+            inset,
+        });
+    }
+
     /// Moves a button painted since `from` down onto the baseline of the words beside it in
     /// its row, chip and words together (`WORDS_BASELINE`), where a row has room. On the
     /// terminal's line a button has the row to itself and nothing to spare.
@@ -778,6 +801,21 @@ impl Grid {
             shadow: true,
             dashed: false,
             inset: false,
+        });
+    }
+
+    /// A panel floating above the page drawn exactly over `bounds`, however much shorter than
+    /// its row: `popup`'s is stood as a control is on a taller row (`raster::stood`), grown or
+    /// shrunk about its middle, and a tip's box sized for its words' ink mustn't be.
+    pub fn exact_popup(&mut self, bounds: Bounds, radius: u8, fill: Rgb, border: Rgb) {
+        self.paint.push(Paint::Panel {
+            bounds,
+            radius,
+            fill: Some(fill),
+            border: Some(border),
+            shadow: true,
+            dashed: false,
+            inset: true,
         });
     }
 

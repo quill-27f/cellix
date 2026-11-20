@@ -1033,7 +1033,17 @@ impl App {
         // Words last, whatever's over its buttons: its panel and words stand the same as the
         // field gives way to the answer, where a field's card stood 7 px higher.
         let last = measures::DialogLast::Words;
-        self.draw_card_led(grid, area, (0.0, last, 0.0));
+        // Into its first column as a corner card's is (`card_lead`), so its words, two columns
+        // into its cells, are 24 px in from its line, as its field and its buttons are.
+        let lead = self.card_lead(area);
+        self.draw_card_led(grid, area, (lead, last, 0.0));
+        // What stands inside it, its field and a chip, `card_room` from its line, where there
+        // are pictures: a column into its cells, its field stood 20 px from it (q1-ask-field).
+        let inset = measures::columns(Self::card_room(), &*self.measure);
+        let inside = inset.map(|inset| {
+            let left = f32::from(area.x) + lead + inset;
+            (left, f32::from(area.right()) - inset - left)
+        });
         let words_from = grid.painted_so_far();
         let base = Style {
             fg: theme.text.fg,
@@ -1079,7 +1089,24 @@ impl App {
                         ..base
                     };
                     grid.fill(boxed, well);
-                    grid.field(boxed, theme.popup, theme.popup_input(), theme.focus);
+                    // What's typed `COMMAND_PADDING` into it, as in a card's box for a command.
+                    let start = match inside {
+                        Some((left, wide)) => {
+                            let air = cellix_render::FIELD_AIR;
+                            let ground = Bounds::inset(boxed, 0.0, 0.0);
+                            grid.panel(ground, 0, Some(theme.popup), None);
+                            let tall = 1.0 - air * 2.0;
+                            let bounds = Bounds::cells(left, f32::from(y) + air, wide, tall);
+                            let (fill, line) = (theme.popup_input(), theme.focus);
+                            grid.panel(bounds, 22, Some(fill), Some(line));
+                            let pad = measures::columns(COMMAND_PADDING, &*self.measure);
+                            left + pad.unwrap_or(0.0)
+                        }
+                        None => {
+                            grid.field(boxed, theme.popup, theme.popup_input(), theme.focus);
+                            f32::from(x)
+                        }
+                    };
                     let style = if *hint {
                         Style {
                             fg: theme.popup_dim,
@@ -1088,7 +1115,8 @@ impl App {
                     } else {
                         well
                     };
-                    grid.label(x, y, text, style, right);
+                    let cell = start.floor() as u16;
+                    grid.label_at(start, cell, y, text, style, right, 100);
                     if let Some(at) = at {
                         let before = if *hint {
                             ""
@@ -1099,7 +1127,7 @@ impl App {
                         // Just before the hint, which starts where what's typed will, and just
                         // after the letter it follows, as the palette's field has it.
                         let past = if before.is_empty() { -0.15 } else { 0.05 };
-                        caret = Some((f32::from(x) + wide + past, y));
+                        caret = Some((start + wide + past, y));
                     }
                 }
                 Row::Choice(on) => {
@@ -1107,7 +1135,8 @@ impl App {
                     // once chosen.
                     let font = Font::default();
                     let wide = self.measure.width(WITH_AGENT, font);
-                    let start = f32::from(x) - 0.2;
+                    // On the field's edge, where there are pictures.
+                    let start = inside.map_or(f32::from(x) - 0.2, |(left, _)| left);
                     let bounds = Bounds::cells(start, f32::from(y) + 0.12, wide + 1.4, 0.76);
                     if *on {
                         grid.panel(bounds, 34, Some(theme.tint), Some(theme.accent));
