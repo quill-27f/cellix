@@ -273,8 +273,19 @@ fn an_agent_typed_at_a_shells_prompt_is_named_by_its_conversation() {
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    // Interactive, a shell gives each command a process group of its own, as a person's does.
-    let shell = ["sh".to_string(), "-i".to_string()];
+    // Interactive, a shell gives each command a process group of its own, as a person's does:
+    // bash where there is one, as on the Linux machines Cellix runs on, whose `sh` is often
+    // dash. With dash on CI's Linux, `claude 60` was never seen in front in a minute, though
+    // `sleep` is in `shell_tab_tests`; what the shell said is in the message if it happens again.
+    let bash = ["/bin/bash", "/usr/bin/bash"]
+        .into_iter()
+        .find(|path| Path::new(path).exists());
+    let shell: Vec<String> = match bash {
+        Some(bash) => [bash, "--norc", "--noprofile", "-i"]
+            .map(String::from)
+            .to_vec(),
+        None => ["sh", "-i"].map(String::from).to_vec(),
+    };
     let env = ["PS1=ready$ ".to_string(), "ENV=".to_string(), path];
     app.start_session(crate::agents::SHELL.0, &shell, &env, &root);
     let printed = |app: &App, words: &str| {
@@ -283,9 +294,19 @@ fn an_agent_typed_at_a_shells_prompt_is_named_by_its_conversation() {
     };
     until(&mut app, "a prompt", |app| printed(app, "ready$"));
     app.dock.sessions[0].send_line("claude 60");
-    until(&mut app, "something in front", |app| {
-        app.dock.sessions[0].running_program().is_some()
-    });
+    let said = |app: &App| app.dock.sessions[0].lines().join(" / ");
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while app.dock.sessions[0].running_program().is_none() {
+        assert!(
+            Instant::now() < deadline,
+            "never something in front: {}; the shell said: {}",
+            tabs(&app),
+            said(&app)
+        );
+        app.poll();
+        app.follow_transcripts();
+        std::thread::sleep(Duration::from_millis(20));
+    }
     // Linux names a process by the link it was started by, as a real `claude` is one; macOS
     // by the file it leads to, so there the stand-in runs as `sleep`, as a real one can run as
     // its version's file, and only what Claude Code says names it.

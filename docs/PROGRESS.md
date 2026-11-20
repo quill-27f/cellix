@@ -4450,3 +4450,9 @@ Polish track X, from the user's look at 0.12.0: "Rename tab is not supporting na
 - Looked at on the release's tree: 21 scenes the three reach (the rename caret, Find and Replace, Search, New Worktree, Settings › Editor's new row, the agent in a Terminal tab twice with no extra tab, the agent names), and a ui-expert check of them. Track Y once saw an extra Claude-marked tab in `m1-agent-in-terminal` under a load of 22; it didn't come back.
 - Left: the caret's colour, which a ui-expert calls hard to tell from an "l" when still (#96b2d7 suggested; the blink helps); the caret on half pixels; the composer's and the side pane's field placing their caret the old way. Unverified: a real Claude Code and a real Linux machine for the names (the registry's format is read from Claude Code 2.1.311's strings), DECSCUSR and the blink in a real Ghostty, kitty and tmux (tmux without `focus-events on` always counts as in front).
 - Next: the user's test of 0.12.1.
+
+## The agent-at-a-shell test on Linux runs in bash (2026-11-20)
+
+- 0.12.1's first CI run failed on Linux only: `an_agent_typed_at_a_shells_prompt_is_named_by_its_conversation` never saw `claude 60` in front of its `sh -i` in a minute, and the tab read "Terminal". Linux is the one place the stand-in runs as `claude` (macOS names it by the file it links to, `sleep`), so this part had only run on CI. `sh` there is dash; `shell_tab_tests` sees `sleep` in front of the same `sh -i`, so why dash didn't show this command in front isn't known. The test now runs in bash where there is one, as a person's shell on those machines is, and its message says what the shell printed if it fails again. Passed on macOS (bash 3.2); Linux is CI's to say.
+- The same run's tex job failed in installing TeX Live (apt timed out after 10 minutes), not in Cellix.
+
