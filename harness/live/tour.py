@@ -1172,6 +1172,59 @@ def reviewer_scenes(scratch):
         os.unlink(threads)
 
 
+def ask_scenes(scratch):
+    """Ask, a side question about a selection: the field under the words, an answer streaming
+    in, the answer whole with its buttons, a follow-up being typed, and Ask with no agent
+    installed. Claude Code is a stand-in on a PATH of its own that prints what the real one
+    prints for a made-up answer: no real agent runs, and nothing here is anyone's words."""
+    tools = f"{scratch}/ask-bin"
+    slow = f"{scratch}/ask-slow-bin"
+    for folder in (tools, slow):
+        os.makedirs(folder)
+    answer = ("Softmax turns the similarity scores into weights: it raises e to each score and "
+              "divides by their sum, so every weight is positive and they add up to one. Here it "
+              "makes each output a weighted average of the inputs, the larger scores counting more.")
+    init = json.dumps({"type": "system", "subtype": "init", "session_id": "side-tour"})
+    def delta(text):
+        return json.dumps({"type": "stream_event", "event": {"type": "content_block_delta",
+                                                            "delta": {"type": "text_delta", "text": text}}})
+    first, rest = answer[:62], answer[62:]
+    whole = [init, delta(first), delta(rest),
+             json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": answer})]
+    # The streaming one stops after its first words, as a run still thinking does.
+    for folder, lines, tail in ((tools, whole, ""), (slow, [init, delta(first)], "exec sleep 300\n")):
+        with open(f"{folder}/lines", "w") as f:
+            f.write("\n".join(lines) + "\n")
+        with open(f"{folder}/claude", "w") as f:
+            f.write(f"#!/bin/sh\ncat > /dev/null\ncat '{folder}/lines'\n{tail}")
+        os.chmod(f"{folder}/claude", 0o755)
+    # Only the stand-in and the system's own tools: never a real agent's command line.
+    system = "/usr/bin:/bin:/usr/sbin:/sbin"
+    field = [["wait", 1.5], ["double", *ON("roma sfm", 6)], ["wait", 0.5], ["click", *ON("Ask (Alt")],
+             ["until", "Simplify"], ["wait", 0.4]]
+    asked = [*field, ["keys", "What does it do here?\r"]]
+    done = [*asked, ["until", "Make a Comment"], ["wait", 0.6]]
+    follow = [*done, ["click", *ON("Follow Up")], ["until", "Ask a follow-up"],
+              ["keys", "And in one line?"], ["wait", 0.6]]
+    scenes = [
+        ("q1-ask-field", field, tools, {}),
+        ("q1-ask-field-light", field, tools, {"background": "eff1f5"}),
+        ("q2-ask-streaming", [*asked, ["until", "Softmax turns"], ["wait", 0.8]], slow, {}),
+        ("q3-ask-answer", done, tools, {}),
+        ("q3-ask-answer-light", done, tools, {"background": "eff1f5"}),
+        ("q3-ask-answer-narrow", done, tools, {"size": "100x44"}),
+        ("q4-ask-follow-up", follow, tools, {}),
+        ("q5-ask-no-agent", [*field[:-2], ["until", "Ask needs"], ["wait", 0.4]], None, {}),
+    ]
+    for name, steps, folder, extra in scenes:
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        path = f"{folder}:{system}" if folder else system
+        env = {"XDG_CACHE_HOME": cache, "PATH": path}
+        shoot(name, steps, NOTE_FILE, **{"size": "150x44", **extra}, env=env)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+
+
 def agents_by_urgency(scratch):
     """The Agents list by urgency, from agents in the side pane that report through Cellix's
     real hook: one asking, one done and not yet looked at, one working, one idle. The list
@@ -1359,6 +1412,7 @@ with tempfile.TemporaryDirectory() as made:
     task_scenes(scratch)
     team_scenes(scratch)
     reviewer_scenes(scratch)
+    ask_scenes(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)
     # The dark theme on a terminal whose background isn't herdr's: the frame is that
@@ -1780,7 +1834,7 @@ with tempfile.TemporaryDirectory() as made:
     # The abstract's words are the row under its heading, which comes through as "bsrct".
     paper_across = [["click", ["bsrct", 0, 1]], ["shift", ["94.8", 4]], ["wait", 0.5]]
     shoot("s1-paper-shift-select", paper_across, PAPER_FILE, size="150x44", background="eff1f5",
-          expect="Ask Agent")
+          expect="Ask (Alt")
     shoot("56-narrow-note", [*LIST_AGENTS, ["wait", 0.6]], NOTE_FILE, size="100x34")
     # About the size Claude Code docks Cellix at: at most 45% of a window, beside the chat.
     shoot("57-dock-page", [["wait", 1.5]], NOTE_FILE, size="64x40")
@@ -1920,7 +1974,7 @@ with tempfile.TemporaryDirectory() as made:
     # A double click on "page" in the title, placed from the "Text" heading under it: the
     # title's measured letters don't come through whole in the screen's text.
     shoot("73-selection-bar", [["double", ["Text", 22, -9, -1]], ["wait", 0.5]], WRITING, **light,
-          expect="Ask Agent")
+          expect="Ask (Alt")
     # A click, and a Shift+click further down: everything between is selected, across the
     # paragraphs, the heading and the lists, with the buttons that comment on it. Then the same
     # after the wheel has taken the click out of view, in the dark. Measured type drops letters
@@ -1928,17 +1982,17 @@ with tempfile.TemporaryDirectory() as made:
     # item, whose words come through whole, and the paragraph under "Tables".
     plain_words = ["click", ["Text", 0, 3, -1]]
     across = [plain_words, ["shift", ["Second", 15, 1]], ["wait", 0.5]]
-    shoot("s1-page-shift-select", across, WRITING, **light, expect="Ask Agent")
+    shoot("s1-page-shift-select", across, WRITING, **light, expect="Ask (Alt")
     scrolled = [plain_words, ["wheel", 90, 20, 14], ["wait", 1.0], ["shift", ["Tables", 12, 3]],
                 ["wait", 0.5]]
-    shoot("s1-page-shift-select-scrolled", scrolled, WRITING, size="150x44", expect="Ask Agent")
+    shoot("s1-page-shift-select-scrolled", scrolled, WRITING, size="150x44", expect="Ask (Alt")
     # A drag held on the bar at the foot, under the page, which scrolls on its own and takes
     # the selection with it until it's let go: once the page has brought "Tables" up. A held
     # time alone let go before the page had moved when frames were slow under load.
     foot = FOOT("UTF-8")
     held = [["press", ["Text", 0, 3, -1]], ["hold", *foot], ["until", "Tables"], ["release", *foot],
             ["wait", 0.5]]
-    shoot("s1-page-drag-scroll", held, WRITING, **light, expect="Ask Agent")
+    shoot("s1-page-drag-scroll", held, WRITING, **light, expect="Ask (Alt")
     shoot("74-outline", [["click", *OUTLINE], ["wait", 0.8]], WRITING, **light)
     shoot("75-data", [], os.path.join(samples, "data.csv"), **light)
     shoot("76-notebook", [], os.path.join(samples, "notebook.ipynb"), **light)

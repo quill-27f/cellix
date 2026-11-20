@@ -72,6 +72,7 @@ mod links;
 mod peek;
 mod report;
 mod reviewer;
+mod side;
 mod start;
 mod team;
 mod worktree;
@@ -117,7 +118,7 @@ const RUN_WIDTH: u16 = 6;
 const KERNEL_STATUS_END: u16 = 6;
 /// The row the Comment button stands on over a PDF, clear of its zoom buttons.
 const VIEW_COMMENT_ROW: u16 = 2;
-const ASK_WIDTH: u16 = 11;
+const ASK_WIDTH: u16 = 6;
 /// What the two buttons by a suggestion on a page say, Review's words for the same thing.
 const REJECT: &str = "Reject";
 const ACCEPT: &str = "Accept";
@@ -1655,6 +1656,14 @@ pub struct App {
     pane_explained: bool,
     /// A comment waiting for an agent to be started.
     pending_ask: Option<u32>,
+    /// Ask's side question under way, and its card (`side`).
+    side: Option<side::Side>,
+    /// Where Ask looks for the agents' command lines, in place of PATH: a test's stand-ins.
+    side_path: Option<std::ffi::OsString>,
+    /// Each document's side conversation, kept with Cellix's own state for the project.
+    side_kept: crate::ask::Conversations,
+    /// How long an answer may take.
+    side_limit: std::time::Duration,
     /// The prompts typed in to go on their own, by `cellix_agent::prompt_key`: one comment
     /// asked about from its card. The prompt hook asks, and hands that prompt nothing else.
     alone: Vec<u64>,
@@ -1778,6 +1787,7 @@ impl App {
         let settings = Settings::load(&root);
         let search = Search::new(root.clone());
         let workspace = Workspace::new(root);
+        let side_kept = crate::ask::load(workspace.root());
         let mut explorer = Explorer::default();
         explorer.refresh(&workspace);
         let threads = cellix_review::threads::load(workspace.root());
@@ -1806,6 +1816,10 @@ impl App {
             task_shown: false,
             clipboard_image: clipboard_image_command(),
             pending_ask: None,
+            side: None,
+            side_path: None,
+            side_kept,
+            side_limit: crate::ask::TIME_LIMIT,
             alone: Vec::new(),
             pending_review: None,
             neovim_z: false,
@@ -3271,7 +3285,8 @@ impl App {
             | self.poll_finding()
             | self.see_front_tab()
             | self.poll_team()
-            | self.poll_peek();
+            | self.poll_peek()
+            | self.poll_side();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -5481,7 +5496,7 @@ impl App {
     fn selection_bar_at(&self) -> Option<(Rect, Rect, (f32, f32))> {
         let idle = matches!(self.overlay, Overlay::None) && self.drag != Drag::Text;
         let plain = self.review.is_none() && self.settings_page.is_none();
-        if !idle || !plain || self.dock.draft.is_some() {
+        if !idle || !plain || self.dock.draft.is_some() || self.side_field_open() {
             return None;
         }
         let editor = self.editors.get(self.active())?;
@@ -5497,6 +5512,10 @@ impl App {
             return None;
         }
         let (start, end) = (primary.start(), primary.end());
+        // Asked about, the words have Ask's card, which stands in place of these.
+        if self.side_is_about(self.active(), (start, end)) {
+            return None;
+        }
         let (comment, ask) = self.selection_labels();
         let (comment, ask) = (self.chip_width(&comment), self.chip_width(&ask));
         let width = comment + ask;
@@ -5618,7 +5637,7 @@ impl App {
         };
         (
             named("Comment", Command::AddComment),
-            named("Ask Agent", Command::AskAgent),
+            named(side::ASK, Command::AskAgent),
         )
     }
 
@@ -5773,7 +5792,7 @@ impl App {
         // A terminal keeps its selection after a click elsewhere, as terminals do, but the
         // buttons go with the focus, so they don't stand over the pane while the file is worked on.
         let front = self.dock.open && self.dock.focused && self.dock.front == Front::Session;
-        if !idle || !front || self.dock.draft.is_some() {
+        if !idle || !front || self.dock.draft.is_some() || self.side_field_open() {
             return None;
         }
         let screen = self.dock_screen()?;
@@ -6238,7 +6257,7 @@ impl App {
         if let Some((comment, ask, lift)) = self.output_bar_at() {
             let lift = (lift, SELECTION_CHIP.1);
             self.draw_chip_as(grid, comment, "Comment", lift, (false, false));
-            self.draw_chip_as(grid, ask, "Ask Agent", lift, (false, false));
+            self.draw_chip_as(grid, ask, side::ASK, lift, (false, false));
         }
         if let Some((comment, ask, (lift, along))) = self.selection_bar_at() {
             let (comment_says, ask_says) = self.selection_labels();
@@ -6292,12 +6311,20 @@ impl App {
         if let Some((comment, ask)) = self.output_bar()
             && (comment.contains(x, y) || ask.contains(x, y))
         {
-            self.comment_on_output(ask.contains(x, y));
+            if ask.contains(x, y) {
+                self.ask_about_output();
+            } else {
+                self.comment_on_output(false);
+            }
             return true;
         }
         if self.selection_bar().is_some() {
             if let Some(ask) = self.on_selection_bar(x, fine_y) {
-                self.prompt_comment_at_cursor(ask);
+                if ask {
+                    self.ask_about_selection();
+                } else {
+                    self.prompt_comment_at_cursor(false);
+                }
                 return true;
             }
         } else if self.picture_comment().is_none()
@@ -6365,6 +6392,9 @@ impl App {
 
     fn key(&mut self, key: KeyEvent) {
         if key.key == Key::Esc && self.cancel_drag() {
+            return;
+        }
+        if matches!(self.overlay, Overlay::None) && self.side_key(key) {
             return;
         }
         if matches!(self.overlay, Overlay::None) && self.draft_key(key) {
@@ -8832,7 +8862,7 @@ impl App {
                 };
             }
             Command::AddComment => self.prompt_comment_at_cursor(false),
-            Command::AskAgent => self.prompt_comment_at_cursor(true),
+            Command::AskAgent => self.ask_about_selection(),
             Command::FindInFile => self.open_find(),
             Command::NextChange => self.step_change(true),
             Command::NextComment => self.step_comment(true),
@@ -15398,6 +15428,9 @@ impl App {
             self.overlay_mouse(mouse);
             return;
         }
+        if self.side_mouse(mouse) {
+            return;
+        }
         if self.glance_mouse(mouse) {
             return;
         }
@@ -17560,7 +17593,8 @@ impl App {
                         }),
                 };
                 // While a comment is being written the keys go to it, and so does the caret.
-                let focused = pane == self.focus && self.dock.draft.is_none();
+                let focused =
+                    pane == self.focus && self.dock.draft.is_none() && !self.side_field_open();
                 editor.scrollbar_clear.set(self.scrollbar_clear(area));
                 editor.draw(grid, area, theme, focused, &self.registry, &marks);
                 let look = (self.hover, &*self.measure);
@@ -17587,6 +17621,7 @@ impl App {
         self.draw_suggest(grid);
         self.draw_hover(grid);
         self.draw_glance(grid);
+        self.draw_side(grid);
         self.draw_signature(grid);
         if self.offering_linger() {
             self.draw_linger(grid);
@@ -21308,6 +21343,8 @@ pub(crate) fn machine_name() -> String {
 mod agent_tab_tests;
 #[cfg(test)]
 mod agents_list_tests;
+#[cfg(test)]
+mod ask_tests;
 #[cfg(test)]
 mod cards_tests;
 #[cfg(test)]
@@ -29891,8 +29928,13 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         typed(&mut app, "!");
         press(&mut app, " Save ");
         assert_eq!(app.threads[0].text, "First!");
-        // A new one that goes straight to the agent says so on its button.
+        // Alt+A asks a side question, on Ask's card, and writes no comment.
         app.run(Command::AskAgent);
+        assert!(app.dock.draft.is_none(), "no comment being written");
+        assert!(app.side.is_some(), "Ask's card");
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+        // A comment written to go straight to the agent says so on its button.
+        app.prompt_comment_at_cursor(true);
         let grid = screen(&app);
         let (_, y) = find(&grid, " Cancel");
         assert!(
@@ -30885,10 +30927,10 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     #[test]
     fn a_selection_offers_a_comment_and_writes_it_beside_the_page() {
         let (_dir, mut app) = page_app("# Plan\n\nThe cache goes first.\n");
-        assert!(!screen(&app).text().contains("Ask Agent"));
+        assert!(!screen(&app).text().contains("Ask (Alt"));
         select_word(&mut app, "cache");
         let grid = screen(&app);
-        assert!(grid.text().contains("Ask Agent"), "{}", grid.text());
+        assert!(grid.text().contains("Ask (Alt"), "{}", grid.text());
         let (x, y) = find(&grid, "Comment");
         app.handle(mouse(MouseKind::Left, x, y));
         typed(&mut app, "Why first");
@@ -30918,10 +30960,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // Until 0.11.0's review it stood on "one".
         assert_eq!(comment.y, last + 1, "under the selection, past \"five\"");
         let row = screen(&app).row_text(comment.y);
-        assert!(
-            row.contains("Comment") && row.contains("Ask Agent"),
-            "{row}"
-        );
+        assert!(row.contains("Comment") && row.contains("Ask (Alt"), "{row}");
         let file: String = row.chars().skip(usize::from(ask.right())).collect();
         assert!(
             file.trim().is_empty(),
@@ -30936,58 +30975,47 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(app.selection_bar().is_none(), "several cursors get none");
     }
 
+    /// Ask on a selection is a side question, answered in the background: it opens Ask's card
+    /// and types nothing into the agent in the side pane, where Ask Agent typed in a comment
+    /// that its prompt hook then handed every other comment with (20 November 2026).
     #[test]
-    fn ask_agent_on_a_selection_goes_straight_to_the_agent() {
+    fn ask_on_a_selection_types_nothing_into_the_agent() {
         let (dir, mut app) = page_app("# Plan\n\nThe cache goes first.\n");
         session(&mut app, "printf ready; cat > heard.txt");
         select_word(&mut app, "cache");
-        let (x, y) = find(&screen(&app), "Ask Agent");
+        let (x, y) = find(&screen(&app), "Ask (Alt");
         app.handle(mouse(MouseKind::Left, x, y));
-        typed(&mut app, "Is this right");
-        enter(&mut app);
-        let log = dir.path().join("heard.txt");
-        let deadline = std::time::Instant::now() + BACKGROUND;
-        let heard = loop {
-            let text = fs::read_to_string(&log).unwrap_or_default();
-            if text.contains("Is this right") {
-                break text;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "the agent heard nothing"
-            );
+        assert!(app.side.is_some(), "Ask's card");
+        assert!(app.dock.draft.is_none(), "no comment being written");
+        // No agent's command line in a test's PATH: the card says what it needs.
+        let text = screen(&app).text();
+        assert!(text.contains("Ask needs an agent"), "{text}");
+        for _ in 0..10 {
             app.poll();
             std::thread::sleep(std::time::Duration::from_millis(20));
-        };
-        assert!(heard.contains("cache"), "what it's about: {heard}");
-        assert!(heard.contains("cellix reply"), "how to answer: {heard}");
+        }
+        let heard = fs::read_to_string(dir.path().join("heard.txt")).unwrap_or_default();
+        assert!(heard.is_empty(), "the agent was typed into: {heard}");
+        assert!(app.threads.is_empty());
     }
 
-    /// Inside Claude Code the agent is the conversation beside the pane, so Ask Agent asks it
-    /// there, where it opened a question box for an agent in Cellix's own pane.
+    /// Inside Claude Code, Ask is the same side question as anywhere else: Ask's card under the
+    /// words, and nothing in Claude Code's prompt box, which it filled until 20 November 2026.
     #[test]
-    fn inside_claude_code_ask_agent_goes_to_its_prompt() {
+    fn inside_claude_code_ask_is_a_side_question() {
         let (_dir, mut app) = page_app("# Plan\n\nThe cache goes first.\n");
         app.in_pane = true;
         select_word(&mut app, "cache");
-        let (x, y) = find(&screen(&app), "Ask Agent");
+        let (x, y) = find(&screen(&app), "Ask (Alt");
         app.handle(mouse(MouseKind::Left, x, y));
-        let fill = app
-            .take_outgoing_fill()
-            .expect("words for Claude Code's prompt");
-        assert!(fill.starts_with('@'), "a mention of the file: {fill}");
-        assert!(fill.contains("line 3, \"cache\""), "{fill}");
-        assert!(app.dock.draft.is_none(), "no question box in Cellix");
         assert!(
-            status_line(&app).contains("\"cache\" is in Claude Code's prompt. Press Esc to ask"),
-            "{}",
-            status_line(&app)
+            app.take_outgoing_fill().is_none(),
+            "nothing in Claude Code's prompt"
         );
-        assert!(
-            app.selection_bar().is_none(),
-            "the bar goes once it's pressed"
-        );
-        assert!(app.take_outgoing_fill().is_none(), "once");
+        assert!(app.take_outgoing_prompt().is_none(), "no turn started");
+        assert!(app.dock.draft.is_none(), "no comment being written");
+        let side = app.side.as_ref().expect("Ask's card");
+        assert_eq!(side.quote, "cache");
     }
 
     /// What was selected goes to the agent whole, however long, where it once stopped at the
@@ -31170,7 +31198,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(output_under(&app, comment, ask).trim(), "");
         let row = screen(&app).row_text(ask.y);
         assert!(
-            row.contains("Comment") && row.contains("Ask Agent"),
+            row.contains("Comment") && row.contains("Ask") && !row.contains("Ask Agent"),
             "{row}"
         );
     }
@@ -31295,11 +31323,13 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     }
 
     /// The commonest loop in agent work, a failing run, goes to the agent without copy and
-    /// paste: select the output in the terminal tab and press Ask Agent, as on a file.
+    /// paste: select the output in the terminal tab and press Ask, as on a file. It's a side
+    /// question, which hears all of the output, the command that printed it and the project's
+    /// places it names; the agent in the pane hears nothing, and no comment is made.
     // Unix only: on Windows `sh` is MSYS bash, whose profile sets its own prompt over PS1.
     #[cfg(unix)]
     #[test]
-    fn ask_agent_on_terminal_output_sends_it_with_its_command_and_places() {
+    fn ask_on_terminal_output_asks_with_its_command_and_places() {
         let (dir, _) = project();
         let mut app = App::new(dir.path().to_path_buf(), (160, 40));
         session(&mut app, "printf ready; cat > heard.txt");
@@ -31321,7 +31351,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
         let row = screen(&app).row_text(ask.y);
         assert!(
-            row.contains("Comment") && row.contains("Ask Agent"),
+            row.contains("Comment") && row.contains("Ask") && !row.contains("Ask Agent"),
             "{row}"
         );
         assert_eq!(comment.right(), ask.x);
@@ -31332,34 +31362,55 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         );
         app.dock.focused = true;
 
+        let prompt = side_stand_in(&mut app, dir.path());
         app.handle(mouse(MouseKind::Left, ask.x + 1, ask.y));
         assert!(app.output_bar().is_none(), "the buttons go once pressed");
         typed(&mut app, "Why");
         enter(&mut app);
-        let heard = heard(&mut app, &dir.path().join("heard.txt"), "Why");
+        let heard = heard(&mut app, &prompt, "Why");
         assert!(
-            heard.contains("BOOM failed at beta.rs:1 and gone.rs:3"),
+            heard.contains("BOOM failed\nat beta.rs:1 and gone.rs:3"),
             "all of the output: {heard}"
         );
         assert!(
-            heard.contains(&format!("in Terminal from `{failing}`")),
+            heard.contains(&format!("in the terminal tab Terminal from `{failing}`")),
             "the command that printed it, not the one after: {heard}"
         );
         assert!(
-            heard.contains("which names beta.rs:1, about"),
+            heard.contains("It names beta.rs:1."),
             "the places it names that are in the project: {heard}"
         );
-        assert!(heard.contains("cellix reply"), "how to answer: {heard}");
-        let thread = &app.threads[0];
-        assert_eq!(thread.text, "Why");
-        assert!(matches!(&thread.about, Some(About::Output { tab, .. }) if tab == "Terminal"));
+        let said = fs::read_to_string(dir.path().join("heard.txt")).unwrap_or_default();
+        assert!(
+            !said.contains("Why"),
+            "the agent in the pane heard it: {said}"
+        );
+        assert!(app.threads.is_empty(), "no comment made");
     }
 
-    /// Inside Claude Code the question is asked in its prompt, with all of the output.
+    /// A stand-in for Claude Code's command line where Ask finds it, which writes what it's
+    /// asked to the file it returns and answers in a word.
+    #[cfg(unix)]
+    fn side_stand_in(app: &mut App, dir: &Path) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("side-bin");
+        fs::create_dir_all(&bin).unwrap();
+        let prompt = dir.join("side-prompt.txt");
+        let script = format!(
+            "#!/bin/sh\n/bin/cat > '{}'\nprintf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"Short.\"}}'\n",
+            prompt.display()
+        );
+        fs::write(bin.join("claude"), script).unwrap();
+        fs::set_permissions(bin.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
+        app.side_path = Some(bin.into_os_string());
+        prompt
+    }
+
+    /// Inside Claude Code, Ask on output is the same side question, with all of the output.
     // Unix only: on Windows `sh` is MSYS bash, whose profile sets its own prompt over PS1.
     #[cfg(unix)]
     #[test]
-    fn inside_claude_code_terminal_output_goes_to_its_prompt_whole() {
+    fn inside_claude_code_terminal_output_is_a_side_question_too() {
         let (dir, _) = project();
         let mut app = App::new(dir.path().to_path_buf(), (160, 40));
         app.in_pane = true;
@@ -31369,22 +31420,17 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         select_output(&mut app, "BOOM failed", 1);
         let (_, ask) = app.output_bar().expect("buttons by the selected output");
         app.handle(mouse(MouseKind::Left, ask.x + 1, ask.y));
-        let fill = app
-            .take_outgoing_fill()
-            .expect("words for Claude Code's prompt");
-        let from = format!("Output of `{failing}` in Terminal, which names @src/lib.rs line 1:\n");
-        assert!(fill.starts_with(&from), "{fill}");
+        // A side question there too, with all of the output, where it filled Claude Code's
+        // prompt box until 20 November 2026.
         assert!(
-            fill.contains("> BOOM failed\n> at src/lib.rs:1:5\n"),
-            "{fill}"
+            app.take_outgoing_fill().is_none(),
+            "nothing in Claude Code's prompt"
         );
-        assert!(app.dock.draft.is_none(), "no question box in Cellix");
+        assert!(app.dock.draft.is_none(), "no comment being written");
         assert!(app.output_bar().is_none(), "the buttons go once pressed");
-        assert!(
-            status_line(&app).contains("\"BOOM failed\" is in Claude Code's prompt"),
-            "{}",
-            status_line(&app)
-        );
+        let side = app.side.as_ref().expect("Ask's card");
+        assert_eq!(side.quote, "BOOM failed at src/lib.rs:1:5");
+        let _ = &failing;
     }
 
     /// A problem in the list goes to the agent with what the checker said, where, and the
@@ -31474,15 +31520,15 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     }
 
     /// The buttons by a file's selection say the keys that do the same, in brackets, as the
-    /// keys are set now, and Alt+A asks the agent as the Ask Agent button does.
+    /// keys are set now, and Alt+A opens Ask as its button does.
     #[test]
-    fn the_buttons_by_a_selection_name_their_keys_and_alt_a_asks_the_agent() {
+    fn the_buttons_by_a_selection_name_their_keys_and_alt_a_asks() {
         let (dir, mut app) = project();
         app.open(&dir.path().join("alpha.txt")).unwrap();
         select_word(&mut app, "first");
         let text = screen(&app).text();
         assert!(text.contains("Comment (Alt+C)"), "{text}");
-        assert!(text.contains("Ask Agent (Alt+A)"), "{text}");
+        assert!(text.contains("Ask (Alt"), "{text}");
         // The two stand side by side, neither over the other.
         let (comment, ask) = app.selection_bar().expect("a bar by the selection");
         assert!(comment.right() <= ask.x, "{comment:?} then {ask:?}");
@@ -31497,13 +31543,19 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             })
         };
         app.handle(alt('a'));
-        let draft = app.dock.draft.as_ref().expect("a comment being written");
-        assert!(draft.ask, "to be sent to the agent as it's written");
-        assert_eq!(draft.quote, "first");
+        let side = app.side.as_ref().expect("Ask's card");
+        assert_eq!(side.quote, "first");
+        assert!(app.dock.draft.is_none(), "a question isn't a comment");
         app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
 
-        // Keys set by the person are the ones the buttons name.
-        select_word(&mut app, "first");
+        // Keys set by the person are the ones the buttons name. Selected by the editor: a
+        // double click so soon after the last one counts as a third and a fourth click.
+        let editor = app.editor_mut().unwrap();
+        editor.selections.set_single(Selection {
+            anchor: 0,
+            head: 5,
+            goal: None,
+        });
         let own = vec!["Ctrl+Shift+M".to_string()];
         app.settings
             .keybindings
@@ -31522,7 +31574,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.open(&dir.path().join("paper.tex")).unwrap();
         select_word(&mut app, "cache");
         let grid = screen(&app);
-        assert!(grid.text().contains("Ask Agent"), "{}", grid.text());
+        assert!(grid.text().contains("Ask (Alt"), "{}", grid.text());
         let (x, y) = find(&grid, "Comment");
         app.handle(mouse(MouseKind::Left, x, y));
         typed(&mut app, "Why first");
@@ -31547,7 +31599,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     fn a_notebook_takes_comments_the_same_way() {
         let (_dir, mut app) = data_app("run.ipynb", NOTEBOOK);
         select_word(&mut app, "torch");
-        let (x, y) = find(&screen(&app), "Ask Agent");
+        let (x, y) = find(&screen(&app), "Comment (Alt+C)");
         app.handle(mouse(MouseKind::Left, x, y));
         assert_eq!(app.dock.draft.as_ref().unwrap().quote, "torch");
     }
@@ -40438,10 +40490,12 @@ while True:
         enter(&mut app);
         // The word is only on the step that ran the tests.
         select_word(&mut app, "cargo");
-        let (x, y) = find(&screen(&app), "Ask Agent");
+        let (x, y) = find(&screen(&app), "Comment (Alt+C)");
         app.handle(mouse(MouseKind::Left, x, y));
         typed(&mut app, "Why did this fail");
         enter(&mut app);
+        let id = app.threads.last().expect("the comment").id;
+        app.thread_hit(ThreadHit::Ask(id));
         let log = dir.path().join("heard.txt");
         let deadline = std::time::Instant::now() + BACKGROUND;
         let heard = loop {

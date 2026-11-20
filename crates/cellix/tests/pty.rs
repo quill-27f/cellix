@@ -715,7 +715,7 @@ fn pty_a_shift_click_on_a_page_selects_from_the_click_before() {
     let x = x + "last words".len();
     // The mouse's report with Shift held: 4 in its button.
     screen.send(format!("\x1b[<4;{};{}M\x1b[<4;{};{}m", x + 1, y + 1, x + 1, y + 1).as_bytes());
-    screen.wait_for("Ask Agent");
+    screen.wait_for("Ask (Alt");
     screen.send(b"\x11"); // Ctrl+Q
     screen.wait_exit();
     let deadline = Instant::now() + WAIT;
@@ -2631,4 +2631,65 @@ fn pty_comments_waiting_lists_a_pages_comments() {
     let _ = Command::new("pkill")
         .args(["-f", &cache.path().display().to_string()])
         .status();
+}
+
+/// Ask, through the real binary: a selection's Ask opens the field under the words, Enter runs
+/// the agent's command line found on the PATH, here a stand-in that writes down what it was
+/// given, and its answer shows on the card. The stand-in hears it's a side question, gets the
+/// document with the selection marked, and nothing is typed into any terminal.
+#[test]
+#[cfg(unix)]
+fn pty_ask_answers_a_side_question_on_a_card() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    std::fs::write(
+        dir.path().join("note.md"),
+        "# Notes\n\nWe rely on ICL to adapt the model.\n",
+    )
+    .unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let record = bin.path().join("record");
+    let init = r#"{"type":"system","subtype":"init","session_id":"pty-1"}"#;
+    let result = r#"{"type":"result","subtype":"success","is_error":false,"result":"In-context learning, from examples in the prompt."}"#;
+    let script = format!(
+        "#!/bin/sh\nprintf '%s' \"$CELLIX_SIDE_QUESTION\" > '{r}.side'\n/bin/cat > '{r}.prompt'\nprintf '%s\\n' '{init}' '{result}'\n",
+        r = record.display()
+    );
+    let claude = bin.path().join("claude");
+    std::fs::write(&claude, script).unwrap();
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Only the stand-in and the system's own tools: never a real agent's command line.
+    let path = std::path::PathBuf::from(format!("{}:/usr/bin:/bin", bin.path().display()));
+    let mut screen = Screen::start_with(
+        dir.path(),
+        &["note.md"],
+        &[("PATH", path.as_path()), ("HOME", home.path())],
+    );
+    screen.wait_for("We rely on ICL");
+    let (x, y) = place_of(&screen, "ICL");
+    let click = format!("\x1b[<0;{c};{r}M\x1b[<0;{c};{r}m", c = x + 2, r = y + 1);
+    screen.send(format!("{click}{click}").as_bytes());
+    screen.wait_for("Ask (Alt");
+    let (x, y) = place_of(&screen, "Ask (Alt");
+    screen.send(format!("\x1b[<0;{c};{r}M\x1b[<0;{c};{r}m", c = x + 2, r = y + 1).as_bytes());
+    screen.wait_for("Explain");
+    screen.send(b"What is it?\r");
+    screen.wait_for("In-context learning");
+    let read = |end: &str| {
+        std::fs::read_to_string(format!("{}.{end}", record.display())).unwrap_or_default()
+    };
+    assert_eq!(read("side"), "1", "told it's a side question");
+    let prompt = read("prompt");
+    assert!(prompt.contains("We rely on ⟦ICL⟧ to adapt"), "{prompt}");
+    assert!(prompt.contains("What is it?"), "{prompt}");
+    let note = std::fs::read_to_string(dir.path().join("note.md")).unwrap();
+    assert_eq!(
+        note, "# Notes\n\nWe rely on ICL to adapt the model.\n",
+        "nothing typed in"
+    );
+    screen.send(b"\x1b");
+    screen.wait_gone("In-context learning");
+    screen.send(b"\x11"); // Ctrl+Q
+    screen.wait_exit();
 }

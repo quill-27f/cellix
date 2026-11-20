@@ -821,6 +821,13 @@ What it knows, by layer:
    that fails before saying anything (its command line forgot it) is forgotten and the question
    asked once afresh. Another command line than the kept one starts its own.
 
+4. With the agent's conversation, a choice under the field where a Claude Code agent working here
+   has a known session (the side pane's, by its hooks, or inside Claude Code the one the pane is
+   in): it asks in a copy of that conversation, `claude -p --resume <id> --fork-session`, with the
+   read-only tools, so it knows the work and the agent never sees the question. Its follow-ups go
+   on in the copy. Codex 0.166 has `codex exec fork`, but Codex's sessions in the pane aren't
+   offered yet, and Gemini can't be copied.
+
 Every hook ignores a side question. The run carries `CELLIX_SIDE_QUESTION=1`, and under it
 `cellix hook` does nothing for any agent or kind (`hook::handle_for`, and before it the binary's
 own session-start work), and `cellix pane`, which Claude Code's mod starts as a session starts,
@@ -828,7 +835,29 @@ doesn't start. Otherwise the side question would collect every waiting comment, 
 take a checkpoint, log a turn and show up in the Agents list. It also leaves out what says it's
 held by Cellix or named by it (`CELLIX_HELD`, `CELLIX_NAME`) or inside another Claude Code.
 
-The card that asks and shows the answer comes with the next change; until then Ask Agent on a selection still writes a comment.
+On screen: a selection's buttons are Comment and Ask, on pages, in code and on a terminal's
+output, each naming its keys (Alt+C, Alt+A). The Problems row's Ask Agent still sends the problem
+to the agent to act on, and a comment's card keeps Ask Agent, which sends that comment alone
+(see Companion). Ask opens a card under the words, standing as a comment's glance card does,
+under them where there's room and over them where there isn't, never on them, its words where
+theirs start: "Ask Claude Code" at its head, naming who answers, a field whose hint is "Ask
+about ‘ICL’…", and Explain, Define and Simplify as quiet buttons before a filled Ask. The
+selection's own Comment and Ask give way to the card while it's about those words.
+Enter with nothing typed explains; Esc or a press elsewhere closes it. Asked, its head is the
+question with who answers at its end, quietly, a spinner turning before the name, and the answer streams in as it comes, Markdown
+shown as a comment's words are: plain, a list's items as bullets. While nothing has come, it
+says what's going on ("Thinking…", "Reading refs.bib…"). Past 14 rows the wheel scrolls it. Its
+buttons: Copy, Follow Up (a field in the card that goes on in the same side conversation), Make
+a Comment, and Dismiss (Esc). It stays while the file is worked on, so it can be read beside the
+words, and goes when dismissed. An answer is never a review comment: never counted, never in
+Send N, Check My Review or the prompt hook's hand-over. Make a Comment makes one of it, for when
+it's feedback after all: the question as the comment, of kind Clarity (a word that needed
+asking about is a clarity finding; the five kinds have no Question), on the same words, with the
+answer as the first reply by the agent that gave it. Its last word is the agent's, so it waits
+for nothing until the reviewer replies. What goes wrong is said on the card in words, with Try
+Again: not signed in, the command line's own failure, or no answer in four minutes
+(`TIME_LIMIT`), after which it's stopped. Inside Claude Code Ask is the same side question,
+where Ask Agent had filled Claude Code's prompt box.
 
 ## The pointer
 

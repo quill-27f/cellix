@@ -1437,8 +1437,8 @@
   {
     "id": "companion-ask",
     "milestone": 9,
-    "title": "Ask Agent on a selection goes straight to the agent",
-    "test": "ask_agent_on_a_selection_goes_straight_to_the_agent",
+    "title": "Ask on a selection is a side question: it opens Ask's card and types nothing into the agent",
+    "test": "ask_on_a_selection_types_nothing_into_the_agent",
     "passes": true
   },
   {
@@ -3523,8 +3523,8 @@
   {
     "id": "ask-agent-in-claude-code",
     "milestone": 10,
-    "title": "Inside Claude Code, Ask Agent puts the selection in Claude Code's prompt, unsent, and says to press Esc",
-    "test": "inside_claude_code_ask_agent_goes_to_its_prompt",
+    "title": "Inside Claude Code, Ask on a selection is the same side question, and puts nothing in Claude Code's prompt",
+    "test": "inside_claude_code_ask_is_a_side_question",
     "passes": true
   },
   {
@@ -3922,15 +3922,15 @@
   {
     "id": "terminal-output-ask",
     "milestone": 11,
-    "title": "A selection in a terminal tab gets Comment and Ask Agent; the agent hears the output, the command that printed it and the project files it names",
-    "test": "ask_agent_on_terminal_output_sends_it_with_its_command_and_places",
+    "title": "A selection in a terminal tab gets Comment and Ask; the side question hears the output, the command that printed it and the project files it names",
+    "test": "ask_on_terminal_output_asks_with_its_command_and_places",
     "passes": true
   },
   {
     "id": "terminal-output-ask-in-claude-code",
     "milestone": 11,
-    "title": "Inside Claude Code, Ask Agent on terminal output puts all of it in Claude Code's prompt",
-    "test": "inside_claude_code_terminal_output_goes_to_its_prompt_whole",
+    "title": "Inside Claude Code, Ask on terminal output is the same side question, with all of the output",
+    "test": "inside_claude_code_terminal_output_is_a_side_question_too",
     "passes": true
   },
   {
@@ -4909,8 +4909,8 @@
   {
     "id": "ask-agent-key-and-hints",
     "milestone": 14,
-    "title": "Alt+A asks the agent about the selection, and the buttons by a selection name their keys in brackets",
-    "test": "the_buttons_by_a_selection_name_their_keys_and_alt_a_asks_the_agent",
+    "title": "Alt+A opens Ask about the selection, and the buttons by a selection name their keys in brackets",
+    "test": "the_buttons_by_a_selection_name_their_keys_and_alt_a_asks",
     "passes": true
   },
   {
@@ -7130,6 +7130,62 @@
     "milestone": 15,
     "title": "Ask's engine runs the agent's command line read-only, told it's a side question, with the prompt on its input, and streams its news back",
     "test": "a_run_is_read_only_told_it_is_a_side_question_and_streams_back",
+    "passes": true
+  },
+  {
+    "id": "ask-card-streams-answer",
+    "milestone": 15,
+    "title": "Ask opens a field under a selection and streams a side question's answer onto a card under the words, read-only and with no comment made or handed over",
+    "test": "ask_runs_the_agent_read_only_on_the_whole_document_and_streams_the_answer",
+    "passes": true
+  },
+  {
+    "id": "ask-follow-up-resumes",
+    "milestone": 15,
+    "title": "A later question on the same document and Follow Up resume its side conversation, kept in Cellix's own state",
+    "test": "later_questions_and_follow_ups_resume_the_documents_side_conversation",
+    "passes": true
+  },
+  {
+    "id": "ask-make-a-comment",
+    "milestone": 15,
+    "title": "Make a Comment turns a side question and its answer into a review comment on the same words",
+    "test": "make_a_comment_turns_the_question_and_answer_into_a_comment",
+    "passes": true
+  },
+  {
+    "id": "ask-codex-gemini",
+    "milestone": 15,
+    "title": "Codex and Gemini CLI answer side questions read-only with their own arguments and resume their own conversations",
+    "test": "codex_and_gemini_answer_read_only_and_resume_their_own_conversations",
+    "passes": true
+  },
+  {
+    "id": "ask-no-agent",
+    "milestone": 15,
+    "title": "Ask with no agent installed says what it needs and opens Settings at Integrations",
+    "test": "ask_with_no_agent_installed_says_what_it_needs",
+    "passes": true
+  },
+  {
+    "id": "ask-errors-in-words",
+    "milestone": 15,
+    "title": "A side question that fails says why on its card: not signed in, its own failure, or no answer in time",
+    "test": "a_failed_answer_says_why_on_the_card",
+    "passes": true
+  },
+  {
+    "id": "ask-agent-conversation-copy",
+    "milestone": 15,
+    "title": "With the agent's conversation asks in a copy of the working Claude Code agent's session (--fork-session), which never sees it",
+    "test": "with_the_agents_conversation_asks_in_a_copy_of_it",
+    "passes": true
+  },
+  {
+    "id": "ask-pty",
+    "milestone": 15,
+    "title": "The real binary answers a side question on a card from a stand-in agent's command line",
+    "test": "pty_ask_answers_a_side_question_on_a_card",
     "passes": true
   }
 ]

@@ -590,7 +590,7 @@ fn air_about(grid: &Grid, buttons: (Rect, Rect)) -> Air {
     });
     // Everything else, drawn on the rows round them.
     let mut without = grid.clone();
-    let labels = ["Comment", "Ask Agent"];
+    let labels = ["Comment", "Ask ("];
     without.paint.retain(|paint| match paint {
         Paint::Panel { .. } => !chip(paint),
         Paint::Text { text, .. } => !labels.iter().any(|l| text.starts_with(l)),
@@ -901,7 +901,7 @@ fn a_shift_click_selection_gets_the_comment_bar_and_its_comment_holds_all_of_it(
     let (_dir, mut app) = open("scan.md", &markdown(), false);
     scan(&mut app);
     let grid = screen(&app);
-    assert!(grid.text().contains("Ask Agent"), "{}", grid.text());
+    assert!(grid.text().contains("Ask (Alt"), "{}", grid.text());
     let (comment, _) = app.selection_bar().expect("the buttons by the selection");
     app.handle(pointer(
         MouseKind::Left,
@@ -968,7 +968,7 @@ fn a_shift_click_selects_across_a_paper() {
             assert!(got.contains(block), "{block:?} in {got:?}");
         }
         let grid = screen(&app);
-        assert!(grid.text().contains("Ask Agent"));
+        assert!(grid.text().contains("Ask (Alt"));
         // The words selected are counted as the paper's are, so never more than it has.
         let foot = grid.row_text(grid.height() - 1);
         let counts: Vec<usize> = foot
@@ -1016,7 +1016,7 @@ fn a_shift_click_in_the_source_selects_the_same_way() {
     );
     let (start, end) = scan(&mut app);
     assert_eq!(selected(&app), source(&app, start, end));
-    assert!(screen(&app).text().contains("Ask Agent"));
+    assert!(screen(&app).text().contains("Ask (Alt"));
 }
 
 /// Advances the clock the loop would, a twentieth of a second at a time, until `done`.
@@ -1079,7 +1079,7 @@ fn a_drag_held_past_the_foot_scrolls_the_page_and_the_selection_follows() {
     app.handle(pointer(MouseKind::Up, 60.0, foot, false));
     assert!(app.autoscroll.is_none(), "nothing left timed");
     assert!(
-        screen(&app).text().contains("Ask Agent"),
+        screen(&app).text().contains("Ask (Alt"),
         "the bar, as after any drag"
     );
 }
@@ -1104,7 +1104,7 @@ fn a_double_click_selects_a_word_of_the_samples_title() {
     }
     assert_eq!(selected(&app), "page");
     let text = screen(&app).text();
-    assert!(text.contains("Ask Agent"), "{text}");
+    assert!(text.contains("Ask (Alt"), "{text}");
 }
 
 /// Scene s1-page-drag-scroll: a drag from the paragraph under "Text", held on the status bar's
@@ -1132,7 +1132,7 @@ fn a_drag_held_on_the_status_bar_scrolls_the_sample_page() {
         picked.starts_with("Plain words") && picked.contains("Callouts"),
         "{picked}"
     );
-    assert!(screen(&app).text().contains("Ask Agent"));
+    assert!(screen(&app).text().contains("Ask (Alt"));
 }
 
 #[test]
