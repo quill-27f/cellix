@@ -574,6 +574,53 @@ fn a_failed_answer_says_why_on_the_card() {
     assert!(text.contains("took too long"), "{text}");
 }
 
+/// The agent's name on an answered card ends where its buttons do, 24 px inside the card's
+/// line, as every card's content keeps: two columns in, it ended 37 px inside it where the
+/// buttons and the follow-up's field end 25 in (the release review of 0.12.0,
+/// q4-ask-follow-up). Measured in what's painted.
+#[test]
+fn the_answers_agent_ends_where_the_buttons_do() {
+    use cellix_render::{FontMeasure, Paint, UNIT};
+    let (dir, mut app) = page();
+    stand_in(
+        dir.path(),
+        "claude",
+        &[
+            r#"{"type":"system","subtype":"init","session_id":"s"}"#,
+            r#"{"type":"result","subtype":"success","is_error":false,"result":"It learns from examples."}"#,
+        ],
+    );
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+    select(&mut app, "ICL");
+    app.run(Command::AskAgent);
+    key(&mut app, Key::Enter);
+    let grid = answered(&mut app);
+    assert!(grid.text().contains("It learns"), "{}", grid.text());
+    let px = |units: i32| units as f32 * 17.0 / UNIT as f32;
+    let name = (grid.paint.iter()).find_map(|p| match p {
+        Paint::Text {
+            x,
+            text,
+            align_right: true,
+            ..
+        } if text == "Claude Code" => Some(px(*x)),
+        _ => None,
+    });
+    let name = name.unwrap_or_else(|| panic!("the agent's name: {}", grid.text()));
+    let card = (grid.paint.iter()).find_map(|p| match p {
+        Paint::Panel {
+            bounds,
+            shadow: true,
+            ..
+        } if px(bounds.x) < name && name <= px(bounds.x + bounds.w) => Some(bounds),
+        _ => None,
+    });
+    let card = card.expect("the card");
+    let room = px(card.x + card.w) - name;
+    // Its line and the blended pixel inside it, and 24 px of ground (`App::card_room`).
+    assert!((room - 26.0).abs() <= 1.0, "{room} px from the card's edge");
+}
+
 /// Where a Claude Code agent works here with a session its hooks have named, Ask offers to ask
 /// in a copy of that agent's conversation (layer 4): the run resumes the agent's session with
 /// `--fork-session`, so the agent never sees the question, and a follow-up goes on in the copy,

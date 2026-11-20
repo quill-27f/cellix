@@ -1664,7 +1664,8 @@ its buttons painted right of their cells so the last ends as far from its right
 over its foot, and a command's box on those insets, ending where the buttons do, with the
 command 12 px into it (`COMMAND_PADDING`), as the Ask card's question's field is, with what's
 typed 12 px into it: a column into the card's cells it stood 20 px from its line (the release
-review of 0.12.0, q1-ask-field). The install card over the file had 32 px and 29, and
+review of 0.12.0, q1-ask-field). The agent's name over an answer ends there too, where two
+columns in it ended 37 px inside the line (q4-ask-follow-up). The install card over the file had 32 px and 29, and
 over the pane the buttons ended 32 to 34 px from the right; 12 px outside the words, the box ran
 22 px past them (the release review of next), and 24 px from the edge, the buttons kept 22 of
 ground. Over the side pane every card is the asking
@@ -2167,8 +2168,8 @@ install jdtls`. Run it in a terminal, then open Main.java again." The card never
 on the clipboard or where to run it (108-install-card-needs). Its words are one paragraph, each
 sentence running on from the one before, where a sentence to a line left the wrapped end of one,
 "into ~/.local/bin.", a row under it as one more sentence (108-install-card-pane). A command is
-set in the code font on a pill of the code's ground, as a page sets inline code, and wraps as
-one word: as words of the sentence, "Copies brew install jdtls." read the command as part of
+set in the code font on a pill of the code's ground, as a page sets inline code, with 8 px of
+the pill either side of it and 4 px after it to the next word, and wraps as one word: as words of the sentence, "Copies brew install jdtls." read the command as part of
 it. Opening a file again that's open
 looks once more for its language's server where it was missing, and starts it once it's there;
 the bar keeps the next step after the card goes. A path or a command on the card never stands

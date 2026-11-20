@@ -1377,6 +1377,10 @@ pub(crate) fn sheet_edge(grid: &mut Grid, bounds: Bounds, frame: Rgb, line: Rgb)
 /// after it (0.11.0's release check, P7, 64-transcript-tab-hover). Broken at a " · ", the
 /// second line is a phrase of its own and starts with a capital: it read "right-click to open
 /// the transcript" (the release review of 0.12.0, 64-transcript-tab-hover).
+/// Pixels a command's pill on a card keeps inside it either side of the command, and after it
+/// before the next word (`App::code_pill_room`).
+const CODE_PILL: (f32, f32) = (8.0, 4.0);
+
 /// Where a card's command keeps its spaces while its words are wrapped, so it's one word.
 const HELD_SPACE: char = '\u{1f}';
 
@@ -2479,15 +2483,28 @@ impl App {
     /// How wide a line of a card's words is, in columns, its commands between backticks in
     /// the code font (`card_words`).
     fn card_words_width(&self, line: &str) -> f32 {
+        let (inside, outside) = self.code_pill_room();
         (line.split('`').enumerate())
             .map(|(n, part)| {
+                let code = n % 2 == 1;
                 let font = Font {
-                    mono: n % 2 == 1,
+                    mono: code,
                     ..Font::default()
                 };
-                self.measure.width(part, font)
+                let room = if code { inside * 2.0 + outside } else { 0.0 };
+                self.measure.width(part, font) + room
             })
             .sum()
+    }
+
+    /// The room a command's pill on a card keeps round it, in columns: `CODE_PILL.0` inside it
+    /// either side of the command, and `CODE_PILL.1` after it before the next word, which a
+    /// space keeps before it. At a page's fifth of a column, the pill held its command 5 px
+    /// from its ends and a stop after it touched it (the release review of 0.12.0,
+    /// 108-install-card-needs). Nothing on cells.
+    fn code_pill_room(&self) -> (f32, f32) {
+        let columns = |pixels: f32| measures::columns(pixels, &*self.measure).unwrap_or(0.0);
+        (columns(CODE_PILL.0), columns(CODE_PILL.1))
     }
 
     /// A line of a card's words from column `x`, a command between backticks in the code
@@ -2513,6 +2530,7 @@ impl App {
         };
         grid.put_str(x, y, &plain, hidden, right);
         let (mut at, row, end) = (f32::from(x), f32::from(y), f32::from(right));
+        let (inside, outside) = self.code_pill_room();
         for (n, part) in line.split('`').enumerate() {
             let code = n % 2 == 1;
             let font = Font {
@@ -2524,14 +2542,18 @@ impl App {
             }
             let wide = self.measure.width(part, font);
             let color = if code {
-                let pill = Bounds::cells(at - 0.2, row + 0.05, wide + 0.4, 0.9);
+                let pill = Bounds::cells(at, row + 0.05, wide + inside * 2.0, 0.9);
                 grid.panel(pill, 14, Some(theme.code_bg), None);
+                at += inside;
                 theme.string
             } else {
                 style.fg
             };
             grid.text_run((at, row), end, part, (color, false), font);
             at += wide;
+            if code {
+                at += inside + outside;
+            }
         }
     }
 
@@ -26222,15 +26244,37 @@ mod tests {
                 "{words}: {x} to {end}"
             );
         }
-        let code = (line.iter()).find(|(_, text, _)| text == "install-jdtls");
-        let (at, _, font) = code.unwrap_or_else(|| panic!("the command: {line:?}"));
+        let code = (line.iter()).position(|(_, text, _)| text == "install-jdtls");
+        let code = code.unwrap_or_else(|| panic!("the command: {line:?}"));
+        let (at, words, font) = &line[code];
         assert!(font.mono, "in the code font: {line:?}");
-        let pill = (grid.paint.iter()).any(|p| {
-            matches!(p, Paint::Panel { bounds, fill: Some(fill), .. }
-                if *fill == app.theme.code_bg
-                    && (bounds.x as f32 / unit - at).abs() < 0.5)
+        let pill = (grid.paint.iter()).find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == app.theme.code_bg => Some(*bounds),
+            _ => None,
         });
-        assert!(pill, "on the code's ground");
+        let pill = pill.expect("on the code's ground");
+        // 8 px inside it either side of the command, and 4 after it to the stop: at a fifth of
+        // a column, the stop touched it (the release review of 0.12.0, 108-install-card-needs).
+        let (from, to) = (pill.x as f32 / unit, (pill.x + pill.w) as f32 / unit);
+        let ends = at + app.measure.width(words, *font);
+        let (before, after) = ((at - from) * 17.0, (to - ends) * 17.0);
+        assert!(
+            (before - 8.0).abs() < 1.0 && (after - 8.0).abs() < 1.0,
+            "{before} px inside the pill before the command and {after} after it"
+        );
+        let stop = line
+            .get(code + 1)
+            .map(|(x, ..)| *x)
+            .expect("the stop after it");
+        assert!(
+            (stop - to) * 17.0 >= 3.5,
+            "{} px to the stop",
+            (stop - to) * 17.0
+        );
 
         // Its top and bottom lines stand on whole pixels, as sharp as its sides'.
         for edge in [top, bottom] {

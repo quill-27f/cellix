@@ -1073,10 +1073,14 @@ impl App {
                     let end = right.saturating_sub(who_wide);
                     grid.label(x, y, text, strong, end);
                     if !who.is_empty() {
-                        grid.label_right(right, y, who, dim, 100);
+                        // Where its field and its buttons end, where there are pictures: two
+                        // columns in, it ended 37 px inside the card's line where they end 25
+                        // in (the release review of 0.12.0, q4-ask-follow-up).
+                        let ends = inside.map_or(f32::from(right), |(left, wide)| left + wide);
+                        grid.label_right_at(ends, right, y, who, dim, 100);
                         if running {
                             let font = Font::default();
-                            let at = f32::from(right) - self.measure.width(who, font) - 2.0;
+                            let at = ends - self.measure.width(who, font) - 2.0;
                             grid.spinner(at, y, measures::WAIT_SPIN, theme.accent, base);
                         }
                     }
