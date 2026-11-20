@@ -1097,9 +1097,10 @@ def agent_tabs(scratch):
                                               message="Claude needs your permission to use Bash")
     # A narrow pane cuts the name in front short too, so only its first word is waited for.
     start = [*command("Open Claude Code", F1), ["until", "pricing"], ["wait", 0.4]]
-    # Codex last, so it's in front and Gemini CLI finishes behind it.
+    # Codex last, so it's in front and Gemini CLI finishes behind it. In the narrow window its
+    # name is cut short while the button that maximizes the pane has room ("og t…").
     others = [*command("Open Gemini CLI", F1), ["until", "docs nav"], *command("Open Codex", F1),
-              ["until", "og tags"], ["wait", 0.4]]
+              ["until", "og t"], ["wait", 0.4]]
     behind = [*start, *command("New Terminal", F1), ["wait", 0.8]]
     scenes = [
         ("m1-agent-tab", start, {}),

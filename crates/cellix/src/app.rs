@@ -36737,7 +36737,9 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let area = app.dock_area().unwrap();
         let title = app.title_of(area);
         assert!(app.dock.picking(title), "five tabs have no room, even cut");
-        let tabs = app.dock.view_tabs_for_test(area);
+        // Where the row draws them, after the pane's lead: from the pane's own edge, the row
+        // had a column more, which cut short the tabs fit in.
+        let tabs = app.dock.view_tabs_for_test(title);
         let agents = tabs.iter().find(|tab| tab.0 == Front::Agents).unwrap();
         assert_eq!(agents.2.w, 13, "it's in front, whole, with its chevron");
         let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap();

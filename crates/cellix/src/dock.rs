@@ -2094,7 +2094,8 @@ pub enum TabHit {
 pub enum Fit {
     /// Every tab whole, and the + after them.
     Whole,
-    /// Every tab there: the one in front whole, those behind it cut short. The + gives way.
+    /// Every tab there: those behind the one in front cut short, and where their marks leave
+    /// it too little room, its name too. The + stays.
     Cut,
     /// Only the tab in front, with a chevron that lists them all.
     Front,
@@ -2774,6 +2775,26 @@ impl Dock {
         }
     }
 
+    /// The fewest columns the tab in front is cut to: its name cut to `CUT_LETTERS` and the
+    /// "…", its " (2)" kept, and what it has beside them while it hugs them. Its name is cut,
+    /// as far as this, before the button that maximizes the pane gives way, and that before
+    /// any tab goes into the chevron's list: kept whole, a name taken from what was asked
+    /// ("Fix the login redirect… (2)") sent both tabs behind it and the + into the list with
+    /// 141 px empty, and "Claude Code" beside a terminal left no room for the button (the
+    /// release review of 0.12.0, m1-agent-names, w0-infra).
+    fn front_least(&self, face: &Face) -> u16 {
+        let head = numbered_name(&face.text).map_or(face.text.as_str(), |(head, _)| head);
+        if head.chars().count() <= CUT_LETTERS {
+            return self.hugging(face);
+        }
+        let cut = Face {
+            text: cut_to(&face.text, CUT_LETTERS),
+            context: None,
+            ..*face
+        };
+        self.hugging(&cut).min(self.hugging(face))
+    }
+
     /// Columns a tab behind the one in front takes to show its whole name, with no × and
     /// half a column of air either side, and an agent's mark and state either end of it.
     fn stub(&self, face: &Face) -> u16 {
@@ -2911,13 +2932,6 @@ impl Dock {
         (marks_wide(face.state) + MARK_AIR * 2.0 - 0.01).ceil() as u16
     }
 
-    /// What each tab gets, views and then sessions, and how they stand. When they don't all
-    /// fit with the + after them, the one in front keeps its whole name, in a chip that
-    /// hugs it, and those behind it stand as names alone: whole while there's room, and
-    /// then cut short with a "…", the longest giving way first, and short of three letters,
-    /// cut to their marks. The + stays after them all the while. Only when the marks
-    /// themselves don't fit does the one in front show alone, with a chevron that lists
-    /// every tab.
     /// Whether the tab at `index`, views first, is a session's with no tab of its own.
     fn untabbed(&self, index: usize) -> bool {
         let session = index.checked_sub(self.views().len());
@@ -2926,6 +2940,15 @@ impl Dock {
             .is_some_and(|s| !s.tabbed)
     }
 
+    /// What each tab gets, views and then sessions, and how they stand. When they don't all
+    /// fit with the + after them, the one in front keeps its whole name, in a chip that
+    /// hugs it, and those behind it stand as names alone: whole while there's room, and
+    /// then cut short with a "…", sharing the room evenly, and short of three letters, cut
+    /// to their marks. Then the one in front has its name cut short too, down to three
+    /// letters and the "…". The + stays after them all the while, and the button that
+    /// maximizes the pane until only that last cut leaves it room. Only when the marks and
+    /// the name in front cut short don't fit does the one in front show alone, with a
+    /// chevron that lists every tab.
     fn fitted(&self, area: Rect) -> (Vec<u16>, Fit) {
         let mut widths = self.wanted_widths();
         let end = self.tabs_end.get();
@@ -2948,9 +2971,11 @@ impl Dock {
         let behind: Vec<usize> = (0..faces.len())
             .filter(|index| *index != front && !self.untabbed(*index))
             .collect();
-        let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
-        let rest = self.cut_room(area).checked_sub(kept);
-        let Some(rest) = rest.filter(|_| self.cut_fits(area)) else {
+        // The tab in front keeps its whole name while the row has it besides the marks of
+        // those behind; past that its name is cut, down to `front_least`, before the button
+        // gives way or any tab goes into the list.
+        let room = self.cut_fits(area).then(|| self.cut_room(area));
+        let Some(room) = room else {
             let room = end.saturating_sub(start + MAXIMIZE_SHORT);
             for (index, width) in widths.iter_mut().enumerate() {
                 *width = if index == front {
@@ -2961,6 +2986,15 @@ impl Dock {
             }
             return (widths, Fit::Front);
         };
+        let (whole, floor) =
+            (faces.get(front)).map_or((0, 0), |face| (self.hugging(face), self.front_least(face)));
+        // The name in front comes before a first tab's column to stand its mark in the middle
+        // of: taken from the name, it cut "og tags" to "og ta…" (m1-agent-tabs-narrow).
+        let marks = (behind.iter())
+            .map(|index| self.least(&faces[*index]))
+            .sum::<u16>();
+        let kept = whole.min(room.saturating_sub(marks)).max(floor);
+        let rest = room.saturating_sub(kept);
         let stubs: Vec<u16> = faces.iter().map(|face| self.stub(face)).collect();
         for (index, width) in widths.iter_mut().enumerate() {
             *width = if index == front {
@@ -3047,12 +3081,12 @@ impl Dock {
         (self.tabs_end.get()).saturating_sub(self.tabs_start(area))
     }
 
-    /// Columns the tabs take cut as far as they go: the one in front hugging its name and
-    /// its ×, and each behind it cut to its mark.
+    /// Columns the tabs take cut as far as they go: the one in front hugging its name cut
+    /// short and its ×, and each behind it cut to its mark.
     fn cut_least(&self) -> u16 {
         let front = self.front_index().unwrap_or(0);
         let faces = self.faces();
-        let kept = (faces.get(front)).map_or(0, |face| self.hugging(face));
+        let kept = (faces.get(front)).map_or(0, |face| self.front_least(face));
         let behind = (faces.iter().enumerate())
             .filter(|(index, _)| *index != front && !self.untabbed(*index))
             .map(|(_, face)| self.least(face));
@@ -3168,6 +3202,7 @@ impl Dock {
         );
         let mut at = self.tabs_start(area);
         let pick = if self.picking(area) { PICK_WIDTH } else { 0 };
+        let cutting = self.fit(area) == Fit::Cut;
         let cuts = self.cut_short(area);
         let faces = self.faces();
         let tabs = names.zip(widths).zip(wanted).zip(cuts).zip(faces);
@@ -3176,8 +3211,10 @@ impl Dock {
                 // Standing as a name alone, it's cut when that name has no room.
                 let short = cut && self.stub(&face) > width;
                 let stub = pick > 0 && width < full + pick;
+                // In front of tabs cut short, it's cut when its chip can't hug it whole.
+                let squeezed = cutting && !cut && width < self.hugging(&face);
                 let shortened = session && name != face.text;
-                return (short || stub || shortened).then_some(name);
+                return (short || stub || squeezed || shortened).then_some(name);
             }
             at += width;
         }
@@ -3216,10 +3253,11 @@ impl Dock {
         }
     }
 
-    /// Whether that button shows. It does but where the tabs, each cut to its mark, fit with
-    /// the + only without it: tabs are cut to their marks before it gives way, and it gives
-    /// way before any tab goes into the chevron's list. There a double click on a tab still
-    /// maximizes the pane, and dragging the pane a little wider brings the button back.
+    /// Whether that button shows. It does but where the tabs, each behind cut to its mark and
+    /// the one in front to three letters of its name, fit with the + only without it: tabs
+    /// are cut that far before it gives way, and it gives way before any tab goes into the
+    /// chevron's list. There a double click on a tab still maximizes the pane, and dragging
+    /// the pane a little wider brings the button back.
     pub fn maximize_shows(&self, area: Rect) -> bool {
         let end = self.tabs_end.get();
         if end == 0 {
@@ -3410,11 +3448,15 @@ impl Dock {
             };
             let end_at = pick.map_or(close.0, f32::from);
             let state = f32::from(after + 1).min(end_at - 2.0);
+            // A name with no room for all its letters ends in a "…", its " (2)" kept, as it
+            // does where there are pictures: stopped at its last column, it read as whole.
+            let stop = context.map_or(stop, |c| c.1);
+            let text = elide_name(&face.text, f32::from(stop.saturating_sub(first)), measure);
             return Parts {
                 icon: (icon_x, name_cell),
                 name: (name_x, first),
-                stop: context.map_or(stop, |c| c.1),
-                text: face.text.clone(),
+                stop,
+                text,
                 context: context.map(|c| (c, stop)),
                 state: (state, state as u16),
                 pick: pick.map(|x| (f32::from(x), x)),
@@ -3465,10 +3507,18 @@ impl Dock {
         } else {
             0.0
         };
+        // A name cut short leaves less than a letter over: half of it goes before the mark, so
+        // the tab's two ends have the same air, as a whole tab's do. All of it after the ×, a
+        // name cut in front had 17 px before its mark and 25 after its × (m1-agent-names).
+        let (third, after_name) = if text != face.text && slack > 0.0 {
+            (slack / 2.0, slack / 2.0)
+        } else {
+            (third, third * 2.0)
+        };
         let (icon_x, name_x, name_end) = (icon_x + third, name_x + third, name_end + third);
         let context = context.map(|(x, letters)| (x + third, letters));
         let (state_x, after) = (state_x + third, after + third);
-        let close = close + third * 2.0;
+        let close = close + after_name;
         // What the cell tier's letters say, which the screen's text is: painted words are
         // narrower than their letters, so the parts' letters stand from the tab's end, its ×
         // in its last column, its chevron and what it's doing before that, its context before

@@ -7446,5 +7446,19 @@
     "title": "The agent that asks to start another is the sentence's subject, its tab's name after it, quietly",
     "test": "an_agent_named_by_its_work_is_still_the_one_that_asks",
     "passes": true
+  },
+  {
+    "id": "pane-front-name-cut",
+    "milestone": 15,
+    "title": "A long name in front of the side pane's tabs is cut before a tab goes into the chevron's list",
+    "test": "a_long_name_in_front_is_cut_before_a_tab_goes_into_the_list",
+    "passes": true
+  },
+  {
+    "id": "pane-maximize-kept-beside-terminal",
+    "milestone": 15,
+    "title": "The side pane's maximize button stays beside a terminal and Claude Code, the name in front cut first",
+    "test": "a_terminal_and_claude_code_keep_the_button",
+    "passes": true
   }
 ]

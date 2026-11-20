@@ -2049,3 +2049,234 @@ fn the_line_between_two_whole_tabs_behind_stands_in_their_air() {
         "{before} px after make build's ink, {after} before Terminal's mark's"
     );
 }
+
+/// How much more room session `index`'s tab has after its × than before its mark, by their
+/// boxes, in pixels.
+fn lopsided(app: &App, grid: &Grid, row: cellix_render::Rect, index: usize) -> f32 {
+    let (from, to) = tab_span(app, row, index);
+    let (start, end) = (f32::from(from), f32::from(to));
+    let inside = |found: Vec<(f32, f32)>| {
+        let found = found
+            .into_iter()
+            .find(|(left, _)| *left >= start && *left < end);
+        found.expect("in its tab")
+    };
+    let mark = inside(icons(grid, row.y, Icon::AgentClaude));
+    let close = inside(icons(grid, row.y, Icon::Close));
+    ((end - close.1) - (mark.0 - start)) * 17.0
+}
+
+/// The air in pixels from the button that maximizes the pane to the first icon at the top
+/// right, measured in the picture of the row.
+fn button_air(app: &App, grid: &Grid, row: cellix_render::Rect) -> usize {
+    let theme = *app.theme();
+    let button = usize::from(app.dock.maximize_button(row)) * 17;
+    let icons = app.pane_actions();
+    let first = icons.first().expect("the icons at the top right").0;
+    let rows = super::strip_tests::picture(grid, row.y);
+    let to = usize::from(first.right()) * 17;
+    let runs = super::strip_tests::ink_runs(&rows, theme.tab.bg, (button, to));
+    assert!(runs.len() >= 2, "{runs:?}: {}", grid.row_text(row.y));
+    runs[1].0 - runs[0].1
+}
+
+/// Three Claude Codes named by their work, in the tour's window (m1-agent-names, 150
+/// columns): the third, in front, is "Fix the login redirect… (2)", and its name is cut
+/// further, keeping its " (2)", so the two behind it keep their marks and what each is doing,
+/// the + stays after them, and the button that maximizes the pane after that, each with 8 px
+/// of air or more. Kept whole, the name in front sent both tabs behind and the + into the
+/// chevron's list with 141 px empty before the button (the release review of 0.12.0, #1).
+/// Narrowed from there, the tabs behind go to their marks before the name in front is cut,
+/// the name in front is cut to three letters before the button gives way, and the button
+/// before any tab goes into the list.
+#[test]
+#[cfg(unix)]
+fn a_long_name_in_front_is_cut_before_a_tab_goes_into_the_list() {
+    use crate::dock::Doing;
+    let (dir, mut app) = project((150, 44));
+    for _ in 0..3 {
+        start_agent(dir.path(), &mut app, "✳ Claude Code");
+    }
+    app.dock.sessions[0].topic = Some("Refund route for unpaid orders".into());
+    app.dock.sessions[1].asked =
+        Some("Fix the login redirect after a password reset, and add a test for it".into());
+    app.dock.sessions[2].asked = Some("Fix the login redirect after a password change".into());
+    for session in app.dock.sessions.iter_mut() {
+        session.doing = Doing::Working;
+    }
+    app.dock.active = Some(2);
+    app.dock.front = Front::Session;
+    let label = app.dock.session_label(2);
+    assert_eq!(label, "Fix the login redirect… (2)");
+    let grid = screen(&app);
+    let row = title(&app);
+    let text = grid.row_text(row.y);
+    // The tour's pane: its tabs from column 95, the icons at the top right from 134.
+    let room = format!(
+        "{text} (pane {:?}, row ends {})",
+        row,
+        app.dock.tabs_end.get()
+    );
+    eprintln!("three named agents: {room}");
+    assert_eq!(app.dock.fit(row), Fit::Cut, "{room}");
+    assert_eq!(icons(&grid, row.y, Icon::AgentClaude).len(), 3, "{room}");
+    assert_eq!(states(&grid, row.y).len(), 3, "what each is doing: {room}");
+    let front = shown_name(&app, &grid, row, 2).expect("the name in front");
+    assert!(
+        front.starts_with("Fix the") && front.ends_with("… (2)") && front != label,
+        "{front}: {room}"
+    );
+    assert!(plus_drawn(&app, &grid, row), "the + stays: {room}");
+    assert!(app.dock.maximize_shows(row), "the button stays: {room}");
+    assert!(!icons(&grid, row.y, Icon::Maximize).is_empty(), "{room}");
+    let (before, after) = plus_air(&app, &grid, row);
+    assert!(
+        before >= 8 && after >= 8 && before.abs_diff(after) <= 2,
+        "{before} px before the +, {after} after it: {room}"
+    );
+    let air = button_air(&app, &grid, row);
+    assert!(air >= 8, "{air} px from the button to the icons: {room}");
+    // Cut short, it has the air at its two ends that it has whole: what its columns hold past
+    // the cut name was all after its ×, 17 px before its mark and 25 after the × (the
+    // ui-expert's review of this change).
+    let cut = lopsided(&app, &grid, row, 2);
+    app.dock.width = Some(90);
+    app.handle(Event::Resize(150, 44));
+    let grid = screen(&app);
+    let row = title(&app);
+    assert_eq!(
+        shown_name(&app, &grid, row, 2).as_deref(),
+        Some(label.as_str())
+    );
+    let whole = lopsided(&app, &grid, row, 2);
+    assert!(
+        (cut - whole).abs() <= 4.0,
+        "cut short {cut} px more after its × than before its mark, whole {whole}"
+    );
+
+    // Narrowed column by column.
+    let letters = |name: &str| {
+        name.split('…')
+            .next()
+            .map_or(0, |kept| kept.chars().count())
+    };
+    let (mut cut_in_front, mut at_least, mut listed) = (0, None, None);
+    for width in (16..80).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let grid = screen(&app);
+        let row = title(&app);
+        let text = grid.row_text(row.y);
+        match app.dock.fit(row) {
+            Fit::Whole => continue,
+            Fit::Front => {
+                listed = Some(width);
+                break;
+            }
+            Fit::Cut => {}
+        }
+        assert_eq!(
+            icons(&grid, row.y, Icon::AgentClaude).len(),
+            3,
+            "{width}: {text}"
+        );
+        assert!(plus_drawn(&app, &grid, row), "{width}: {text}");
+        let front = shown_name(&app, &grid, row, 2).expect("the name in front");
+        if front == label {
+            continue;
+        }
+        cut_in_front += 1;
+        // Cut in front only once those behind are at their marks.
+        for index in 0..2 {
+            assert_eq!(
+                shown_name(&app, &grid, row, index),
+                None,
+                "{width}: {front}: {text}"
+            );
+        }
+        assert!(front.ends_with("… (2)"), "{width}: {front}: {text}");
+        let kept = letters(&front);
+        assert!(kept >= 3, "{width}: {front}: {text}");
+        if kept <= 4 {
+            at_least.get_or_insert(width);
+        }
+        // The button gives way only once the name in front has been cut as far as it goes;
+        // the columns it leaves go back to that name.
+        if !app.dock.maximize_shows(row) {
+            assert!(
+                at_least.is_some(),
+                "{width}: the button went before {front} was cut further: {text}"
+            );
+        }
+        // Its tip names it whole.
+        let (from, _) = tab_span(&app, row, 2);
+        let tip = app.dock.cut_name(row, from + 2);
+        assert!(
+            tip.as_deref()
+                .is_some_and(|tip| tip.starts_with("Fix the login redirect after")),
+            "{width}: {tip:?}"
+        );
+    }
+    assert!(
+        cut_in_front > 3,
+        "{cut_in_front} widths cut the name in front"
+    );
+    let (Some(least), Some(listed)) = (at_least, listed) else {
+        panic!("cut as far as it goes at {at_least:?}, listed at {listed:?}");
+    };
+    assert!(
+        listed < least,
+        "listed at {listed}, cut to the least at {least}"
+    );
+}
+
+/// A terminal behind Claude Code in a side pane of the tour's 120-column window (w0-api-server
+/// with the terminal busy, w0-infra with it at its prompt): both tabs, the + and the button
+/// that maximizes the pane stand in the row, each with 8 px of air or more. The button gave
+/// way to "Claude Code" whole, with 80 px free after the + (the release review of 0.12.0, #2):
+/// the name in front is cut before it does.
+#[test]
+#[cfg(unix)]
+fn a_terminal_and_claude_code_keep_the_button() {
+    use crate::dock::Doing;
+    for busy in [true, false] {
+        let (dir, mut app) = project((120, 40));
+        app.open_agent(crate::agents::SHELL.1);
+        app.dock.sessions[0].renamed = Some("sleep".into());
+        if busy {
+            app.dock.sessions[0].doing = Doing::Working;
+        }
+        start_agent(dir.path(), &mut app, "✳ Claude Code");
+        app.dock.active = Some(1);
+        app.dock.front = Front::Session;
+        let grid = screen(&app);
+        let row = title(&app);
+        let text = grid.row_text(row.y);
+        let room = format!(
+            "busy {busy}: {text} (pane {:?}, row ends {})",
+            row,
+            app.dock.tabs_end.get()
+        );
+        eprintln!("a terminal and Claude Code: {room}");
+        assert_ne!(app.dock.fit(row), Fit::Front, "{room}");
+        // Each tab's mark, before the icons at the top right, which have a terminal's too.
+        let end = f32::from(app.dock.tabs_end.get());
+        for mark in [Icon::Terminal, Icon::AgentClaude] {
+            let found = icons(&grid, row.y, mark);
+            let marks = found.iter().filter(|(left, _)| *left < end).count();
+            assert_eq!(marks, 1, "{mark:?}: {room}");
+        }
+        let front = shown_name(&app, &grid, row, 1).expect("the name in front");
+        assert!(front.starts_with("Cla"), "{front}: {room}");
+        assert!(plus_drawn(&app, &grid, row), "the + stays: {room}");
+        assert!(app.dock.maximize_shows(row), "the button stays: {room}");
+        assert!(!icons(&grid, row.y, Icon::Maximize).is_empty(), "{room}");
+        let (before, after) = plus_air(&app, &grid, row);
+        assert!(
+            before >= 8 && after >= 8 && before.abs_diff(after) <= 2,
+            "{before} px before the +, {after} after it: {room}"
+        );
+        let air = button_air(&app, &grid, row);
+        assert!(air >= 8, "{air} px from the button to the icons: {room}");
+    }
+}

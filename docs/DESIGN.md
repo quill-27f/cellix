@@ -1934,6 +1934,12 @@ letters and the columns round them, as before.
 A side pane whose tabs don't all fit before the icons at the top right keeps every tab in
 the row. The one in front, a tab in the shape every tab has, hugs its measured name and its ×, with none
 of the slack a tab has when there's room, since that slack is what would cut its neighbours.
+Where the marks of those behind leave it too little room, its own name is cut short too, with a
+"…" and its " (2)" kept, down to three letters, and its tip names it whole; what its columns
+hold past the cut name is shared by its two ends, so they keep a whole tab's air. Kept whole, a name
+taken from what was asked ("Fix the login redirect… (2)") sent both tabs behind it and the +
+into the chevron's list with 141 px empty, and "Claude Code" beside a terminal left no room for
+the button that maximizes the pane (the release review of 0.12.0, m1-agent-names, w0-infra).
 Those behind it stand as names alone, half a column of air either side, whole while they
 fit and then cut short with a "…", sharing the room evenly as VS Code's shrink mode does: each
 shows the same number of letters, as many as fit; one whose whole name is shorter keeps it and
@@ -1975,8 +1981,8 @@ mark, and marks tell tabs apart, as herdr's narrow tabs do; letters come back, t
 alike, as room allows. On cells a view's tab, a name elsewhere, is cut to the
 letter its icon has at the top right. The + keeps its place after the tabs while any tab is
 cut rather than listed, and the button that maximizes the pane its three columns, a column
-after the + and no further than the end of the pane's part of the row: the names are cut to
-their marks before either gives way. Where tabs at their marks leave room, it falls after the
+after the + and no further than the end of the pane's part of the row: the names behind are cut
+to their marks, and the one in front to three letters, before either gives way. Where tabs at their marks leave room, it falls after the
 button, so the + stays in the middle between the last tab's ink and the button's: kept at the
 row's end, the button stood 70 px after the + against 39 before it (the release review of
 0.12.0, m2-agents-urgency, 71-sample-changes-row-narrow). With
@@ -1989,10 +1995,13 @@ with nothing to start another from beside it (0.11.0's final review: 167, 131,
 m1-agent-tabs-narrow, 173-peek-narrow), and the button with it, though inside Claude Code,
 where Cellix has at most 45% of the window and its side pane opens 40 columns wide, the user
 had no other way in sight to give the pane the window (decided on 2026-11-16). The button
-goes in one case only, a row whose tabs fit at their marks with the + only without it, since
-every tab staying in sight comes first; a double click on a tab maximizes there as anywhere.
+goes in one case only, a row whose tabs fit, those behind at their marks and the one in front at
+three letters, with the + only without it, since every tab staying in sight comes first; the
+columns it leaves go back to the name in front, and a double click on a tab maximizes there as
+anywhere.
 A tab behind has no ×, so a click anywhere on it brings it forward, and a cut name is a hover
-away. Only when even the marks and the + don't fit does the row show the tab in front alone,
+away. Only when even the marks, the name in front at three letters and the + don't fit does
+the row show the tab in front alone,
 with a chevron that lists every tab and what + would start. The icons stand three columns
 apart on their row's own ground, and nothing runs under them.
 A program's tab in the side pane has its mark before its name, where a file's tab has its icon

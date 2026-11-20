@@ -104,11 +104,17 @@ fn the_wheel_over_the_side_panes_tabs_steps_through_them_when_one_shows() {
     let before = front(&app);
     wheel(&mut app, MouseKind::ScrollUp, area.x + 3, area.y);
     assert_eq!(front(&app), before);
-    app.open_agent(crate::agents::SHELL.1);
-    app.open_agent(crate::agents::SHELL.1);
+    // Narrow, with tabs enough that even cut short, the one in front to three letters, they
+    // don't fit: two terminals did once, before the name in front was cut too.
     app.dock.width = Some(24);
-    app.handle(Event::Resize(110, 30));
-    let _ = screen(&app);
+    for _ in 0..8 {
+        app.open_agent(crate::agents::SHELL.1);
+        app.handle(Event::Resize(110, 30));
+        let _ = screen(&app);
+        if app.dock.picking(app.title_of(app.dock_area().unwrap())) {
+            break;
+        }
+    }
     let area = app.dock_area().unwrap();
     assert!(
         app.dock.picking(app.title_of(area)),
