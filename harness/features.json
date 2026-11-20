@@ -7264,5 +7264,47 @@
     "title": "The install card where this machine can't install a server says what Copy Command copies and the next step, and opening the file again starts the server once it's there",
     "test": "the_offer_says_what_its_language_needs_where_it_cant_install",
     "passes": true
+  },
+  {
+    "id": "tabs-behind-three-letters",
+    "milestone": 15,
+    "title": "Tabs behind the one in front keep three letters and a … at the least, or go to their marks together",
+    "test": "tabs_behind_share_the_room_evenly",
+    "passes": true
+  },
+  {
+    "id": "tab-marks-even-air",
+    "milestone": 15,
+    "title": "Tabs at their marks side by side have the same air either side of the lines between them, and the + stands in the middle between the last tab's drawn ink and the button that maximizes the pane, which follows it",
+    "test": "tabs_at_their_marks_have_even_air_and_the_plus_its_middle",
+    "passes": true
+  },
+  {
+    "id": "tab-tip-second-line-capital",
+    "milestone": 15,
+    "title": "A tab's tip broken at a · starts its second line with a capital",
+    "test": "a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start",
+    "passes": true
+  },
+  {
+    "id": "list-lines-end-with-rows",
+    "milestone": 15,
+    "title": "A side pane list's lines end where its rows do, 25 px from the pane's edge as they start from the other, the Inbox's rows ending there too",
+    "test": "a_lists_lines_end_where_its_rows_end",
+    "passes": true
+  },
+  {
+    "id": "idle-agent-time-at-row-end",
+    "milestone": 15,
+    "title": "An idle agent's time ends at its row's end, where every row's last item does",
+    "test": "the_agents_lists_times_stand_in_one_column",
+    "passes": true
+  },
+  {
+    "id": "chip-words-four-and-a-half",
+    "milestone": 15,
+    "title": "The needs-you chip's words and a transcript's failed read at 4.5 to 1 or better on their wash in every theme",
+    "test": "a_chips_words_read_at_four_and_a_half_to_one_in_every_theme",
+    "passes": true
   }
 ]

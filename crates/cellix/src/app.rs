@@ -1376,7 +1376,9 @@ pub(crate) fn sheet_edge(grid: &mut Grid, bounds: Bounds, frame: Rgb, line: Rgb)
 /// otherwise on two, broken at the last " · " that leaves the first line within the room, or
 /// else at a space; what the second line can't hold is cut with "…". Cut on one line, a pane
 /// tab's tip lost the end of what it said, "right-click to open the tra…", with 48 px empty
-/// after it (0.11.0's release check, P7, 64-transcript-tab-hover).
+/// after it (0.11.0's release check, P7, 64-transcript-tab-hover). Broken at a " · ", the
+/// second line is a phrase of its own and starts with a capital: it read "right-click to open
+/// the transcript" (the release review of 0.12.0, 64-transcript-tab-hover).
 fn wrap_tip(text: &str, room: f32, width: impl Fn(&str) -> f32) -> String {
     if width(text) <= room {
         return text.to_string();
@@ -1386,8 +1388,13 @@ fn wrap_tip(text: &str, room: f32, width: impl Fn(&str) -> f32) -> String {
         found.filter(|(at, _)| width(&text[..*at]) <= room).last()
     };
     let cut = |text: &str| crate::agent_task::fit(text, room, &width).into_owned();
-    match breaks(" · ").or_else(|| breaks(" ")) {
-        Some((at, next)) => format!("{}\n{}", &text[..at], cut(&text[next..])),
+    let dotted = breaks(" · ").map(|found| (found, true));
+    match dotted.or_else(|| breaks(" ").map(|found| (found, false))) {
+        Some(((at, next), true)) => {
+            let rest = crate::install::capitalized(&text[next..]);
+            format!("{}\n{}", &text[..at], cut(&rest))
+        }
+        Some(((at, next), false)) => format!("{}\n{}", &text[..at], cut(&text[next..])),
         None => cut(text),
     }
 }
@@ -11796,7 +11803,8 @@ impl App {
             let rows = self.inbox_listed();
             let top = self.dock.tops.of(Front::Inbox);
             let shown = (rows.as_slice(), top, std::time::Instant::now());
-            crate::inbox::draw(grid, panel, shown, self.hover, (&*self.measure, theme));
+            let pointed = (self.hover, self.pane_edge());
+            crate::inbox::draw(grid, panel, shown, pointed, (&*self.measure, theme));
             return;
         }
         if self.dock.front == Front::Comments {
@@ -35923,11 +35931,11 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             None,
             "it shows in full"
         );
+        // Three letters each have no room here, so the tabs behind are at their marks: "Co…"
+        // and "Te…" were two letters each, which the least now is three (the release review
+        // of 0.12.0, 14-agents).
         let comments = tabs.iter().find(|tab| tab.0 == Front::Comments).unwrap().2;
-        assert!(
-            (5..9).contains(&comments.w),
-            "cut short, to no fewer than three letters: {comments:?}"
-        );
+        assert_eq!(comments.w, 3, "cut to its mark: {comments:?}");
         assert_eq!(
             app.dock.cut_name(title, comments.x + 1).as_deref(),
             Some("Comments"),
@@ -35949,7 +35957,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         // it, and a pane this narrow, as Cellix's is inside Claude Code, couldn't be maximized
         // by anything in sight. The icons end the row now that the button that quits is at the
         // foot, a column from the window's edge, so the tabs have the other column it took.
-        assert_eq!(strip.trim_end(), "  Co…  Agents ×  Te… +  ⤢", "{row}");
+        // The button follows the + a column after it, with the room left after it.
+        assert_eq!(strip.trim_end(), "  ◆  Agents ×  >  +   ⤢", "{row}");
         for x in area.x..first_icon {
             let hit = app.dock.hit(title, x);
             assert_ne!(hit, Some(TabHit::Pick), "no chevron at {x}");

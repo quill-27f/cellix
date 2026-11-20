@@ -1408,21 +1408,27 @@ fn a_pane_tabs_tip_stands_inside_the_pane_from_the_tabs_start() {
     let lines: Vec<(String, f32)> = (grid.paint.iter())
         .filter_map(|p| match p {
             Paint::Text { text, y, font, .. }
-                if font.size == TOOLTIP_SIZE && said.contains(text.as_str()) =>
+                if font.size == TOOLTIP_SIZE
+                    && said.to_lowercase().contains(&text.to_lowercase()) =>
             {
                 Some((text.clone(), *y as f32 / UNIT as f32))
             }
             _ => None,
         })
         .collect();
-    // Too long for the pane at this width, it's on two lines, all of it, broken at a " · ".
+    // Too long for the pane at this width, it's on two lines, all of it, broken at a " · ",
+    // the second a phrase of its own that starts with a capital: "Right-click to open the
+    // transcript", where it read "right-click…" (the release review of 0.12.0).
     assert_eq!(lines.len(), 2, "{lines:?}");
+    let second = lines[1].0.as_str();
+    assert!(second.starts_with(|c: char| c.is_uppercase()), "{lines:?}");
     assert_eq!(
-        format!("{} · {}", lines[0].0, lines[1].0),
-        said,
+        format!("{} · {}", lines[0].0, second).to_lowercase(),
+        said.to_lowercase(),
         "{lines:?}"
     );
-    assert!(!lines[1].0.ends_with('…'), "{lines:?}");
+    assert!(said.ends_with(&second[1..]), "{lines:?}");
+    assert!(!second.ends_with('…'), "{lines:?}");
     // The second line a line of the terminal's under the first, both inside the tip with the
     // air a tip of one line has over and under its words.
     let step = (lines[1].1 - lines[0].1) * ROW;

@@ -115,9 +115,12 @@ fn the_agents_list_puts_who_needs_you_first() {
     assert!(!text.contains("DONE") && text.contains("IDLE 2"), "{text}");
 }
 
-/// How long ago stands in one column down the list: every row keeps room at its end as wide
-/// as the "needs you" chip, whatever its state, where the row that needs you had its time
-/// pushed six columns left of the others'.
+/// How long ago stands in one column down the rows that have something at their end: each
+/// keeps room there as wide as the "needs you" chip, where the row that needs you had its time
+/// pushed six columns left of the others'. An idle row has nothing at its end, so its time is
+/// its last word and ends where every row's last does, the chip's end: kept in the chip's
+/// empty room, it stood 139 px short of every other row's end (the release review of 0.12.0,
+/// 14-agents). This test had every row's time in the one column, idle ones too.
 #[test]
 fn the_agents_lists_times_stand_in_one_column() {
     let (_dir, mut app) = project();
@@ -146,34 +149,80 @@ fn the_agents_lists_times_stand_in_one_column() {
     app.serve(event("c", "Gemini", AgentState::NeedsYou, "Allow Bash?"));
     app.serve(event("d", "Codex", AgentState::Idle, "Ready"));
     app.run(cellix_input::Command::ListAgents);
-    // On cells: where each row's "<1m" ends.
+    // On cells: where each row's "<1m" ends, the idle rows' apart, and where the chip ends.
     let grid = screen(&app);
-    let ends: Vec<usize> = (0..grid.height())
-        .filter_map(|y| {
-            let row = grid.row_text(y);
-            let at = row.find("<1m")?;
-            Some(row[..at].chars().count() + 3)
-        })
-        .collect();
-    assert_eq!(ends.len(), 4, "{}", grid.text());
+    let (mut busy, mut idle, mut chip) = (Vec::new(), Vec::new(), None);
+    // An idle row has nothing after its time; the others their state.
+    let is_idle = |row: &str, at: usize| row[at + 3..].trim().is_empty();
+    for y in 0..grid.height() {
+        let row = grid.row_text(y);
+        let Some(at) = row.find("<1m") else { continue };
+        if let Some(chip_at) = row.find("needs you") {
+            chip = Some(row[..chip_at].chars().count() + "needs you".len());
+        }
+        let end = row[..at].chars().count() + 3;
+        if is_idle(&row, at) {
+            idle.push(end)
+        } else {
+            busy.push(end)
+        }
+    }
+    // Gemini asking, a Codex done unseen and Claude Code working; the other Codex idle.
+    assert_eq!((busy.len(), idle.len()), (3, 1), "{}", grid.text());
     assert!(
-        ends.windows(2).all(|w| w[0] == w[1]),
-        "{ends:?}\n{}",
+        busy.windows(2).all(|w| w[0] == w[1]),
+        "{busy:?}\n{}",
         grid.text()
     );
-    // With pictures: the same right edge for every painted time.
+    let chip = chip.expect("the chip");
+    assert!(
+        idle.iter().all(|end| *end == chip),
+        "{idle:?} against the chip's end {chip}\n{}",
+        grid.text()
+    );
+    // With pictures: the same right edge for the times of rows with a state, and an idle
+    // row's at the end of the chip's.
     app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
     let grid = screen(&app);
-    let edges: Vec<i32> = grid
-        .paint
-        .iter()
+    let unit = cellix_render::UNIT;
+    let row_of = |y: i32| grid.row_text((y / unit) as u16);
+    let times: Vec<(i32, bool)> = (grid.paint.iter())
         .filter_map(|p| match p {
-            cellix_render::Paint::Text { x, text, .. } if text == "<1m" => Some(*x),
+            cellix_render::Paint::Text { x, y, text, .. } if text == "<1m" => {
+                let row = row_of(*y);
+                let at = row.find("<1m")?;
+                Some((*x, is_idle(&row, at)))
+            }
             _ => None,
         })
         .collect();
-    assert_eq!(edges.len(), 4, "{edges:?}");
-    assert!(edges.windows(2).all(|w| w[0] == w[1]), "{edges:?}");
+    assert_eq!(times.len(), 4, "{times:?}");
+    let chip_end = (grid.paint.iter())
+        .find_map(|p| match p {
+            cellix_render::Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill != app.theme().sidebar.bg
+                && row_of(bounds.y + bounds.h / 2).contains("needs you")
+                && bounds.w < unit * 12
+                && bounds.w > unit * 3 =>
+            {
+                Some(bounds.x + bounds.w)
+            }
+            _ => None,
+        })
+        .expect("the chip's wash");
+    let busy: Vec<i32> = (times.iter()).filter(|t| !t.1).map(|t| t.0).collect();
+    assert!(busy.windows(2).all(|w| w[0] == w[1]), "{times:?}");
+    for (x, idle) in times {
+        if idle {
+            assert!(
+                (x - chip_end).abs() <= unit / 17,
+                "an idle row's time ends at {x}, the chip at {chip_end}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -393,6 +442,194 @@ fn a_failed_step_is_a_chip_of_the_failed_colour() {
     let at = grid.row_text(y).find("failed").unwrap();
     let column = grid.row_text(y)[..at].chars().count() as u16;
     assert_eq!(grid.cell(column, y).style.bg, cells.theme().failed_tint());
+}
+
+/// A line that parts a list in the side pane runs from where its rows start to where they
+/// end, as far in from the pane's right edge as from its left, measured in what's painted:
+/// the Agents list's under its agents, beside START's "shell" and a "needs you" chip, and the
+/// Inbox's when it's empty. They ended 6 to 9 px short of the rows, two columns in from the
+/// pane's edge where the rows' ends are a column and a half in (the release review of 0.12.0,
+/// 14-agents, 51-agent-copilot-asks, 51-inbox-empty).
+#[test]
+fn a_lists_lines_end_where_its_rows_end() {
+    use cellix_render::{FontMeasure, Paint, UNIT};
+    let (_dir, mut app) = project();
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+    app.tab_for("Gemini", "c");
+    app.serve(Request::Agent(AgentEvent {
+        session: "c".into(),
+        agent: "Gemini".into(),
+        state: AgentState::NeedsYou,
+        detail: "Allow Bash?".into(),
+        folder: "/w".into(),
+        pid: None,
+        transcript: String::new(),
+        name: String::new(),
+    }));
+    app.run(cellix_input::Command::ListAgents);
+    let px = |units: i32| units as f32 / UNIT as f32 * 17.0;
+    let border = app.theme().border;
+    let area = app.dock_area().expect("the pane");
+    let (pane_left, pane_right) = (
+        (f32::from(area.x) + app.pane_edge()) * 17.0,
+        f32::from(area.right()) * 17.0,
+    );
+    // The lines across the pane under its tabs, as (start, end) in pixels.
+    let lines = |grid: &Grid| -> Vec<(f32, f32)> {
+        (grid.paint.iter())
+            .filter_map(|p| match p {
+                Paint::Hairline { bounds, color }
+                    if *color == border
+                        && bounds.h == 0
+                        && bounds.y >= i32::from(area.y + 1) * UNIT =>
+                {
+                    Some((px(bounds.x), px(bounds.x + bounds.w)))
+                }
+                _ => None,
+            })
+            .filter(|(start, end)| {
+                end - start > 17.0 * 10.0 && *start > pane_left && *end < pane_right
+            })
+            .collect()
+    };
+    let grid = screen(&app);
+    let found = lines(&grid);
+    let rule = *found
+        .last()
+        .unwrap_or_else(|| panic!("the line under START: {found:?}"));
+    // Where the rows end: START's "shell", and the chip that says Gemini needs you.
+    let shell = (grid.paint.iter())
+        .find_map(|p| match p {
+            Paint::Text { x, text, .. } if text == "shell" => Some(px(*x)),
+            _ => None,
+        })
+        .expect("shell");
+    assert!(
+        (rule.1 - shell).abs() < 0.5,
+        "the line ends at {}, shell at {shell}",
+        rule.1
+    );
+    let (left, right) = (rule.0 - pane_left, pane_right - rule.1);
+    assert!(
+        (left - right).abs() <= 1.0,
+        "{left} px from the pane's left to the line, {right} from its end to the right"
+    );
+    // The Inbox: Gemini asking is in it, its age ending where the Agents list's rows end.
+    app.run(cellix_input::Command::ShowInbox);
+    let grid = screen(&app);
+    let small = cellix_render::Font {
+        size: crate::threads::SMALL,
+        ..cellix_render::Font::default()
+    };
+    let (age, room) = (grid.paint.iter())
+        .find_map(|p| match p {
+            Paint::Text {
+                x, text, max_width, ..
+            } if text == "now" => {
+                let wide = cellix_render::Measure::width(&*app.measure, text, small) * 17.0;
+                Some((px(*x) + wide, px(*x + *max_width)))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("the asking agent's age: {}", grid.text()));
+    assert!(
+        (age - shell).abs() < 0.5,
+        "its age ends at {age}, the rows' end at {shell}"
+    );
+    // And all of it is painted: stopped at the cells' end, "now" lost its last letter.
+    assert!(room >= age - 0.5, "painted up to {room}, its end at {age}");
+    // Empty, its line: the same.
+    let (_dir, mut app) = project();
+    app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
+    app.run(cellix_input::Command::ShowInbox);
+    let grid = screen(&app);
+    let found = lines(&grid);
+    let rule = *found
+        .last()
+        .unwrap_or_else(|| panic!("the Inbox's line: {found:?}"));
+    let (left, right) = (rule.0 - pane_left, pane_right - rule.1);
+    assert!(
+        (left - right).abs() <= 1.0,
+        "the Inbox: {left} px from the pane's left to the line, {right} from its end"
+    );
+}
+
+/// The words on a chip of their own colour's wash read at 4.5 to 1 or better on it, in both
+/// themes and on a light terminal's white: in the light theme "needs you" read at 4.28 and a
+/// transcript's "failed" at 4.4 (the release review of 0.12.0, m2-agents-urgency-light and
+/// 66-transcript-light). Read off what's painted: the chip's fill and its words' colour.
+#[test]
+fn a_chips_words_read_at_four_and_a_half_to_one_in_every_theme() {
+    use crate::theme::{Theme, contrast};
+    use cellix_render::{FontMeasure, Paint, Rgb};
+    let dir = tempfile::tempdir().unwrap();
+    let page = dir.path().join("transcript.md");
+    fs::write(&page, "- Bash `cargo test orders` · ==failed==\n").unwrap();
+    let themes = [
+        Theme::named(Some("dark")),
+        Theme::named(Some("light")),
+        Theme::named(Some("light")).on_background(Rgb(255, 255, 255)),
+    ];
+    // The colour of the painted words `word`, and the fill of the panel under them.
+    let chip = |grid: &Grid, word: &str| {
+        let (x, color) = (grid.paint.iter())
+            .find_map(|p| match p {
+                Paint::Text { x, text, color, .. } if text.trim() == word => Some((*x, *color)),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{word}, painted"));
+        // Inside the word, past any spaces it starts with.
+        let x = x + cellix_render::UNIT * 3 / 2;
+        let fill = (grid.paint.iter()).rev().find_map(|p| match p {
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if bounds.x <= x
+                && x < bounds.x + bounds.w
+                && bounds.w < 50 * cellix_render::UNIT =>
+            {
+                Some(*fill)
+            }
+            _ => None,
+        });
+        (color, fill.unwrap_or_else(|| panic!("{word}'s chip")))
+    };
+    for theme in themes {
+        let measure = std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36));
+        let mut app = App::new(dir.path().to_path_buf(), (130, 36));
+        app.set_measure(measure.clone());
+        app.theme = theme;
+        app.open(&page).unwrap();
+        let (ink, ground) = chip(&screen(&app), "failed");
+        assert_eq!(ground, theme.failed_tint(), "the failed colour's tint");
+        let ratio = contrast(ink, ground);
+        assert!(ratio >= 4.5, "failed: {ink:?} on {ground:?} is {ratio}");
+        let (_dir, mut app) = project();
+        app.set_measure(measure);
+        app.theme = theme;
+        app.tab_for("Gemini", "c");
+        app.serve(Request::Agent(AgentEvent {
+            session: "c".into(),
+            agent: "Gemini".into(),
+            state: AgentState::NeedsYou,
+            detail: "Allow Bash?".into(),
+            folder: "/w".into(),
+            pid: None,
+            transcript: String::new(),
+            name: String::new(),
+        }));
+        app.run(cellix_input::Command::ListAgents);
+        let (ink, ground) = chip(&screen(&app), "needs you");
+        let ratio = contrast(ink, ground);
+        assert!(ratio >= 4.5, "needs you: {ink:?} on {ground:?} is {ratio}");
+        // Still the attention colour's, only as much deeper as it takes.
+        assert!(
+            contrast(ink, theme.attention) < 1.3,
+            "{ink:?} against {:?}",
+            theme.attention
+        );
+    }
 }
 
 /// A row's end is as far in from the pane's right edge as its mark is from its left, so the

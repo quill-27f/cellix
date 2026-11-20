@@ -125,6 +125,12 @@ impl Theme {
         mix(self.text.bg, self.deleted(), share)
     }
 
+    /// The word on that chip: the failed colour, deepened where it would read under 4.5 to 1
+    /// on the tint, as it did in the light theme (4.4).
+    pub fn failed_ink(&self) -> Rgb {
+        readable(self.deleted(), self.failed_tint(), 4.5)
+    }
+
     /// What highlighted text stands on.
     pub fn highlighter(&self) -> Rgb {
         if self.is_light() {
@@ -701,6 +707,22 @@ fn mix(from: Rgb, to: Rgb, by: f32) -> Rgb {
         channel(from.1, to.1),
         channel(from.2, to.2),
     )
+}
+
+/// `fg` as it reads on `ground` at `ratio` to 1 or more: itself where it does, or else taken a
+/// step at a time toward black on a light ground, white on a dark one, until it does. A chip's
+/// words on a wash of their own colour came out just short of 4.5 to 1 in the light theme
+/// ("needs you" 4.28, "failed" 4.4: the release review of 0.12.0, m2 and 66).
+pub(crate) fn readable(fg: Rgb, ground: Rgb, ratio: f32) -> Rgb {
+    let toward = if contrast(ground, Rgb(0, 0, 0)) >= contrast(ground, Rgb(255, 255, 255)) {
+        Rgb(0, 0, 0)
+    } else {
+        Rgb(255, 255, 255)
+    };
+    (0..=100)
+        .map(|step| mix(fg, toward, step as f32 / 100.0))
+        .find(|shade| contrast(*shade, ground) >= ratio)
+        .unwrap_or(toward)
 }
 
 /// How far apart two colours are to the eye, as WCAG counts it: 1 to 21.

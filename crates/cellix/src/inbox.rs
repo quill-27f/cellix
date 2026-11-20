@@ -367,7 +367,7 @@ pub fn draw(
     grid: &mut Grid,
     area: Rect,
     (rows, top, now): (&[Listed], usize, Instant),
-    hover: Option<(u16, u16)>,
+    (hover, edge): (Option<(u16, u16)>, f32),
     (measure, theme): (&dyn Measure, &Theme),
 ) {
     let body = theme.sidebar;
@@ -378,8 +378,13 @@ pub fn draw(
     };
     let left = area.x + SIDE;
     let right = area.right().saturating_sub(SIDE);
+    // Where what stands at a row's end ends, as far from the sheet's right edge as the rows'
+    // marks are from its left, as the Agents list's rows: two columns in, it was 9 px further.
+    let row_end = crate::measures::row_end(area, edge, measure);
+    // What the cells' columns put at a row's end moves out as far.
+    let out = row_end - f32::from(right);
     if rows.is_empty() {
-        draw_empty(grid, area, hover, (measure, theme));
+        draw_empty(grid, (area, row_end), hover, (measure, theme));
         return;
     }
     let head = area.y + 1;
@@ -440,7 +445,7 @@ pub fn draw(
         // and an × to let it go.
         let title_end = if hovered {
             grid.glyph(
-                right as f32 - 1.5,
+                right as f32 + out - 1.5,
                 y,
                 Icon::Close,
                 theme.gutter.fg,
@@ -450,7 +455,7 @@ pub fn draw(
             // On a chip, so it reads as what a click does rather than a caption.
             let action = item.kind.action();
             let words = measure.width(action, small());
-            let x = right as f32 - 3.0 - words;
+            let x = right as f32 + out - 3.0 - words;
             let chip = Bounds::cells(x - 1.0, y as f32 + 0.05, words + 2.0, 0.9);
             grid.panel(chip, 30, Some(theme.tint), None);
             let on_chip = Style {
@@ -469,8 +474,11 @@ pub fn draw(
             ((x - 1.0).floor() as u16).saturating_sub(1)
         } else {
             let when = age(item.since, now);
-            let x = right as f32 - measure.width(&when, small());
-            grid.label_at(x, x.floor() as u16, y, &when, quiet, right, SMALL);
+            let x = row_end - measure.width(&when, small());
+            // Painted to the row's end, past the cell it starts in: stopped at the cells' end,
+            // "now" lost its last letter.
+            let stop = (row_end.ceil() as u16).max(right);
+            grid.label_at(x, x.floor() as u16, y, &when, quiet, stop, SMALL);
             (x.floor() as u16).saturating_sub(1)
         };
         grid.label(text_x, y, &item.title, ground, title_end);
@@ -507,7 +515,7 @@ pub fn draw(
 
 fn draw_empty(
     grid: &mut Grid,
-    area: Rect,
+    (area, row_end): (Rect, f32),
     hover: Option<(u16, u16)>,
     (measure, theme): (&dyn Measure, &Theme),
 ) {
@@ -529,7 +537,11 @@ fn draw_empty(
                 grid.label_at(left as f32 + 3.0, left + 3, y, &text, dim, right, SMALL);
             }
             None if text == "\u{2500}" => {
-                let rule = Bounds::cells(left as f32, y as f32 + 0.5, (right - left) as f32, 0.0);
+                // From where the rows start to where they end, 25 px in from the pane's edge
+                // either side: two columns in, it ended 9 px short of the Agents list's rows
+                // (the release review of 0.12.0, 51-inbox-empty).
+                let across = row_end - f32::from(left);
+                let rule = Bounds::cells(left as f32, y as f32 + 0.5, across, 0.0);
                 grid.hairline(rule, theme.border);
             }
             None if heading => {

@@ -1678,7 +1678,9 @@ a column of its own, as an icon is, so every row's words start in one place. It 
 the row under its icon. A tip longer than the room it has, as an agent's tab's on what its
 context holds, goes on to a second line, the terminal's line under the first, broken at a " · "
 where one leaves the first line within the room: cut on one line it lost what it said last,
-"right-click to open the tra…", with 48 px empty after it (0.11.0's release check, P7). While a
+"right-click to open the tra…", with 48 px empty after it (0.11.0's release check, P7). Broken
+there, the second line is a phrase of its own and starts with a capital, "Right-click to open the
+transcript" (the release review of 0.12.0, 64-transcript-tab-hover). While a
 tip covers the side pane's terminal's cursor, the cursor goes: a tip covers the row under its
 line but the top 10 px of it, and a sliver of the cursor stood on the tip's edge (R4). Nothing
 covers part of a row. A palette (Quick Open, the commands, and
@@ -1843,9 +1845,11 @@ was nearly twice what it painted, and two tabs, an agent's and a terminal's, wer
 cut the row short with 200 px to spare, which took the + away (found in 0.11.0's tour). So
 the + stands a cell after the last tab whenever the tabs and it fit, and its menu is in reach;
 it gives way only when the row truly overflows. With the button that maximizes the pane right
-after it, the + stands in the middle of the air from the last tab's ink, its × where it keeps
-room for one, to the button's: at the start of its columns it stood 39 px after a tab's × and
-34 before the button (0.11.0's release check, m1-agent-tabs). A name is never cut mid-letter: it's whole
+after it, the + stands in the middle of the air from the last tab's ink to the button's, by
+what's drawn: the ×'s of the tab in front, and what a tab behind draws, whose × shows only
+under the pointer: at the start of its columns it stood 39 px after a tab's × and 34 before the
+button (0.11.0's release check, m1-agent-tabs), and by the room a tab behind keeps for its ×,
+79 px after its spinner and 47 before the button (the release review of 0.12.0, 172). A name is never cut mid-letter: it's whole
 while the tab has the width it paints, and only short of that ends in a "…" at its measured
 width. A tab in front, or under the pointer, has its words in the text's own colour, whatever
 its program is doing; one whose program ended says so by its mark, dimmed. Behind, they're the
@@ -1863,11 +1867,13 @@ fit and then cut short with a "…", sharing the room evenly as VS Code's shrink
 shows the same number of letters, as many as fit; one whose whole name is shorter keeps it and
 leaves the rest to the others; and what whole columns leave over goes a column at a time to the
 tabs cut short, as air after their names where it would hold a letter one has and the others
-haven't, so no room stands empty after the + while a name is cut. No tab is at its
-mark while another shows any of its name: where even one letter each has no room, they go to
-their marks together (the user's choice, 2026-11-19; the widest gave a column at a time, and
-Gemini CLI went to its mark while Claude Code kept "pricing p…", 0.11.0's release check, R3,
-and then, one going to its mark first, "pri…" with the room it freed after the +). Two of
+haven't, so no room stands empty after the + while a name is cut. A name cut short keeps three
+letters at the least, or two where the third is a space; one or two letters and a "…" ("p…",
+"pr…") said nothing its mark doesn't (the release review of 0.12.0, 14-agents, m1-agent-tabs).
+No tab is at its mark while another shows any of its name: where three letters each have no
+room, they go to their marks together (the user's choice, 2026-11-19; the widest gave a column
+at a time, and Gemini CLI went to its mark while Claude Code kept "pricing p…", 0.11.0's release
+check, R3, and then, one going to its mark first, "pri…" with the room it freed after the +). Two of
 them side by side have a hairline between them, in the middle of the air from the ink of one
 to the ink of the next, as between two whole tabs behind, so what
 one is doing at its end is never read as the next one's. Its mark and its name stand where
@@ -1878,11 +1884,15 @@ as one (0.11.0's release review, m1-agent-tabs). A dot follows the name as on a 
 in the middle of the room a spinner would have there, about 14 px to its ink, and what the
 tab's last column has to spare is after it: at the tab's end, the spare room stood
 between the name and the dot, 33 px, and the dot read as the next tab's (0.11.0's release
-check, m1-agent-tab-done). Short of a letter and the "…" each, the
+check, m1-agent-tab-done). Short of three letters and the "…" each, the
 tabs behind are cut to their marks, and what their programs are doing beside them: the mark in the tab's
 middle with the same air either side, about 16 px to its ink, in three columns, or five with
 its state, and under the pointer a chip that's exactly the mark and that air (it kept a chip
-five columns wide with the mark at its left, 16 px before it and 47 after). The first tab in
+five columns wide with the mark at its left, 16 px before it and 47 after). Side by side, tabs
+at their marks have the same air from one's ink to the next one's all along them, and half of
+it at either end, so the line between two stands as far from both on every one: each centred in
+its own whole columns, the air beside the lines ran 14 to 21 px, by how each one's columns
+rounded (the release review of 0.12.0, m2-agents-urgency). The first tab in
 the row has the sheet's line just before it, and takes what it needs, a column more, for its
 mark to stand in the middle between that line and its end with its chip 8 px from the line
 (the user's choice, 2026-11-19: in three columns it read 22 | mark | 14 from the line, and
@@ -1892,8 +1902,12 @@ stands in the middle of its three (three agents in the tour's narrow window). Ev
 mark, and marks tell tabs apart, as herdr's narrow tabs do; letters come back, to every name
 alike, as room allows. On cells a view's tab, a name elsewhere, is cut to the
 letter its icon has at the top right. The + keeps its place after the tabs while any tab is
-cut rather than listed, and the button that maximizes the pane its three columns at the end
-of the pane's part of the row: the names are cut to their marks before either gives way. With
+cut rather than listed, and the button that maximizes the pane its three columns, a column
+after the + and no further than the end of the pane's part of the row: the names are cut to
+their marks before either gives way. Where tabs at their marks leave room, it falls after the
+button, so the + stays in the middle between the last tab's ink and the button's: kept at the
+row's end, the button stood 70 px after the + against 39 before it (the release review of
+0.12.0, m2-agents-urgency, 71-sample-changes-row-narrow). With
 the button gone, the +'s own last column of air may be the column kept clear before the icons
 at the top right, which is air too: three agents in a pane of 44 columns were a column short,
 and showed the tab in front alone with 154 px empty (0.11.0's release review,
@@ -2682,11 +2696,19 @@ design's chip of 20/28 of a taller row with room under its words' tails (it was 
 of "you" a pixel over its foot), saying "needs you" in the attention colour with what it's
 asking on the row under it, its words' ink in its middle, raised the 2 px their tails reach
 further down than their heads reach up (they had 11 px over them and 7 under), a green
-dot, or nothing. Every row keeps room at its end as wide as that chip, so how long ago stands in
-one column down the list (it moved six columns left on the row that needs you). What stands at
-a row's end, the chip, the spinner or the dot, ends as far in from the pane's right edge as the
-marks start from its left, so the band under the pointer has 15 px either side of what it
-holds (it had 36 at its end). A name is in the words' own colour, since a press on any row
+dot, or nothing. Every row with something at its end keeps room there as wide as that chip, so
+how long ago stands in one column down those rows (it moved six columns left on the row that
+needs you); an idle row has nothing there, so how long ago is its last word and ends where
+every row's last does (kept in the chip's empty room, it stood 139 px short of the rest: the
+release review of 0.12.0, 14-agents). What stands at a row's end, the chip, the spinner, the dot
+or an idle row's time, ends as far in from the pane's right edge as the marks start from its
+left (`measures::row_end`), so the band under the pointer has 15 px either side of what it
+holds (it had 36 at its end). A line that parts the list, the one under Terminal in START, runs
+from where the rows' marks start to where their ends end, 25 px in from the pane's edge either
+side, as the Inbox's does: two columns in, they stopped 6 to 9 px short of the rows (the
+release review of 0.12.0, 14, 51). The chip's words are the attention colour, deepened where
+that reads under 4.5 to 1 on its wash (`theme::readable`), as in the light theme (4.28 to 1),
+and so is a transcript's "failed" on its chip (4.4). A name is in the words' own colour, since a press on any row
 does something: bold while its agent does something, at regular weight while it's idle or is a
 helper under its agent; how long ago is what's quiet. An idle name in the quiet colour read as
 the menus' "not installed", and a helper as bold as its agent read as its equal (0.11.0's

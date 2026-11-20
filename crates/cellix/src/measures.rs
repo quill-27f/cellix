@@ -287,6 +287,20 @@ pub fn band(
     cellix_render::Bounds::cells(left, top, right - left, f32::from(row.h) - inset * 2.0)
 }
 
+/// Where what stands at the end of a side pane list's rows ends, in cells: as far in from the
+/// sheet's right edge as a row's mark is from its left, two columns into `area`, `edge` being
+/// how far into its first column the sheet starts. So the band under the pointer has as much
+/// air round what it holds on both sides (0.11.0's review of `next`, m2), and every line
+/// that parts a list ends there too, 25 px from the pane's edge as it starts 25 px from the
+/// other: they ended 9 px short of the rows (the release review of 0.12.0, 51, 14). On cells,
+/// two columns in.
+pub fn row_end(area: cellix_render::Rect, edge: f32, measure: &dyn Measure) -> f32 {
+    if measure.in_cells() {
+        return f32::from(area.right().saturating_sub(2));
+    }
+    f32::from(area.right()) - (2.0 - edge)
+}
+
 /// A chip in a row of tabs, `wide` columns from `left` on row `y`: under the pointer on an
 /// icon at the top right, the sidebar's button, the +, a tab behind, and the count of tabs out
 /// of view, one height for all. On a row with room, 34 px of the terminal's line, kept at

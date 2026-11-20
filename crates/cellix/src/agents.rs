@@ -617,7 +617,7 @@ impl Agents {
         grid.fill(area, theme.sidebar);
         // The band behind a pointed row, as far in from the sheet's line on both sides.
         let band = |row: Rect| crate::measures::band(row, edge, 0.055, measure);
-        let end = row_end(area, edge, measure);
+        let end = crate::measures::row_end(area, edge, measure);
         let scrolled = scrolled.min(self.last_top(area.h, agents));
         let order = ordered(agents);
         let dim = Style {
@@ -729,9 +729,10 @@ impl Agents {
                     grid.label_right_at(end, right, y, shown, dim, DETAIL_SIZE);
                 }
                 Line::Rule => {
-                    // In the middle of its own row, from where the words start to where they
-                    // end, so nothing comes within 8 px of it.
-                    let across = f32::from(area.right().saturating_sub(2) - side);
+                    // In the middle of its own row, from where the rows' marks start to where
+                    // what stands at their ends ends, so nothing comes within 8 px of it: it
+                    // stopped 6 px short of the rows (the release review of 0.12.0, 14).
+                    let across = end - f32::from(side);
                     let rule = Bounds::cells(side as f32, y as f32 + 0.5, across, 0.0);
                     grid.hairline(rule, theme.border);
                 }
@@ -928,10 +929,19 @@ fn draw_row(
     if row.urgency == Urgency::NeedsYou {
         draw_needs_you(grid, (row_end, right, y), (measure, theme));
     }
-    // Every row keeps the chip's room for its state, so how long ago is one column. Its
-    // letters keep the cells they had, before the chip's own.
-    let end = row_end - chip_width(measure) - AGO_GAP;
-    let mut cells = f32::from(right) - chip_width(measure) - AGO_GAP;
+    // A row with something at its end keeps the chip's room for it, so how long ago is one
+    // column on them. An idle row has nothing there, and how long ago is its last word, at
+    // the row's end with every row's last: in the chip's empty room it stood 139 px short
+    // of the rest (the release review of 0.12.0, 14-agents). Its letters keep the cells
+    // they had, before the chip's own.
+    let idle = row.urgency == Urgency::Idle;
+    let room = if idle {
+        0.0
+    } else {
+        chip_width(measure) + AGO_GAP
+    };
+    let end = row_end - room;
+    let mut cells = f32::from(right) - room;
     let dim = Style {
         fg: theme.gutter.fg,
         ..theme.sidebar
@@ -985,19 +995,6 @@ fn draw_row(
     }
 }
 
-/// Where what stands at a row's end ends, in cells: as far in from the sheet's right edge as
-/// a row's mark is from its left, `edge` being how far into its first column the sheet starts,
-/// so the band under the pointer has as much air round what it holds on both sides: it ended
-/// 36 px from the band against 15 at its start (0.11.0's review of `next`, m2). On cells, two
-/// columns in.
-fn row_end(area: Rect, edge: f32, measure: &dyn Measure) -> f32 {
-    if measure.in_cells() {
-        return f32::from(area.right().saturating_sub(2));
-    }
-    // The marks stand two columns into the area.
-    f32::from(area.right()) - (2.0 - edge)
-}
-
 /// The word after a helper's name, and the room before it, in cells.
 const HELPER: &str = "helper";
 const HELPER_GAP: f32 = 1.0;
@@ -1035,8 +1032,10 @@ fn draw_needs_you(
             None,
         );
     }
+    // Its words in the attention colour, deepened where that reads under 4.5 to 1 on the
+    // wash, as it did in the light theme (4.28).
     let style = Style {
-        fg: theme.attention,
+        fg: crate::theme::readable(theme.attention, wash, 4.5),
         bold: true,
         ..theme.sidebar
     };

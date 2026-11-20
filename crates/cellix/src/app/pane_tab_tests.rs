@@ -1353,11 +1353,13 @@ fn shown_name(app: &App, grid: &Grid, row: cellix_render::Rect, index: usize) ->
 
 /// In a row too short for every tab whole, those behind the one in front share the room
 /// evenly, as VS Code's shrink mode does: each shows the same number of letters, as many as
-/// fit; one whose whole name is shorter keeps it; no room stands
+/// fit, and never fewer than three; one whose whole name is shorter keeps it; no room stands
 /// empty after the + while a name is cut; and none goes to its mark while another shows any of
-/// its name, so where even a letter each has no room, all go to their marks together. Gemini
+/// its name, so where three letters each have no room, all go to their marks together. Gemini
 /// CLI stood at its mark while Claude Code kept "pricing p…", and then "pri…" with the room it
-/// freed left after the + (0.11.0's release check, R3, m1-agent-tabs; the user's choice).
+/// freed left after the + (0.11.0's release check, R3, m1-agent-tabs; the user's choice). The
+/// least was one letter, and "p…" and "pr…" said nothing a mark doesn't (the release review of
+/// 0.12.0, 14-agents, m1-agent-tabs): this test let a name cut to one letter pass.
 #[test]
 #[cfg(unix)]
 fn tabs_behind_share_the_room_evenly() {
@@ -1416,6 +1418,16 @@ fn tabs_behind_share_the_room_evenly() {
             most == least || (spaced && most == least + 1),
             "{width}: {shown:?}: {text}"
         );
+        // Three letters at the least, or two where the third is a space, which goes with the
+        // cut ("og…").
+        for (name, full) in shown.iter().zip(names) {
+            let kept = letters(name);
+            let spaced = full.chars().nth(kept) == Some(' ');
+            assert!(
+                !name.ends_with('…') || kept >= 3 || (spaced && kept >= 2),
+                "{width}: {name} of {full}: {text}"
+            );
+        }
         // A name no wider than that cut, its "…" and a column it rounds to stays whole: "docs"
         // takes no more room whole than cut to "do…".
         let font = Font::default();
@@ -1600,7 +1612,6 @@ fn the_plus_stands_in_the_middle_between_the_tabs_and_the_button() {
     }
     app.dock.active = Some(2);
     app.dock.front = Front::Session;
-    let theme = *app.theme();
     let (mut whole, mut cut) = (0, 0);
     for width in (30..90).rev() {
         app.dock.width = Some(width);
@@ -1608,26 +1619,19 @@ fn the_plus_stands_in_the_middle_between_the_tabs_and_the_button() {
         let grid = screen(&app);
         let row = title(&app);
         let (plus, button) = (app.dock.plus_x(row), app.dock.maximize_button(row));
-        if !app.dock.plus_shows(row) || !app.dock.maximize_shows(row) || button > plus + 4 {
+        if !app.dock.plus_shows(row) || !app.dock.maximize_shows(row) {
             continue;
         }
-        let rows = super::strip_tests::picture(&grid, row.y);
-        let from = usize::from(plus) * 17 - 34;
-        let to = usize::from(button + 3) * 17;
-        let runs = super::strip_tests::ink_runs(&rows, theme.tab.bg, (from, to));
-        // The + in its columns, the last tab's last ink before it, and the button's after it.
-        let own = usize::from(plus) * 17..usize::from(plus + 3) * 17;
-        let found = runs.iter().position(|run| own.contains(&run.0));
-        let (Some(at), true) = (found, found.is_some_and(|at| at > 0 && at + 1 < runs.len()))
-        else {
-            panic!("{width}: {runs:?}: {}", grid.row_text(row.y));
-        };
-        let (tab, sign, maximize) = (runs[at - 1], runs[at], runs[at + 1]);
-        let (before, after) = (sign.0 - tab.1, maximize.0 - sign.1);
+        // Where it shows, the button follows the + with a column between at most.
+        assert!(
+            button <= plus + 4,
+            "{width}: the + at {plus}, the button at {button}"
+        );
+        let (before, after) = plus_air(&app, &grid, row);
         assert!(
             before.abs_diff(after) <= 2,
-            "{width}: {before} px before the +, {after} after it, of {runs:?}, the + at {plus} \
-             and the button at {button}: {}",
+            "{width}: {before} px before the +, {after} after it, the + at {plus} and the \
+             button at {button}: {}",
             grid.row_text(row.y)
         );
         match app.dock.fit(row) {
@@ -1636,6 +1640,117 @@ fn the_plus_stands_in_the_middle_between_the_tabs_and_the_button() {
         }
     }
     assert!(whole > 0 && cut > 0, "{whole} widths whole, {cut} cut");
+    // With a whole tab behind last, by what it draws: its ×, shown only under the pointer,
+    // has the room the tab keeps, and by that room the + stood 79 px after the tab's ink and
+    // 47 before the button (the release review of 0.12.0, 172-agents-helper).
+    app.dock.active = Some(0);
+    let mut behind = 0;
+    for width in (30..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let grid = screen(&app);
+        let row = title(&app);
+        if app.dock.fit(row) != Fit::Whole || !app.dock.maximize_shows(row) {
+            continue;
+        }
+        let (before, after) = plus_air(&app, &grid, row);
+        assert!(
+            before.abs_diff(after) <= 2,
+            "{width}: {before} px after og tags, {after} before the button: {}",
+            grid.row_text(row.y)
+        );
+        behind += 1;
+    }
+    assert!(behind > 0, "some width has every tab whole");
+}
+
+/// The air before the + and after it, to the last tab's ink and the button's after it, in
+/// pixels, measured in the picture of the row.
+fn plus_air(app: &App, grid: &Grid, row: cellix_render::Rect) -> (usize, usize) {
+    let theme = *app.theme();
+    let (plus, button) = (app.dock.plus_x(row), app.dock.maximize_button(row));
+    let rows = super::strip_tests::picture(grid, row.y);
+    // Far enough back for a tab behind's name, before the room it keeps for its ×.
+    let from = usize::from(plus) * 17 - 85;
+    let to = usize::from(button + 3) * 17;
+    let runs = super::strip_tests::ink_runs(&rows, theme.tab.bg, (from, to));
+    // The + in its columns, the last tab's last ink before it, and the button's after it.
+    let own = usize::from(plus) * 17..usize::from(plus + 3) * 17;
+    let found = runs.iter().position(|run| own.contains(&run.0));
+    let (Some(at), true) = (found, found.is_some_and(|at| at > 0 && at + 1 < runs.len())) else {
+        panic!("{runs:?}: {}", grid.row_text(row.y));
+    };
+    let (tab, sign, maximize) = (runs[at - 1], runs[at], runs[at + 1]);
+    (sign.0 - tab.1, maximize.0 - sign.1)
+}
+
+/// Agents behind the Agents list's tab, cut to their marks with what each is doing, as the
+/// tour's m2-agents-urgency has them: the + stands in the middle between the last one's ink
+/// and the button that maximizes the pane, which follows the + where the marks leave room,
+/// and the line between two has the same air either side on every one, measured in the
+/// picture. The button kept the row's end, 70 px after the + against 39 before it; and the
+/// air beside the lines ran 14 to 21 px, by how each tab's columns rounded (the release review
+/// of 0.12.0, m2-agents-urgency, 71-sample-changes-row-narrow).
+#[test]
+#[cfg(unix)]
+fn tabs_at_their_marks_have_even_air_and_the_plus_its_middle() {
+    use crate::dock::Doing;
+    let (dir, mut app) = project((150, 44));
+    app.agent_program = Some(stand_in(dir.path(), "agent"));
+    let agents = [
+        ("claude", "pricing page"),
+        ("claude", "release notes"),
+        ("gemini", "docs nav"),
+        ("codex", "og tags"),
+    ];
+    for (agent, name) in agents {
+        app.open_agent(agent);
+        let last = app.dock.sessions.len() - 1;
+        app.dock.sessions[last].renamed = Some(name.to_string());
+    }
+    app.dock.sessions[0].doing = Doing::Working;
+    app.dock.sessions[2].done_unseen = true;
+    app.dock.sessions[3].doing = Doing::NeedsYou;
+    app.run(Command::ListAgents);
+    let theme = *app.theme();
+    let mut seen = 0;
+    for width in (20..90).rev() {
+        app.dock.width = Some(width);
+        app.handle(Event::Resize(150, 44));
+        let grid = screen(&app);
+        let row = title(&app);
+        let text = grid.row_text(row.y);
+        if app.dock.fit(row) != Fit::Cut || !app.dock.maximize_shows(row) {
+            continue;
+        }
+        // Every agent behind at its marks.
+        if (0..agents.len()).any(|index| shown_name(&app, &grid, row, index).is_some()) {
+            continue;
+        }
+        let (plus, button) = (app.dock.plus_x(row), app.dock.maximize_button(row));
+        assert!(
+            button <= plus + 4,
+            "{width}: the + at {plus}, the button at {button}: {text}"
+        );
+        let (before, after) = plus_air(&app, &grid, row);
+        assert!(
+            before.abs_diff(after) <= 2,
+            "{width}: {before} px before the +, {after} after it: {text}"
+        );
+        let lines = super::strip_tests::line_air(&grid, row.y, theme.border, theme.tab.bg);
+        assert_eq!(lines.len(), agents.len() - 1, "{width}: {lines:?}: {text}");
+        let airs = lines.iter().flat_map(|(before, after)| [*before, *after]);
+        let (least, most) = airs.fold((usize::MAX, 0), |(l, m), a| (l.min(a), m.max(a)));
+        assert!(
+            most - least <= 2 && least >= 12,
+            "{width}: the air beside the lines {lines:?}: {text}"
+        );
+        seen += 1;
+    }
+    assert!(
+        seen > 0,
+        "some width cuts them all to their marks with the button"
+    );
 }
 
 /// Two whole tabs behind the one in front have the line between them in the middle of the
