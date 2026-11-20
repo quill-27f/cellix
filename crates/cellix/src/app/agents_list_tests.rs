@@ -457,6 +457,9 @@ fn a_failed_step_is_a_chip_of_the_failed_colour() {
 fn a_lists_lines_end_where_its_rows_end() {
     use cellix_render::{FontMeasure, Paint, UNIT};
     let (_dir, mut app) = project();
+    // The line under START parts it from the agents installed, so there are some whatever
+    // this machine has: CI's runners have none, and with none there's no line to measure.
+    app.agents.pretend_installed(&["claude", "codex", "gemini"]);
     app.set_measure(std::rc::Rc::new(FontMeasure::new(17, 50).with_type_row(36)));
     app.tab_for("Gemini", "c");
     app.serve(Request::Agent(AgentEvent {

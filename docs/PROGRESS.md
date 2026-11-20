@@ -4303,3 +4303,7 @@ Track C, item 3. The user: "I cannot do copy paste from comments, which is a cru
 ## The Inbox's Find scene finds its list by its heading's start (2026-11-20)
 
 Polish track M, after landing item 5 on a `next` whose workspace scenes give the other workspaces' agents tabs (448b5dc): the Inbox then lists three things and its heading is cut at "newest fir…" in the pane, so 142-inbox-find, which pressed under "newest first", never found it. It presses under "waiting", the heading's start. Checked alone: 142-inbox-find and 141-inbox-hover reached; 102-stopped-card and 105 to 107 reached on the same tree.
+
+## The list-line test holds with no agent installed (2026-11-20)
+
+- The no-agents pass before 0.12.0 (PATH of `~/.cargo/bin`, `/usr/bin` and `/bin`, as CI's runners have no agent; every other test of the workspace passed) failed `a_lists_lines_end_where_its_rows_end`, from `e938f81`: it measures the line under START, which parts START from the agents installed, and a machine with none draws no line there. The test was wrong, not the list. It now says Claude Code, Codex and Gemini CLI count as installed (`pretend_installed`, as `9e18ce2` did for Review with…), so it measures the same line on every machine.
