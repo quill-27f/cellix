@@ -4298,3 +4298,8 @@ Track C, item 3. The user: "I cannot do copy paste from comments, which is a cru
 - Looked at: 50-comment-selected (the drag's words tinted), 50-comment-copy-menu and -light (Copy with its key, Copy Comment, Copy Quote), 50-comment-link-menu (Open Link and Copy Link over the card's rows). The review also found a menu's top edge meeting the line under the comment, a rule taking a whole row in the link menu, and the selection colour weak on a lit card; those are every menu's and the theme's, so not changed here.
 - Unverified: a real terminal's Cmd+C reaching Cellix while a card holds the selection (it's Command::Copy as the keymap maps it; no PTY test covers cards).
 - A first version marked the rows a selection holds by everything the list was laid out from, and lost the selection between the press and the next frame; it's now marked by the rows of words themselves, where they stand and where they start.
+
+
+## The Inbox's Find scene finds its list by its heading's start (2026-11-20)
+
+Polish track M, after landing item 5 on a `next` whose workspace scenes give the other workspaces' agents tabs (448b5dc): the Inbox then lists three things and its heading is cut at "newest fir…" in the pane, so 142-inbox-find, which pressed under "newest first", never found it. It presses under "waiting", the heading's start. Checked alone: 142-inbox-find and 141-inbox-hover reached; 102-stopped-card and 105 to 107 reached on the same tree.

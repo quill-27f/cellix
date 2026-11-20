@@ -748,10 +748,11 @@ def workspaces(scratch):
     shoot("140-inbox", inbox, CODE_FILE, size="150x44", **space)
     # The pointer on the failed run, and Find after a press under the list's heading, which
     # are there whatever else waits: the scenes waited for "finished its turn" and "waiting
-    # in", which an agent with no tab in its workspace doesn't leave.
+    # in", which an agent with no tab in its workspace doesn't leave. The heading is found by
+    # "waiting", the start of it: in the pane it's cut at "newest fir…".
     shoot("141-inbox-hover", [*inbox, ["move", *ON("tests failed")], ["wait", 0.4]], CODE_FILE, size="150x44", **space)
     # Find, after a press on the pane, looks through the list in front of it.
-    find = [*inbox, ["click", *ON("newest first", 1, 1)], ["wait", 0.3], ["keys", CTRL("f")], ["wait", 0.4],
+    find = [*inbox, ["click", *ON("waiting", 1, 1)], ["wait", 0.3], ["keys", CTRL("f")], ["wait", 0.4],
             ["keys", "server"], ["wait", 0.6]]
     shoot("142-inbox-find", find, CODE_FILE, size="150x44", **space)
     # Its tile brings back what stopped, with what it last showed.
