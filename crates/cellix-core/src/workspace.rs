@@ -65,6 +65,12 @@ impl Workspace {
         self.expanded.insert(dir.to_path_buf());
     }
 
+    /// The folders open in the tree, which a look at the disk that started before one was
+    /// opened or closed didn't see.
+    pub fn expanded(&self) -> &BTreeSet<PathBuf> {
+        &self.expanded
+    }
+
     /// Visible rows: directories first, then files. Hidden and ignored files show, as in
     /// VS Code, because agents often work in them, with ignored ones marked so they can be
     /// dimmed. Only `.git` stays out, and what LaTeX leaves beside a paper.

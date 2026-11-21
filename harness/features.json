@@ -7600,5 +7600,12 @@
     "title": "The commit message is written as any text box, its caret where it stands and moved by a press",
     "test": "a_commit_message_is_written_as_any_text_box_is",
     "passes": true
+  },
+  {
+    "id": "stale-disk-look-keeps-folders",
+    "milestone": 15,
+    "title": "A look at the disk from before a folder was opened or closed leaves the tree as it is",
+    "test": "a_look_at_the_disk_from_before_a_click_leaves_the_folder_it_opened_open",
+    "passes": true
   }
 ]

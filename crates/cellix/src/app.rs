@@ -968,6 +968,8 @@ fn status_of(root: &Path, changes: &[cellix_review::Change]) -> HashMap<PathBuf,
 
 struct DiskLook {
     entries: Vec<cellix_core::Entry>,
+    /// The folders that were open in the tree as it looked.
+    expanded: std::collections::BTreeSet<PathBuf>,
     branch: Option<String>,
     /// Whether there's a repository here, and a merge under way or anything stashed in it.
     git: GitNow,
@@ -5456,6 +5458,7 @@ impl App {
             let (read_at, committed) = committed_texts(root, opened, known.as_ref());
             let look = DiskLook {
                 entries: workspace.entries(),
+                expanded: workspace.expanded().clone(),
                 branch: current_branch(root),
                 git: GitNow::of(root),
                 status: status_of(root, &changed_files(root)),
@@ -5485,7 +5488,11 @@ impl App {
         };
         self.disk_look = None;
         let status = look.status;
-        let tree = self.explorer.entries != look.entries;
+        // A look that started before a folder was opened or closed saw the tree as it was then:
+        // shown, it shut a folder a click had just opened, which read as a double click (the
+        // user, 22 November). Its marks still hold, and the next look sees the tree as it is.
+        let current = look.expanded == *self.workspace.expanded();
+        let tree = current && self.explorer.entries != look.entries;
         let marks = self.explorer.status != status;
         let branch = self.branch != look.branch;
         if tree {
@@ -22297,6 +22304,47 @@ mod tests {
         let (x, y) = find(&screen(&app), "docs");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(screen(&app).text().contains("guide.md"));
+    }
+
+    #[test]
+    fn a_look_at_the_disk_from_before_a_click_leaves_the_folder_it_opened_open() {
+        let (_dir, mut app) = project();
+        // A look under way, as there is every two seconds, which sees src shut.
+        app.disk_look = None;
+        app.look_at_disk();
+        let (x, y) = find(&screen(&app), "src");
+        app.handle(mouse(MouseKind::Left, x, y));
+        app.handle(mouse(MouseKind::Up, x, y));
+        assert!(
+            screen(&app).text().contains("lib.rs"),
+            "the click opened it"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while app.disk_look.is_some() {
+            assert!(std::time::Instant::now() < deadline, "the look never came");
+            app.poll_disk();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            screen(&app).text().contains("lib.rs"),
+            "the look from before the click didn't shut it"
+        );
+        // The next look, from after the click, sees it open, and shows what's new on disk.
+        fs::write(app.workspace.root().join("src/new.rs"), "\n").unwrap();
+        app.look_at_disk();
+        while app.disk_look.is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the next look never came"
+            );
+            app.poll_disk();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let shown = screen(&app).text();
+        assert!(
+            shown.contains("lib.rs") && shown.contains("new.rs"),
+            "{shown}"
+        );
     }
 
     #[test]
