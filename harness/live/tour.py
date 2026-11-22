@@ -228,7 +228,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 294
+SCENES_IN_ALL = 298
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # The scene shot last, with its picture's digest and what it was taken from; and this one's.
@@ -1272,6 +1272,77 @@ def agent_in_terminal(scratch):
         shutil.rmtree(f"{HOME}/.claude/projects/{folder}", ignore_errors=True)
 
 
+PROMPT_STAND_IN = r'''import os, sys, tty
+# Claude Code's prompt, as far as the keyboard goes: it asks to hear of focus (DECSET 1004),
+# hides the terminal's cursor and draws its own, a block, only while told it has the keys.
+tty.setraw(0)
+focused, typed, waiting = True, "", b""
+def draw():
+    width = max(20, min(os.get_terminal_size(1).columns - 2, 60))
+    cursor = "\x1b[7m \x1b[27m" if focused else " "
+    rule = "\x1b[90m" + "─" * width + "\x1b[39m"
+    sys.stdout.write(f"\x1b[?25l\x1b[3;1H\x1b[2K{rule}\x1b[4;1H\x1b[2K> {typed}{cursor}"
+                     f"\x1b[5;1H\x1b[2K{rule}\x1b[6;1H\x1b[2K\x1b[90m  ? for shortcuts\x1b[39m")
+    sys.stdout.flush()
+sys.stdout.write("\x1b[?1004h\x1b[2J\x1b[1;1HClaude Code (stand-in)")
+draw()
+while True:
+    came = os.read(0, 1024)
+    if not came:
+        break
+    waiting += came
+    while waiting:
+        if waiting.startswith(b"\x1b[I") or waiting.startswith(b"\x1b[O"):
+            focused, waiting = waiting[2:3] == b"I", waiting[3:]
+        elif waiting[:1] == b"\x1b":
+            if len(waiting) < 3:
+                break
+            waiting = waiting[1:]
+        else:
+            letter, waiting = waiting[:1].decode(errors="ignore"), waiting[1:]
+            typed += letter if letter.isprintable() else ""
+    draw()
+'''
+
+
+def prompt_keys(scratch):
+    """Where the keyboard is, as Claude Code's prompt shows it: its cursor is there only while
+    the keys are. The agent is a stand-in that asks to hear of focus and draws its own block
+    only while told it has the keys, as Claude Code does. With the keys in the file it has none;
+    pressed, it has them and what's typed goes there; with the window behind another, none. Its
+    workspace opened again, with its tab in front, starts with the keys in it."""
+    tools = f"{scratch}/prompt-bin"
+    os.makedirs(tools)
+    with open(f"{tools}/prompt.py", "w") as f:
+        f.write(PROMPT_STAND_IN)
+    with open(f"{tools}/claude", "w") as f:
+        f.write(f"#!/bin/sh\nexec python3 -I '{tools}/prompt.py'\n")
+    os.chmod(f"{tools}/claude", 0o755)
+    opened = [*command("Open Claude Code", F1), ["until", "for shortcuts"], ["wait", 0.4]]
+    in_file = [*opened, ["click", *ON("pub struct")], ["wait", 0.8]]
+    typed = [*in_file, ["click", *ON("for shortcuts")], ["keys", "fix the queue"],
+             ["until", "fix the queue"], ["wait", 0.6]]
+    # The window goes behind another: the terminal says so (focus reporting's CSI O).
+    behind = [*opened, ["keys", "\\e[O"], ["wait", 0.8]]
+    cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+    env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+    shoot("m1-prompt-keys-in-file", in_file, CODE_FILE, size="150x44", env=env,
+          setup_for=("m1-prompt-keys-reopened",))
+    # The same project opened again, with nothing named: the agent kept running, its tab in
+    # front, and the keyboard starts in it, so the first keys go there.
+    again = [["until", "for shortcuts"], ["wait", 0.8], ["keys", "go on"], ["until", "go on"],
+             ["wait", 0.6]]
+    shoot("m1-prompt-keys-reopened", again, size="150x44", env=env)
+    subprocess.run(["pkill", "-9", "-f", cache])
+    shutil.rmtree(cache, ignore_errors=True)
+    for name, steps in (("m1-prompt-keys-typed", typed), ("m1-prompt-keys-window-behind", behind)):
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools}:{os.environ['PATH']}"}
+        shoot(name, steps, CODE_FILE, size="150x44", env=env)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+
+
 def team_scenes(scratch):
     """An agent starting another: the card that asks the person first, and the helper once
     it's allowed. Both agents are stand-ins on PATH. Claude Code's starts Codex's through the
@@ -1617,6 +1688,7 @@ with tempfile.TemporaryDirectory() as made:
     agent_tabs(scratch)
     agent_names(scratch)
     agent_in_terminal(scratch)
+    prompt_keys(scratch)
     agents_by_urgency(scratch)
     waits(scratch)
     task_scenes(scratch)

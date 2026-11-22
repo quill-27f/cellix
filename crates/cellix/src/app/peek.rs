@@ -49,7 +49,7 @@ fn around(outer: Rect, inner: Rect) -> Vec<Rect> {
 
 impl App {
     /// The helper peek shows, by the name it was given, and its tab.
-    fn peeked(&self) -> Option<usize> {
+    pub(super) fn peeked(&self) -> Option<usize> {
         let name = self.peek.as_deref()?;
         self.member_index(name)
     }
@@ -360,7 +360,13 @@ impl App {
             ..base
         };
         grid.glyph(self.peek_close(card), y, Icon::Close, shut.fg, "×", shut);
-        session.draw_on(grid, screen, theme, (true, theme.popup));
+        // Its cursor shows while the keys are its, as a tab's does.
+        session.draw_on(
+            grid,
+            screen,
+            theme,
+            (self.has_keys(Some(index)), theme.popup),
+        );
         // The line under the header, the card's width, and the card's own line round it with
         // its corners, painted over the cells' square ones in what stands behind.
         let (x, w) = (f32::from(card.x) + lead, f32::from(card.w) - lead);

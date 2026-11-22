@@ -2324,6 +2324,47 @@ id; the next Cellix puts them aside and shows the tab as it was, with Resume (Cl
 `--resume`, Codex's `resume`, and the others' as below), Start Fresh or Start Again, and Close, and with others stopped too,
 Resume All. It says "restarted" only when the machine booted after the log was last written.
 
+### Where the keys are
+
+A program in the side pane that asks to hear of focus (DECSET 1004) is told as the person's keys
+come and go, as VS Code's terminal tells it of its window: `CSI I` as they come to it, `CSI O`
+as they go. Claude Code asks as it starts, takes it that it has the keys until told otherwise,
+and draws its prompt's block cursor only while it has them; Cellix never told it, so its cursor
+showed with the keys in the file, which read as a place to type that wasn't one (the user, 22
+November 2026). The keys are a session's while the pane is open with its tab in front and the
+keyboard (`Dock::focused`), or a helper's while peek shows it, and nothing else has them: no
+palette, menu, dialog or Find over everything, no comment, Ask question or commit message being
+written, another workspace not in front, and Cellix's window not behind another. That's worked
+out from where things stand each time the app settles, after an event or a poll
+(`App::session_with_keys`), rather than at each of the sixty places the keyboard moves, and a
+program is sent only a change from what it was last told. One that has just asked is told at
+once only if it hasn't the keys; one joined again from its host is told either way, since an
+earlier Cellix may have told it otherwise. The host follows whether its program asked and, when
+the asking has gone from the 4 MB it keeps, asks again ahead of what it shows a viewer joining,
+or the program would never hear again. A program that never asked is sent nothing. Peek has the
+keys while it's open, as it had the pastes: keys went to the tab under its card while the pane
+had the keyboard.
+
+A terminal pane's own cursor, the blinking block a shell shows, follows the same: it shows only
+in the session with the keys, so it's gone with the window behind another, as Claude Code's is.
+VS Code draws an unfocused terminal's cursor as an outline; Cellix hides it, as it did whenever
+the pane hadn't the keyboard, which also keeps the cell tier, with one cursor, the same. The
+file's caret and its line's band go the other way: none while the pane or peek has the keys
+(`App::pane_has_keyboard`), as an unfocused editor has none in VS Code, so only one place on
+screen says it's where typing goes, and with the window behind another none does (the review of
+this change found the file's caret standing alone there, with the keys in the agent). With the
+keys in the file, its caret stays behind another window as before. The hint the first start
+gives says so too: "Typing goes to Claude Code, on the right. Click the file or press Ctrl+` to
+switch", where it said to click the pane, which had the keys already.
+
+Where the keyboard starts: a workspace in front for the first time in this run, whether Cellix
+started in its folder, it was opened, or it was restored and comes forward, has it in the agent
+whose tab is in front of an open pane, so the cursor its prompt draws is where typing goes
+(`App::place_keys`). Not over a dialog or Settings, nor where a file named at the command line
+(`cellix file.rs`, and `--wait`) has it, nor for a shell's tab. A workspace already used keeps it
+where the person left it. Inside Claude Code's pane Cellix restores no tabs, so nothing starts
+there to take it.
+
 ### How the agent got there
 
 Reviewing a result isn't only its diff: the steps, commands and reasoning that led to it can be

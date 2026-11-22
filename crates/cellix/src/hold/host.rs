@@ -40,6 +40,10 @@ const FOREGROUND: u8 = b'f';
 const INPUT: u8 = b'i';
 const RESIZE: u8 = b'r';
 const KILL: u8 = b'k';
+/// What asks a terminal to say when its window gains and loses focus (DECSET 1004).
+const FOCUS_ASKED: &[u8] = b"\x1b[?1004h";
+/// The longest unfinished private mode sequence carried from one output to the next.
+const LONGEST_MODES: usize = 64;
 
 fn send_frame(stream: &mut impl Write, kind: u8, payload: &[u8]) -> io::Result<()> {
     let mut frame = Vec::with_capacity(payload.len() + 5);
@@ -335,6 +339,69 @@ struct Shared {
     size: Vec<u8>,
     /// The time a viewer's reading nothing is measured by: the wall's, or a test's.
     clock: Clock,
+    /// Whether the program asked to hear of focus, which a viewer joining is told again.
+    focus: Focus,
+}
+
+/// Follows whether the program has asked to hear of focus (focus reporting, DECSET 1004)
+/// through output that may split a sequence anywhere. A viewer that joins after the asking has
+/// gone from what's kept is told of it again, ahead of what's kept: otherwise its program never
+/// hears where the keyboard is, and Claude Code keeps its prompt's cursor as an earlier Cellix
+/// last told it, hidden while the keys are in it.
+#[derive(Default)]
+struct Focus {
+    asked: bool,
+    /// The start of a sequence the last output ended inside.
+    carry: Vec<u8>,
+}
+
+impl Focus {
+    fn follow(&mut self, bytes: &[u8]) {
+        let mut text = std::mem::take(&mut self.carry);
+        text.extend_from_slice(bytes);
+        let mut at = 0;
+        while let Some(found) = text[at..].iter().position(|b| *b == 0x1b) {
+            let start = at + found;
+            let rest = &text[start..];
+            match (rest.get(1), rest.get(2)) {
+                (None, _) | (Some(b'['), None) => {
+                    self.carry = rest.to_vec();
+                    return;
+                }
+                // A full reset forgets it.
+                (Some(b'c'), _) => {
+                    self.asked = false;
+                    at = start + 2;
+                    continue;
+                }
+                (Some(b'['), Some(b'?')) => {}
+                _ => {
+                    at = start + 1;
+                    continue;
+                }
+            }
+            let body = &rest[3..];
+            let Some(end) = body.iter().position(|b| !b.is_ascii_digit() && *b != b';') else {
+                if rest.len() <= LONGEST_MODES {
+                    self.carry = rest.to_vec();
+                }
+                return;
+            };
+            let set = match body[end] {
+                b'h' => Some(true),
+                b'l' => Some(false),
+                _ => None,
+            };
+            if let Some(set) = set
+                && body[..end]
+                    .split(|b| *b == b';')
+                    .any(|mode| mode == b"1004")
+            {
+                self.asked = set;
+            }
+            at = start + 3 + end + 1;
+        }
+    }
 }
 
 struct Client {
@@ -391,6 +458,7 @@ impl Shared {
     }
 
     fn output(&mut self, bytes: &[u8]) {
+        self.focus.follow(bytes);
         self.kept.extend(bytes);
         let extra = self.kept.len().saturating_sub(KEPT);
         self.kept.drain(..extra);
@@ -674,8 +742,12 @@ pub fn serve(socket: &Path) -> io::Result<()> {
         let mut visit = 0;
         if let Ok(mut shared) = shared.lock() {
             let mut out = Outbox::new(Box::new(outgoing));
+            // Asked before what's kept begins, it's asked again ahead of it; asked or taken
+            // back since, what's kept says so after.
+            let asked = if shared.focus.asked { FOCUS_ASKED } else { &[] };
             let (front, back) = shared.kept.as_slices();
-            let sent = send_frame(&mut out, OUTPUT, front)
+            let sent = send_frame(&mut out, OUTPUT, asked)
+                .and_then(|()| send_frame(&mut out, OUTPUT, front))
                 .and_then(|()| send_frame(&mut out, OUTPUT, back))
                 .and_then(|()| send_frame(&mut out, AT_PROMPT, &[u8::from(shared.at_prompt)]))
                 .and_then(|()| send_frame(&mut out, FOREGROUND, &shared.foreground));
@@ -721,6 +793,36 @@ fn finish(socket: &Path) -> ! {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    /// Whether the program asked to hear of focus is followed through its output however
+    /// it's cut: a request split between two reads, one among other modes, one taken back, a
+    /// full reset, and other sequences that only look alike.
+    #[test]
+    fn the_host_follows_whether_its_program_asked_to_hear_of_focus() {
+        let followed = |pieces: &[&[u8]]| {
+            let mut focus = Focus::default();
+            for piece in pieces {
+                focus.follow(piece);
+            }
+            focus.asked
+        };
+        assert!(followed(&[b"ready\x1b[?1004h".as_slice()]));
+        for cut in 1..FOCUS_ASKED.len() {
+            let (a, b) = FOCUS_ASKED.split_at(cut);
+            assert!(
+                followed(&[b"text".as_slice(), a, b, b"more"]),
+                "cut after {cut}"
+            );
+        }
+        assert!(followed(&[b"\x1b[?1000;1004;1006h".as_slice()]));
+        let taken_back: [&[u8]; 2] = [b"\x1b[?1004h", b"\x1b[?2004;1004l"];
+        assert!(!followed(&taken_back));
+        let reset: [&[u8]; 2] = [b"\x1b[?1004h", b"x\x1bc"];
+        assert!(!followed(&reset));
+        let alike: [&[u8]; 2] = [b"\x1b[?1004h", b"\x1b[?10045l\x1b[1004l\x1b[?1004$p"];
+        assert!(followed(&alike), "only 1004 itself, set or reset, counts");
+        assert!(!followed(&[b"\x1b[?10041h".as_slice()]));
+    }
 
     fn client(visit: u64, stream: UnixStream) -> Client {
         Client {

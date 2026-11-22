@@ -250,6 +250,58 @@ fn two_cellix_windows_share_a_program_and_whoever_types_sets_its_size() {
     held.kill();
 }
 
+/// A program that asked to hear of focus (DECSET 1004), as Claude Code does as it starts, is
+/// still known to have asked by a Cellix that joins after the asking has gone from what the
+/// host keeps: it's asked again ahead of what's kept, so that Cellix tells the program where the
+/// keyboard is. What Cellix tells it reaches it as keys do.
+#[test]
+fn a_cellix_joining_later_knows_the_program_asked_to_hear_of_focus() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("held");
+    let (printed, heard) = (dir.path().join("printed"), dir.path().join("heard"));
+    // It asks, then prints more than the host keeps, then writes down all it's sent.
+    let script = format!(
+        "stty raw -echo; printf '\\033[?1004hasked'; head -c 5000000 /dev/zero; printf done; \
+         touch '{}'; cat > '{}'",
+        printed.display(),
+        heard.display()
+    );
+    let held = start(&folder, &job("Agent", &script, dir.path()));
+    let socket = held.socket.clone();
+    // Nobody watches while it prints.
+    drop(held);
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !printed.exists() {
+        assert!(Instant::now() < deadline, "it never finished printing");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let again = Held::connect(&socket).unwrap();
+    let (seen, _) = attach(&again);
+    let first = seen.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(first, b"\x1b[?1004h", "asked again, first");
+    let mut kept = Vec::new();
+    while !kept.ends_with(b"done") {
+        assert!(Instant::now() < deadline, "the rest never came");
+        if let Ok(bytes) = seen.recv_timeout(Duration::from_millis(100)) {
+            kept.extend(bytes);
+        }
+    }
+    let has = |text: &[u8], wanted: &[u8]| text.windows(wanted.len()).any(|w| w == wanted);
+    assert!(
+        !has(&kept, b"asked") && !has(&kept, b"1004"),
+        "what's kept no longer holds its asking"
+    );
+
+    // What Cellix tells it goes to it whole, as keys do.
+    again.keys().unwrap().write_all(b"\x1b[O").unwrap();
+    while std::fs::read(&heard).unwrap_or_default() != b"\x1b[O" {
+        assert!(Instant::now() < deadline, "it never heard it");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    again.kill();
+}
+
 /// A shell's host says which program is in front of the shell, by its name, as that changes,
 /// and nothing once the shell is back at its prompt. An interactive shell gives each command a
 /// process group of its own, as a person's does.

@@ -69,6 +69,7 @@ use crate::source::{Hit as SourceHit, Source as SourceControl};
 
 mod available;
 mod blink;
+mod focus;
 mod gitops;
 mod glance;
 mod links;
@@ -1813,6 +1814,9 @@ pub struct App {
     host_program: Option<PathBuf>,
     /// Whether this workspace is the one on screen.
     pub in_front: bool,
+    /// Where the keyboard starts was settled, the first time this workspace was in front
+    /// (`App::place_keys`).
+    keys_placed: bool,
     /// The session on screen printed, and sessions out of sight did, since the loop asked.
     printed: bool,
     behind: bool,
@@ -1985,6 +1989,7 @@ impl App {
             pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
             in_front: true,
+            keys_placed: false,
             printed: false,
             behind: false,
             meters: Arc::default(),
@@ -3463,7 +3468,10 @@ impl App {
 
     pub fn poll(&mut self) -> bool {
         let scrolled = self.step_autoscroll(std::time::Instant::now());
-        self.poll_rest() || scrolled
+        let changed = self.poll_rest() || scrolled;
+        // A program that has just asked to hear of focus hears where the keyboard is at once.
+        self.tell_keys();
+        changed
     }
 
     fn poll_rest(&mut self) -> bool {
@@ -5140,6 +5148,7 @@ impl App {
             self.refresh_comment_pictures();
         }
         self.after_event(had_keys);
+        self.tell_keys();
     }
 
     fn paste(&mut self, text: &str) {
@@ -6749,7 +6758,9 @@ impl App {
             }
             return;
         }
-        if self.dock.focused && matches!(self.overlay, Overlay::None) {
+        // A helper looked at over the pane has the keys while it's open, as it has the pastes,
+        // and not the tab under its card.
+        if self.dock.focused && matches!(self.overlay, Overlay::None) && self.peek.is_none() {
             // The session gets everything but what moves away from it.
             let command = self.workflow.keys.command(key);
             let leaves = matches!(
@@ -9816,8 +9827,9 @@ impl App {
     /// The first time something starts, says how the two sides work together.
     fn explain_pane(&mut self, name: &str) {
         if !std::mem::replace(&mut self.pane_explained, true) {
+            // It has the keyboard as it starts, so the way back is what's said.
             self.say(format!(
-                "{name} is on the right. Click it to type there, or press Ctrl+` to switch"
+                "Typing goes to {name}, on the right. Click the file or press Ctrl+` to switch"
             ));
         }
     }
@@ -10181,6 +10193,7 @@ impl App {
             let size = self.session_size().unwrap_or((80, 24));
             if let Ok(mut session) = Session::join(&name, held, size, self.cell_size()) {
                 session.replaying = true;
+                session.rejoined = true;
                 // Known again by the name other agents reach it by, and a helper without a
                 // tab again.
                 session.member = crate::hold::job_beside(&socket).and_then(|job| job.member);
@@ -12152,7 +12165,7 @@ impl App {
         match self.dock.session().filter(|_| !self.dock.listing()) {
             Some(session) => {
                 let from = grid.painted_so_far();
-                session.draw(grid, screen, theme, self.dock.focused);
+                session.draw(grid, screen, theme, self.has_keys(self.dock.active));
                 self.inset_program(grid, screen, from);
                 if session.stopped.is_some() {
                     self.draw_stopped(grid);
@@ -18232,9 +18245,13 @@ impl App {
                             found.iter().map(each).collect()
                         }),
                 };
-                // While a comment is being written the keys go to it, and so does the caret.
-                let focused =
-                    pane == self.focus && self.dock.draft.is_none() && !self.side_field_open();
+                // While a comment is being written the keys go to it, and so does the caret; and
+                // while the side pane has them, its program shows where typing goes, so the file
+                // has no caret of its own, as an unfocused editor has none in VS Code.
+                let focused = pane == self.focus
+                    && self.dock.draft.is_none()
+                    && !self.side_field_open()
+                    && !self.pane_has_keyboard();
                 editor.scrollbar_clear.set(self.scrollbar_clear(area));
                 editor.draw(grid, area, theme, focused, &self.registry, &marks);
                 let look = (self.hover, &*self.measure);
@@ -18677,7 +18694,7 @@ impl App {
         let (Some(screen), Some(session)) = (self.dock_screen(), self.dock.session()) else {
             return;
         };
-        let Some((x, y)) = session.cursor_in(screen, self.dock.focused) else {
+        let Some((x, y)) = session.cursor_in(screen, self.has_keys(self.dock.active)) else {
             return;
         };
         let cell = Bounds::cells(f32::from(x), f32::from(y), 1.0, 1.0);
@@ -22133,6 +22150,8 @@ mod cards_tests;
 mod changes_tests;
 #[cfg(test)]
 mod docflow_tests;
+#[cfg(test)]
+mod focus_tests;
 #[cfg(test)]
 mod glance_tests;
 #[cfg(test)]

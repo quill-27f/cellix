@@ -7614,5 +7614,33 @@
     "title": "Kiro CLI is an agent: its own mark, started as kiro-cli chat where installed, cellix setup kiro writes one hooks file for its V3 chat (and --remove takes it back), and its hooks bring working, needs you, done and its first prompt to the tab, the Agents list and the tile, with its session left for Resume",
     "test": "a_stand_in_for_kiro_cli_reports_through_the_hooks_setup_installed",
     "passes": true
+  },
+  {
+    "id": "focus-reports-to-pane-programs",
+    "milestone": 15,
+    "title": "A program in the side pane that asks to hear of focus (DECSET 1004), as Claude Code does, is told CSI I as the keys come to it and CSI O as they go: a press elsewhere, another tab in front, a box over everything, the pane closed, another workspace in front, the window behind another; only what changed, at once if it asked without them, and to a helper in peek, which now has the keys while open",
+    "test": "a_program_that_asked_to_hear_of_focus_is_told_as_the_keys_come_and_go",
+    "passes": true
+  },
+  {
+    "id": "focus-reports-through-the-host",
+    "milestone": 15,
+    "title": "A program joined again from its host is told where the keys are at once, and the host asks for focus reports again ahead of what it keeps when the asking has gone from it",
+    "test": "a_cellix_joining_later_knows_the_program_asked_to_hear_of_focus",
+    "passes": true
+  },
+  {
+    "id": "keyboard-starts-in-the-agent",
+    "milestone": 15,
+    "title": "A workspace in front for the first time with an agent tab in front of its open pane starts with the keyboard there, unless a file named at the command line, a dialog or Settings has it; one already used keeps it where it was left",
+    "test": "a_workspace_starts_with_the_keyboard_in_its_agent_and_keeps_it_where_it_was_left",
+    "passes": true
+  },
+  {
+    "id": "terminal-cursor-follows-the-keys",
+    "milestone": 15,
+    "title": "Only the place with the keys shows a cursor: a terminal pane's only in the session with them, the file's caret only while the side pane and peek have not got them, and neither with the keys in the pane and the window behind another",
+    "test": "a_terminal_panes_cursor_shows_only_while_it_has_the_keys",
+    "passes": true
   }
 ]

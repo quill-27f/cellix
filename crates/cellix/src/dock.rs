@@ -408,6 +408,12 @@ pub struct Session {
     own_front: Option<(i32, String, std::time::Instant)>,
     /// The id its agent's hooks give the session in it, once they've said anything.
     pub agent_session: Option<String>,
+    /// What its program was last told of the keyboard, once it asked to be told (focus
+    /// reporting, DECSET 1004): whether the person's keys come to it. None while it hasn't.
+    told_keys: Option<bool>,
+    /// Joined again from a host an earlier Cellix ran, whose program may still take as so
+    /// whatever that one told it last: it's told where the keyboard is at once, either way.
+    pub rejoined: bool,
 }
 
 /// A person's typing into a session, as it holds back what agents send it.
@@ -786,6 +792,8 @@ impl Session {
             shown_running: None,
             own_front: None,
             agent_session: None,
+            told_keys: None,
+            rejoined: false,
         }
     }
 
@@ -1372,6 +1380,24 @@ impl Session {
         std::mem::take(&mut self.refused)
     }
 
+    /// Tells a program that asked to hear of it (focus reporting, DECSET 1004) whether the
+    /// person's keys come to it now: `CSI I` as they come, `CSI O` as they go, as a terminal
+    /// says its window gained or lost focus, and only when that differs from what it was last
+    /// told. Claude Code takes it that it has them, and draws its prompt's cursor until it
+    /// hears otherwise, so one that has just asked is told at once only where it hasn't; one
+    /// joined again is told either way. A program that never asked is sent nothing.
+    pub fn tell_keys(&mut self, keys: bool) {
+        if self.exited || !self.term.mode().contains(TermMode::FOCUS_IN_OUT) {
+            self.told_keys = None;
+            return;
+        }
+        let known = self.told_keys.or((!self.rejoined).then_some(true));
+        if known != Some(keys) {
+            self.write(if keys { b"\x1b[I" } else { b"\x1b[O" });
+        }
+        self.told_keys = Some(keys);
+    }
+
     /// Takes in what the program wrote. Returns true if the screen changed.
     pub fn poll(&mut self, theme: &Theme) -> bool {
         let mut changed = self.end_overdue_update(std::time::Instant::now());
@@ -1916,15 +1942,18 @@ impl Session {
         }
     }
 
-    pub fn draw(&self, grid: &mut Grid, area: Rect, theme: &Theme, focused: bool) {
-        self.draw_on(grid, area, theme, (focused, theme.sidebar.bg));
+    /// Draws what it shows on `area`. `keys` says whether the person's keys come to it: its
+    /// cursor shows only then, as its program is told (`tell_keys`), so the block a shell
+    /// shows and the one Claude Code draws for itself come and go together.
+    pub fn draw(&self, grid: &mut Grid, area: Rect, theme: &Theme, keys: bool) {
+        self.draw_on(grid, area, theme, (keys, theme.sidebar.bg));
     }
 
     /// The cell its cursor is drawn in on `area`, where `draw` shows one.
-    pub fn cursor_in(&self, area: Rect, focused: bool) -> Option<(u16, u16)> {
+    pub fn cursor_in(&self, area: Rect, keys: bool) -> Option<(u16, u16)> {
         let content = self.term.renderable_content();
         let cursor = content.cursor;
-        let shown = focused
+        let shown = keys
             && content.mode.contains(TermMode::SHOW_CURSOR)
             && cursor.shape != CursorShape::Hidden
             && content.display_offset == 0;
@@ -1935,13 +1964,7 @@ impl Session {
     }
 
     /// `draw`, on `ground` where the program leaves its own background, as on a card.
-    pub fn draw_on(
-        &self,
-        grid: &mut Grid,
-        area: Rect,
-        theme: &Theme,
-        (focused, ground): (bool, Rgb),
-    ) {
+    pub fn draw_on(&self, grid: &mut Grid, area: Rect, theme: &Theme, (keys, ground): (bool, Rgb)) {
         grid.fill(
             area,
             Style {
@@ -1969,7 +1992,7 @@ impl Session {
             Some(Some(index) == self.found_at)
         };
         let cursor = content.cursor;
-        let show_cursor = focused
+        let show_cursor = keys
             && content.mode.contains(TermMode::SHOW_CURSOR)
             && cursor.shape != CursorShape::Hidden
             && offset == 0;

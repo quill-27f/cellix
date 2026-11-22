@@ -409,8 +409,9 @@ impl Workspaces {
     /// which the tick brings up to date.
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
+        let shown = self.shown();
         for (index, workspace) in self.list.iter_mut().enumerate() {
-            workspace.app.in_front = index == self.active;
+            workspace.app.in_front = shown == Some(index);
             let mut here = workspace.app.poll();
             if let Some(server) = &workspace.server {
                 while let Ok(request) = server.requests.try_recv() {
@@ -585,6 +586,27 @@ impl Workspaces {
             self.list[0].app.run(Command::Quit);
             // It may have quit at once, with nothing to ask.
             self.settle();
+        }
+        self.follow_keys();
+    }
+
+    /// The workspace on screen: the one in front, unless the first screen stands over them all.
+    fn shown(&self) -> Option<usize> {
+        (!self.choosing && self.active < self.list.len()).then_some(self.active)
+    }
+
+    /// Tells each workspace whether it's the one on screen, settles where the keyboard starts in
+    /// one that's there for the first time in this run (`App::place_keys`), and has each tell
+    /// its programs where the keys are: one behind another workspace hasn't them.
+    pub fn follow_keys(&mut self) {
+        let shown = self.shown();
+        for (index, workspace) in self.list.iter_mut().enumerate() {
+            let app = &mut workspace.app;
+            app.in_front = shown == Some(index);
+            if app.in_front {
+                app.place_keys();
+            }
+            app.tell_keys();
         }
     }
 
@@ -2880,5 +2902,109 @@ mod tests {
         key(&mut spaces, Key::Enter, Mods::default());
         assert!(!spaces.choosing);
         assert_eq!(spaces.app().workspace.root(), first);
+    }
+
+    /// A workspace that comes forward for the first time in this run, with its side pane open
+    /// on an agent's tab, starts with the keyboard in that agent, so the cursor its prompt
+    /// draws is where typing goes; one already used keeps the keyboard where it was left. An
+    /// agent that asked to hear of focus is told it lost the keys as another workspace comes
+    /// forward, and has them again as its own comes back.
+    #[test]
+    #[cfg(unix)]
+    fn a_workspace_starts_with_the_keyboard_in_its_agent_and_keeps_it_where_it_was_left() {
+        use std::time::Duration;
+        let (_dir, first, second) = projects();
+        let start: Starter = Box::new(|root, size| {
+            let mut app = App::new(root.clone(), size);
+            app.open(&root.join("notes.txt")).unwrap();
+            // As a workspace comes back from the last run: its agent's tab in front of the
+            // pane, and the keyboard in the file. Its agent writes down all it's sent.
+            let log = root.join("heard.log");
+            let script = format!(
+                "stty raw -echo; printf '\\033[?1004hready'; cat > '{}'",
+                log.display()
+            );
+            app.start_stand_in("Claude Code", &script);
+            app.dock_for_test().focused = false;
+            Workspace { app, server: None }
+        });
+        let mut spaces = Workspaces::new((120, 30), "dev-box".to_string(), start);
+        spaces.open(first.clone());
+        // As Cellix starts, before its first frame.
+        spaces.follow_keys();
+        assert!(
+            spaces.app_mut().dock_for_test().focused,
+            "the keyboard starts in the agent"
+        );
+        let heard = |spaces: &mut Workspaces, root: &Path, told: &str| {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                spaces.poll();
+                let got = fs::read_to_string(root.join("heard.log")).unwrap_or_default();
+                if got == told {
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "sent {got:?} where {told:?} was wanted"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        let ready = |spaces: &mut Workspaces| {
+            let deadline = Instant::now() + Duration::from_secs(60);
+            while !spaces.app_mut().dock_for_test().sessions[0]
+                .lines()
+                .join("")
+                .contains("ready")
+            {
+                assert!(Instant::now() < deadline, "the agent never started");
+                spaces.poll();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        };
+        // It had the keys when it asked, as it takes it does: nothing to say.
+        ready(&mut spaces);
+        heard(&mut spaces, &first, "");
+
+        // Another folder opens beside it and comes forward, with the keyboard in its agent;
+        // the first's is told it hasn't the keys.
+        let index = spaces.open(second.clone());
+        spaces.switch(index);
+        spaces.handle(Event::Tick);
+        assert!(
+            spaces.app_mut().dock_for_test().focused,
+            "a new workspace starts in its agent too"
+        );
+        heard(&mut spaces, &first, "\x1b[O");
+        ready(&mut spaces);
+        heard(&mut spaces, &second, "");
+        // The person presses its file: the keyboard is there, and its agent is told.
+        let file = {
+            let grid = screen(&spaces);
+            let y = (0..30)
+                .find(|&y| grid.row_text(y).contains("some notes"))
+                .expect("its file in view");
+            spot(&grid, y, "some notes")
+        };
+        click(&mut spaces, MouseKind::Left, file);
+        click(&mut spaces, MouseKind::Up, file);
+        assert!(!spaces.app_mut().dock_for_test().focused);
+        heard(&mut spaces, &second, "\x1b[O");
+
+        // Back to the first: it has the keyboard where it was left, in its agent.
+        spaces.switch(0);
+        spaces.handle(Event::Tick);
+        assert!(spaces.app_mut().dock_for_test().focused);
+        heard(&mut spaces, &first, "\x1b[O\x1b[I");
+        // And the second, used already, is left where the person put the keyboard.
+        spaces.switch(1);
+        spaces.handle(Event::Tick);
+        assert!(
+            !spaces.app_mut().dock_for_test().focused,
+            "kept in its file"
+        );
+        heard(&mut spaces, &first, "\x1b[O\x1b[I\x1b[O");
+        heard(&mut spaces, &second, "\x1b[O");
     }
 }

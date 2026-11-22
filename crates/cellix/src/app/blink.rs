@@ -70,12 +70,20 @@ impl App {
     }
 
     /// The terminal said whether Cellix's window is in front. Behind another, the caret stays
-    /// shown and nothing wakes for it; back in front, it's shown and starts over.
+    /// shown and nothing wakes for it; back in front, it's shown and starts over. A program in
+    /// the side pane with the keys is told it lost them, and has them again, as VS Code's
+    /// terminal tells one.
     pub fn set_window_focused(&mut self, focused: bool) {
         self.blink.focused = focused;
         if focused {
             self.restart_blink();
         }
+        self.tell_keys();
+    }
+
+    /// Whether the terminal says Cellix's window is in front; without word from it, it is.
+    pub(super) fn window_focused(&self) -> bool {
+        self.blink.focused
     }
 
     /// The time the blink goes by, where it's kept.

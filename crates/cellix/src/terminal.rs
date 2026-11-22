@@ -1156,6 +1156,8 @@ pub fn run(options: Options) -> io::Result<()> {
         for path in paths.iter().filter(|p| p.is_file()) {
             let path = dunce::canonicalize(path)?;
             spaces.app_mut().open(&path)?;
+            // Asked for by name, it has the keyboard, whatever the side pane has.
+            spaces.app_mut().keep_keys_in_file();
             if wait {
                 spaces.app_mut().wait_file = Some(path);
             }
@@ -1166,6 +1168,9 @@ pub fn run(options: Options) -> io::Result<()> {
             spaces.open_running();
         }
     }
+    // Where the keyboard starts, before the first frame: in the agent in front of an open pane,
+    // so the cursor its prompt draws is where typing goes.
+    spaces.follow_keys();
     // Whole cells can't place a caret in proportional text, so ask for pixels where that's
     // on offer. It's only used with a known cell size to divide by.
     let pixel_mouse = display.pixel_mouse && display.placement.is_some() && display.cell.is_some();
