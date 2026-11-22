@@ -132,10 +132,14 @@ fn catch_stops(left: Left) {
             let _ = write!(io::stdout(), "{}", cellix_term::CURSOR_DEFAULT);
         }
         let _ = io::stdout().flush();
-        let paths = left.lock().map(|l| l.clone()).unwrap_or_default();
-        for path in paths {
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_dir_all(&path);
+        if let Ok(left) = left.lock() {
+            for path in &left.paths {
+                let _ = std::fs::remove_file(path);
+                let _ = std::fs::remove_dir_all(path);
+            }
+            for socket in &left.sockets {
+                socket.remove();
+            }
         }
         std::process::exit(0);
     });
@@ -186,7 +190,16 @@ fn catch_stops(_left: Left) {
 fn catch_stops(_left: Left) {}
 
 /// What a stop must clear if the loop can't: each workspace's socket and the like.
-type Left = std::sync::Arc<std::sync::Mutex<Vec<PathBuf>>>;
+type Left = std::sync::Arc<std::sync::Mutex<Leftovers>>;
+
+#[derive(Default)]
+struct Leftovers {
+    /// Files and folders that are this Cellix's alone.
+    paths: Vec<PathBuf>,
+    /// The workspaces' sockets, each taken only while it's still this Cellix's: one opened
+    /// later on the same folder takes it over.
+    sockets: Vec<cellix_agent::Leftover>,
+}
 
 /// How each new workspace is made to look, as the terminal said, and kept up as it changes.
 struct Look {
@@ -214,34 +227,52 @@ fn start_workspace(
     if !wait {
         app.restore_state();
     }
-    // Agents are optional: a second window on this workspace still edits normally. Anything
-    // else that stops agents reaching this one is said, not swallowed.
-    let server = match cellix_agent::start(app.workspace.root(), app.comments.clone()) {
-        Ok(server) => Some(server),
-        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+    // The Cellix opened last on a folder serves its agents: it's the one in front of the
+    // person, and one opened before may be running out of sight, in tmux or behind an SSH
+    // link that dropped, telling agents it opened their file or had no such comment. That one
+    // takes the folder back when this closes. As an editor for another program, Cellix is
+    // gone in a moment, and leaves the folder's agents where they are. Anything else that
+    // stops agents reaching this one is said, not swallowed.
+    let root = app.workspace.root().to_path_buf();
+    let (server, took) = match cellix_agent::start(&root, app.comments.clone()) {
+        Ok(server) => (Some(server), false),
+        Err(e) if e.kind() == io::ErrorKind::AddrInUse && wait => {
             app.say("Another Cellix has this folder open, so agents reach that one");
-            None
+            (None, false)
+        }
+        Err(e) if e.kind() == io::ErrorKind::AddrInUse => {
+            match cellix_agent::take_over(&root, app.comments.clone()) {
+                Ok(server) => (Some(server), true),
+                Err(e) => {
+                    app.say(format!("Agents can't reach this Cellix: {e}"));
+                    (None, false)
+                }
+            }
         }
         Err(e) => {
             app.say(format!("Agents can't reach this Cellix: {e}"));
-            None
+            (None, false)
         }
     };
+    if took {
+        app.say("Another Cellix had this folder open. Its agents reach this one now");
+    }
     if server.is_some() {
         app.restore_unsent();
     }
     app.ide = server.as_ref().and_then(|_| {
-        let root = app.workspace.root();
-        let kept = crate::hold::folder_of(root).join("ide.json");
-        cellix_agent::ide::IdeServer::start_kept(root, &kept).ok()
+        // The port noted for this folder is the other Cellix's while it's open.
+        if took {
+            return cellix_agent::ide::IdeServer::start(&root).ok();
+        }
+        let kept = crate::hold::folder_of(&root).join("ide.json");
+        cellix_agent::ide::IdeServer::start_kept(&root, &kept).ok()
     });
     if let Ok(mut left) = left.lock() {
-        if server.is_some() {
-            let socket = cellix_agent::socket_path(app.workspace.root());
-            left.push(socket.with_extension(""));
-            left.push(socket);
-        }
-        left.extend(app.ide.as_ref().map(|ide| ide.lock().to_path_buf()));
+        left.sockets
+            .extend(server.as_ref().map(cellix_agent::Server::leftover));
+        left.paths
+            .extend(app.ide.as_ref().map(|ide| ide.lock().to_path_buf()));
     }
     app.set_measure(look.measure.clone());
     app.wheel_lines = look.wheel_lines;
@@ -1112,7 +1143,7 @@ pub fn run(options: Options) -> io::Result<()> {
         display.files.as_ref().and_then(TileFiles::folder),
         left.lock(),
     ) {
-        left.push(folder);
+        left.paths.push(folder);
     }
     display.fit_to(size()?.1);
     let mut backend = display.backend();

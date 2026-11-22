@@ -1814,6 +1814,8 @@ pub struct App {
     host_program: Option<PathBuf>,
     /// Whether this workspace is the one on screen.
     pub in_front: bool,
+    /// Whether another Cellix opened this folder since this one did, and so serves its agents.
+    pub agents_elsewhere: bool,
     /// Where the keyboard starts was settled, the first time this workspace was in front
     /// (`App::place_keys`).
     keys_placed: bool,
@@ -1989,6 +1991,7 @@ impl App {
             pane_explained: false,
             host_program: std::env::current_exe().ok().filter(|_| !cfg!(test)),
             in_front: true,
+            agents_elsewhere: false,
             keys_placed: false,
             printed: false,
             behind: false,
@@ -3738,11 +3741,51 @@ impl App {
         let _ = call.reply.send(vec![answer]);
     }
 
+    /// Opens a file an agent asked to show the person, and brings it into view as a click on
+    /// it would: out from behind Review, the side pane given the window, or the sidebar's
+    /// drawer in a narrow window. Only a change Claude Code is waiting on stays in front, since
+    /// it holds the agent until it's answered. The keyboard stays where it was.
+    fn show_for_agent(&mut self, path: &Path) -> io::Result<()> {
+        self.open(path)?;
+        // A picture or a PDF shows in the side pane, which is in view already.
+        let editor = self
+            .editors
+            .get(self.active())
+            .and_then(|e| e.buffer.path());
+        if editor != Some(path) {
+            return Ok(());
+        }
+        if !self.review.as_ref().is_some_and(Review::is_proposal) {
+            self.review = None;
+        }
+        if self.maximized == Some(Maximized::Pane) {
+            self.maximized = None;
+            self.fit_dock();
+        }
+        if self.compact() {
+            self.drawer = false;
+        }
+        Ok(())
+    }
+
+    /// What an agent that asked for `path` is told: that it's on screen, or why not.
+    fn shown_for_agent(&self, path: &Path) -> String {
+        let file = self.relative(path);
+        if self.review.as_ref().is_some_and(Review::is_proposal) {
+            format!("Opened {file}, behind the proposed change the reviewer has in front")
+        } else if !self.in_front {
+            let name = self.workspace.root().file_name().unwrap_or_default();
+            let name = name.to_string_lossy();
+            format!("Opened {file} in Cellix's workspace {name}, which isn't the one on screen")
+        } else {
+            format!("Opened {file}")
+        }
+    }
+
     fn ide_open(&mut self, path: &Path, start: &str, end: &str) -> String {
-        if let Err(e) = self.open(path) {
+        if let Err(e) = self.show_for_agent(path) {
             return format!("Could not open {}: {e}", path.display());
         }
-        self.review = None;
         let index = self.active();
         if let Some(editor) = self.editors.get_mut(index).filter(|_| !start.is_empty()) {
             let text = editor.buffer.text();
@@ -14155,10 +14198,16 @@ impl App {
     /// Runs requests from the socket thread.
     pub fn serve(&mut self, request: Request) {
         match request {
-            Request::Open(path) => {
-                if let Err(e) = self.open(&path) {
-                    self.say(format!("Could not open {}: {e}", path.display()));
-                }
+            Request::Open { path, opened } => {
+                let answer = match self.show_for_agent(&path) {
+                    Ok(()) => self.shown_for_agent(&path),
+                    Err(e) => {
+                        let said = format!("Could not open {}: {e}", path.display());
+                        self.say(said.clone());
+                        format!("error: {said}")
+                    }
+                };
+                let _ = opened.send(answer);
             }
             Request::CommentsTaken => self.say("An agent took the review comments"),
             Request::Suggest {
@@ -39418,6 +39467,87 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         app.ide_call(call);
         assert!(answer.try_recv().unwrap()[0].starts_with("Opened file:"));
         assert_eq!(app.selected_text().as_deref(), Some("first line"));
+    }
+
+    /// What `cellix open` asks, and what the agent is told.
+    fn agent_opens(app: &mut App, path: &Path) -> String {
+        let (opened, answer) = std::sync::mpsc::channel();
+        let path = path.to_path_buf();
+        app.serve(Request::Open { path, opened });
+        answer.try_recv().unwrap()
+    }
+
+    /// An agent in the side pane that shows the person a file with `cellix open` was told it
+    /// had, and the file opened behind the pane given the window: Claude Code said so, on a
+    /// screen that hadn't changed. It comes out as a click on it would, and the keyboard stays
+    /// with the agent.
+    #[test]
+    #[cfg(unix)]
+    fn a_file_an_agent_opens_comes_out_from_behind_the_pane_given_the_window() {
+        let (dir, mut app) = project();
+        session(&mut app, "echo ready; sleep 30");
+        app.run(Command::MaximizePane);
+        assert_eq!(app.maximized, Some(Maximized::Pane));
+        assert!(app.dock.focused);
+        let path = dir.path().join("alpha.txt");
+        assert_eq!(agent_opens(&mut app, &path), "Opened alpha.txt");
+        assert_eq!(app.maximized, None);
+        assert!(screen(&app).text().contains("first line"));
+        assert!(app.dock.focused, "the keyboard stays with the agent");
+        // Already open and in front, behind the pane again: shown again.
+        app.run(Command::MaximizePane);
+        assert!(!screen(&app).text().contains("first line"));
+        assert_eq!(agent_opens(&mut app, &path), "Opened alpha.txt");
+        assert!(screen(&app).text().contains("first line"));
+        app.dock.stop_all();
+    }
+
+    /// Review takes the file's place, so a file an agent opened stood behind it.
+    #[test]
+    fn a_file_an_agent_opens_comes_out_from_behind_review() {
+        let (dir, mut app) = reviewed();
+        app.open(&dir.path().join("beta.rs")).unwrap();
+        app.run(Command::OpenDiff);
+        assert!(app.review.is_some());
+        assert!(!screen(&app).text().contains("fn main"));
+        assert_eq!(
+            agent_opens(&mut app, &dir.path().join("beta.rs")),
+            "Opened beta.rs"
+        );
+        assert!(app.review.is_none());
+        assert!(screen(&app).text().contains("fn main"));
+    }
+
+    /// In a narrow window the sidebar is a drawer over the file.
+    #[test]
+    fn a_file_an_agent_opens_comes_out_from_under_the_sidebars_drawer() {
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
+        app.handle(Event::Resize(60, 30));
+        if !app.drawer {
+            app.run(Command::ToggleSidebar);
+        }
+        assert!(app.compact() && app.drawer);
+        assert!(!screen(&app).text().contains("first line"));
+        agent_opens(&mut app, &dir.path().join("alpha.txt"));
+        assert!(!app.drawer);
+        assert!(screen(&app).text().contains("first line"));
+    }
+
+    /// The agent hears what the person will and won't see: a file that can't open, and one
+    /// that opened in a workspace that isn't on screen.
+    #[test]
+    fn an_agent_hears_when_its_file_isnt_on_screen() {
+        let (dir, mut app) = project();
+        let said = agent_opens(&mut app, &dir.path().join("missing.txt"));
+        assert!(said.starts_with("error: Could not open"), "{said}");
+        app.in_front = false;
+        let said = agent_opens(&mut app, &dir.path().join("alpha.txt"));
+        let name = dir.path().file_name().unwrap().to_string_lossy();
+        assert_eq!(
+            said,
+            format!("Opened alpha.txt in Cellix's workspace {name}, which isn't the one on screen")
+        );
     }
 
     #[test]

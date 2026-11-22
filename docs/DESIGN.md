@@ -2847,6 +2847,17 @@ A process per batch costs a few milliseconds. If it shows, the next step is a lo
 input channel.
 
 Cellix runs one local socket per workspace, and each integration is a thin adapter.
+When a second Cellix opens a folder another already serves, the one opened last takes the
+socket. It's the one in front of the person. The other may be out of sight, left in tmux or
+behind an SSH link that dropped. While the first kept the socket, an agent beside the second was
+told it had opened its file, or that a comment the person could see didn't exist, by the
+Cellix nobody was looking at. The older one notices it lost the socket, says so once, and
+takes it back within a few seconds of the newer one closing. Each only ever removes its own
+socket file, told apart by inode and creation time. A Cellix that is only editing a file
+for another program (`--wait`) leaves the socket where it is. `cellix open` answers once the
+file is open, and says where: in front, in a workspace that isn't, behind a proposed change,
+or why it couldn't. The file comes out from behind Review, a maximized pane or the sidebar's
+drawer, as it does for Claude Code's IDE `openFile`.
 Comments reach an agent through `cellix comments [--take]` as JSON. With `--wait` they are
 also appended to the file as a "Review comments" section, because `$VISUAL` only returns
 the file. `cellix comments` lists the review's comments on code alone; `cellix comments

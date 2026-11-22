@@ -1991,10 +1991,68 @@ fn cli_reads_comments_over_socket() {
     assert!(json.contains(r#""text":"from a human""#), "{json}");
     assert!(cli(&["comments", "--take"]).contains("from a human"));
     assert_eq!(cli(&["comments"]).trim(), "[]");
-    cli(&["open", "other.txt"]);
+    // The agent hears what came of it once it has: it said "ok" before Cellix had tried.
+    let opened = cli(&["open", "other.txt"]);
+    assert!(
+        opened.starts_with("Opened ") && opened.trim().ends_with("other.txt"),
+        "{opened}"
+    );
     screen.wait_for("other contents");
+    let missing = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+        .args(["open", "missing.txt"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&missing.stderr);
+    assert!(!missing.status.success(), "{missing:?}");
+    assert!(
+        said.contains("Could not open") && said.contains("missing.txt"),
+        "{said}"
+    );
     screen.send(b"\x11");
     screen.wait_exit();
+}
+
+/// Two Cellix on one folder, the first left running as in tmux or behind a dropped SSH link:
+/// an agent's `cellix open` opened its file in that one, out of sight, and its replies were
+/// told there was no such comment. The one opened last takes the folder's agents, and once it
+/// closes the first takes them back.
+#[test]
+#[cfg(unix)]
+fn an_agent_reaches_the_cellix_opened_last_on_its_folder() {
+    let dir = project();
+    let open = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .args(["open", "other.txt"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap()
+    };
+    let mut older = Screen::start(dir.path(), &["hello.txt"]);
+    older.wait_for("hello from a file");
+    let mut newer = Screen::start(dir.path(), &["hello.txt"]);
+    newer.wait_for("hello from a file");
+    let opened = open();
+    assert!(opened.status.success(), "{opened:?}");
+    newer.wait_for("other contents");
+    assert!(
+        !older.contents().contains("other contents"),
+        "the older stayed as it was"
+    );
+    newer.send(b"\x11");
+    newer.wait_exit();
+    // The older takes the folder back within a few seconds of the newer closing.
+    let deadline = Instant::now() + WAIT;
+    while !open().status.success() {
+        assert!(
+            Instant::now() < deadline,
+            "the older never took the folder back"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    older.wait_for("other contents");
+    older.send(b"\x11");
+    older.wait_exit();
 }
 
 /// Everything Cellix has written, as text.

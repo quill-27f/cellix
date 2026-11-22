@@ -71,6 +71,32 @@ pub struct Workspace {
     pub server: Option<cellix_agent::Server>,
 }
 
+/// A workspace whose folder another Cellix opened since, and so took its agents, says so once,
+/// and takes them back once that one has closed.
+fn follow_agents(workspace: &mut Workspace) -> bool {
+    if !workspace
+        .server
+        .as_ref()
+        .is_some_and(cellix_agent::Server::lost)
+    {
+        return false;
+    }
+    let app = &mut workspace.app;
+    let root = app.workspace.root().to_path_buf();
+    if let Ok(server) = cellix_agent::start(&root, app.comments.clone()) {
+        workspace.server = Some(server);
+        app.agents_elsewhere = false;
+        app.say("The other Cellix on this folder closed, so its agents reach this one again");
+        return true;
+    }
+    if app.agents_elsewhere {
+        return false;
+    }
+    app.agents_elsewhere = true;
+    app.say("Another Cellix opened this folder, so its agents reach that one");
+    true
+}
+
 /// Makes the workspace for a folder at a size, ready to show: in the terminal that means
 /// its socket, its look, and what it left running or unsaved last time.
 pub type Starter = Box<dyn FnMut(PathBuf, (u16, u16)) -> Workspace>;
@@ -119,7 +145,12 @@ pub struct Workspaces {
     /// A session on screen printed, and something out of sight changed, since the loop asked.
     printed: bool,
     behind: bool,
+    /// When the workspaces' sockets were last looked at, for one another Cellix took.
+    agents_look: Instant,
 }
+
+/// How often a workspace whose folder another Cellix took looks to take it back.
+const AGENTS_LOOK: std::time::Duration = std::time::Duration::from_secs(3);
 
 impl Workspaces {
     pub fn new(size: (u16, u16), machine: String, start: Starter) -> Self {
@@ -141,6 +172,7 @@ impl Workspaces {
             notifications: Vec::new(),
             printed: false,
             behind: false,
+            agents_look: Instant::now(),
         }
     }
 
@@ -410,9 +442,16 @@ impl Workspaces {
     pub fn poll(&mut self) -> bool {
         let mut changed = false;
         let shown = self.shown();
+        let look = self.agents_look.elapsed() >= AGENTS_LOOK;
+        if look {
+            self.agents_look = Instant::now();
+        }
         for (index, workspace) in self.list.iter_mut().enumerate() {
             workspace.app.in_front = shown == Some(index);
             let mut here = workspace.app.poll();
+            if look {
+                here |= follow_agents(workspace);
+            }
             if let Some(server) = &workspace.server {
                 while let Ok(request) = server.requests.try_recv() {
                     workspace.app.serve(request);
@@ -1512,6 +1551,56 @@ mod tests {
 
     fn bar(spaces: &Workspaces) -> String {
         screen(spaces).row_text(spaces.size().1 - 1)
+    }
+
+    /// A Cellix left open on a folder, in tmux or behind a dropped SSH link, answered the
+    /// agents of the one the person had in front: their file opened in it, out of sight, and
+    /// their replies found no such comment. The one opened later takes the folder's agents;
+    /// the older says so, and takes them back once the newer closes.
+    #[test]
+    #[cfg(unix)]
+    fn a_workspace_gives_its_agents_to_a_cellix_opened_later_and_takes_them_back() {
+        let (_dir, first, _) = projects();
+        let start: Starter = Box::new(|root, size| {
+            let app = App::new(root, size);
+            let server = cellix_agent::start(app.workspace.root(), app.comments.clone()).ok();
+            Workspace { app, server }
+        });
+        let mut spaces = Workspaces::new((100, 30), "dev-box".to_string(), start);
+        spaces.open(first);
+        let root = spaces.app().workspace.root().to_path_buf();
+        assert!(spaces.list[0].server.as_ref().is_some_and(|s| !s.lost()));
+        let look = |spaces: &mut Workspaces| {
+            spaces.agents_look = Instant::now() - AGENTS_LOOK;
+            spaces.poll();
+        };
+        look(&mut spaces);
+        assert!(
+            !spaces.app().agents_elsewhere,
+            "nothing to say while it serves"
+        );
+
+        // Another Cellix opens the folder.
+        let newer = cellix_agent::take_over(&root, Default::default()).unwrap();
+        look(&mut spaces);
+        assert!(spaces.app().agents_elsewhere);
+        let text = screen(&spaces).text();
+        assert!(text.contains("Another Cellix opened this folder"), "{text}");
+        // It's said once, and the newer keeps the folder while it's open.
+        spaces.app().say("");
+        look(&mut spaces);
+        assert!(!screen(&spaces).text().contains("Another Cellix"));
+        assert!(spaces.list[0].server.as_ref().is_some_and(|s| s.lost()));
+        assert!(!newer.lost());
+
+        // Closed, it gives the folder back.
+        drop(newer);
+        look(&mut spaces);
+        assert!(!spaces.app().agents_elsewhere);
+        assert!(spaces.list[0].server.as_ref().is_some_and(|s| !s.lost()));
+        let text = screen(&spaces).text();
+        assert!(text.contains("reach this one again"), "{text}");
+        assert!(cellix_agent::socket_path(&root).exists());
     }
 
     /// A tile has the marks a tab has and only those: a green dot for a finished turn, where

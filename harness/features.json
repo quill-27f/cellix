@@ -7642,5 +7642,19 @@
     "title": "Only the place with the keys shows a cursor: a terminal pane's only in the session with them, the file's caret only while the side pane and peek have not got them, and neither with the keys in the pane and the window behind another",
     "test": "a_terminal_panes_cursor_shows_only_while_it_has_the_keys",
     "passes": true
+  },
+  {
+    "id": "agent-opened-file-comes-into-view",
+    "milestone": 15,
+    "title": "A file an agent opens with `cellix open` comes out from behind the side pane given the window, Review and the sidebar's drawer, keeping the keyboard where it was, and the agent is told it opened, where, or why it couldn't, rather than \"ok\" before Cellix tried",
+    "test": "a_file_an_agent_opens_comes_out_from_behind_the_pane_given_the_window",
+    "passes": true
+  },
+  {
+    "id": "newest-cellix-serves-the-folders-agents",
+    "milestone": 15,
+    "title": "The Cellix opened last on a folder serves its agents, so one left in tmux or behind a dropped SSH link no longer answers for the one in front; the older says so, removes nothing of the newer's, and takes the agents back once the newer closes",
+    "test": "a_workspace_gives_its_agents_to_a_cellix_opened_later_and_takes_them_back",
+    "passes": true
   }
 ]

@@ -90,7 +90,12 @@ pub enum Decision {
 /// Requests that need the app itself, drained on its next tick.
 #[derive(Debug)]
 pub enum Request {
-    Open(PathBuf),
+    /// An agent showing the person a file. `opened` has what came of it, for the agent to
+    /// read: it said "ok" before the app had even tried, and an agent took that as "on screen".
+    Open {
+        path: PathBuf,
+        opened: Sender<String>,
+    },
     /// The socket thread already emptied the shared list.
     CommentsTaken,
     Agent(AgentEvent),
@@ -291,8 +296,13 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             Ok(json)
         }
         (Some("open"), Some(path)) => {
-            ask(requests, Request::Open(PathBuf::from(path)));
-            Ok("ok".into())
+            let (opened, answer) = channel();
+            let path = PathBuf::from(path);
+            ask(requests, Request::Open { path, opened });
+            // A Cellix too busy to answer in time still opens it when it gets to it.
+            Ok(answer
+                .recv_timeout(ANSWER_TIME)
+                .unwrap_or_else(|_| "ok".to_string()))
         }
         (Some("threads"), None) => {
             let (reply, threads) = channel();
@@ -358,9 +368,16 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
                     found,
                 },
             );
+            // A Cellix too busy to look in time isn't one without the comment: the reply is
+            // still added when it gets to it, so the agent mustn't send it again.
             Ok(match answer.recv_timeout(ANSWER_TIME) {
                 Ok(true) => "ok".to_string(),
-                _ => format!("error: there's no comment {id}"),
+                Ok(false) => format!("error: there's no comment {id}"),
+                Err(_) => format!(
+                    "error: Cellix was too busy to answer in time. Your reply goes under \
+                     comment {id} when it gets to it, if there's such a comment, so don't send \
+                     it again"
+                ),
             })
         }
         (Some("suggest"), Some(json)) => {
@@ -444,35 +461,76 @@ pub struct Server {
 }
 
 /// What tells this server's socket file from one a later Cellix put in its place.
+#[derive(Clone)]
 enum Owner {
-    /// The Unix socket's inode.
+    /// The Unix socket's file, by `stamp`.
     #[cfg(unix)]
-    Socket(u64),
+    Socket(Stamp),
     Note(loopback::Note),
 }
 
-impl Server {
+/// What tells one socket file from another at the same path: its inode, which a file made
+/// after it was taken away may be given again, and when it was made.
+#[cfg(unix)]
+type Stamp = (u64, i64, i64);
+
+#[cfg(unix)]
+fn stamp(meta: &fs::Metadata) -> Stamp {
+    use std::os::unix::fs::MetadataExt;
+    (meta.ino(), meta.ctime(), meta.ctime_nsec())
+}
+
+/// What a server leaves on disk, its socket and the plans beside it, for whatever clears up
+/// after a Cellix stopped by a signal. Only the server that made them may take them away: a
+/// later Cellix may have put its own in their place.
+#[derive(Clone)]
+pub struct Leftover {
+    path: PathBuf,
+    owner: Owner,
+}
+
+impl Leftover {
     /// Whether the socket file is still this server's own.
-    fn owns_its_file(&self) -> bool {
+    fn owned(&self) -> bool {
         match &self.owner {
             #[cfg(unix)]
-            Owner::Socket(inode) => {
-                use std::os::unix::fs::MetadataExt;
-                fs::symlink_metadata(&self.path).is_ok_and(|m| m.ino() == *inode)
+            Owner::Socket(made) => {
+                fs::symlink_metadata(&self.path).is_ok_and(|m| stamp(&m) == *made)
             }
             Owner::Note(note) => note.is_at(&self.path),
         }
+    }
+
+    /// Takes away the socket and its plans, if they're still this server's.
+    pub fn remove(&self) {
+        if self.owned() {
+            let _ = fs::remove_file(&self.path);
+            let _ = fs::remove_dir_all(self.path.with_extension(""));
+        }
+    }
+}
+
+impl Server {
+    /// What this server leaves on disk, to clear if Cellix is stopped before it's dropped.
+    pub fn leftover(&self) -> Leftover {
+        Leftover {
+            path: self.path.clone(),
+            owner: self.owner.clone(),
+        }
+    }
+
+    /// Whether another Cellix has since opened this folder and taken its socket, so agents
+    /// reach that one and not this.
+    pub fn lost(&self) -> bool {
+        !self.leftover().owned()
     }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
-        // Two starting at once can both find no one here, and the second's file replaces the
-        // first's. The first mustn't take it with it.
-        if self.owns_its_file() {
-            let _ = fs::remove_file(&self.path);
-            let _ = fs::remove_dir_all(self.path.with_extension(""));
-        }
+        // A Cellix opened on this folder after this one took its socket, and two starting at
+        // once can both find no one here. Either way the file is the other's to take.
+        self.leftover().remove();
     }
 }
 
@@ -532,6 +590,33 @@ pub fn start_with(
     comments: SharedComments,
     transport: Transport,
 ) -> io::Result<Server> {
+    bind(root, comments, transport, false)
+}
+
+/// Binds the workspace socket in place of another Cellix's, if one serves it. The Cellix
+/// opened last on a folder is the one in front of the person, and an older one may be running
+/// out of sight, in tmux or behind an SSH link that dropped: agents told it had their file
+/// open, or that it had no such comment, while the person looked at this one. The other sees
+/// it has `lost` its socket, and takes it back once this one closes.
+pub fn take_over(root: &Path, comments: SharedComments) -> io::Result<Server> {
+    take_over_with(root, comments, Transport::NATIVE)
+}
+
+/// `take_over`, over the transport given.
+pub fn take_over_with(
+    root: &Path,
+    comments: SharedComments,
+    transport: Transport,
+) -> io::Result<Server> {
+    bind(root, comments, transport, true)
+}
+
+fn bind(
+    root: &Path,
+    comments: SharedComments,
+    transport: Transport,
+    replace: bool,
+) -> io::Result<Server> {
     let path = socket_path(root);
     let dir = path.parent().ok_or_else(|| io::Error::other("no parent"))?;
     private_folder(dir)?;
@@ -539,12 +624,12 @@ pub fn start_with(
     let owner = match transport {
         #[cfg(unix)]
         Transport::Unix => {
-            if UnixStream::connect(&path).is_ok() {
+            if !replace && UnixStream::connect(&path).is_ok() {
                 return Err(io::Error::new(ErrorKind::AddrInUse, "already running"));
             }
             let _ = fs::remove_file(&path);
             let listener = UnixListener::bind(&path)?;
-            let inode = std::os::unix::fs::MetadataExt::ino(&fs::symlink_metadata(&path)?);
+            let made = stamp(&fs::symlink_metadata(&path)?);
             thread::spawn(move || {
                 for stream in listener.incoming().flatten() {
                     // One thread each, because a plan holds its connection open for as long as
@@ -556,10 +641,10 @@ pub fn start_with(
                     });
                 }
             });
-            Owner::Socket(inode)
+            Owner::Socket(made)
         }
         Transport::Loopback => {
-            if loopback::alive(&path) {
+            if !replace && loopback::alive(&path) {
                 return Err(io::Error::new(ErrorKind::AddrInUse, "already running"));
             }
             let _ = fs::remove_file(&path);
@@ -713,14 +798,86 @@ mod tests {
         assert!(matches!(server.requests.recv(), Ok(Request::CommentsTaken)));
     }
 
+    /// Answers the next request, an Open of `want`, with `said`.
+    fn answer_open(server: &Server, want: &str, said: &str) {
+        match server.requests.recv() {
+            Ok(Request::Open { path, opened }) if path == Path::new(want) => {
+                opened.send(said.to_string()).unwrap();
+            }
+            other => panic!("not an open of {want}: {other:?}"),
+        }
+    }
+
+    /// The agent hears what the app made of it, a failure included, and not "ok" before the
+    /// app has tried.
     #[test]
-    fn open_reaches_the_app() {
+    fn open_reaches_the_app_and_brings_back_what_came_of_it() {
         let dir = tempfile::tempdir().unwrap();
         let server = start(dir.path(), Arc::default()).unwrap();
-        assert_eq!(request(dir.path(), "open /tmp/x.rs").unwrap(), "ok");
+        let root = dir.path().to_path_buf();
+        let asked = thread::spawn(move || request(&root, "open /tmp/x.rs").unwrap());
+        answer_open(&server, "/tmp/x.rs", "Opened x.rs");
+        assert_eq!(asked.join().unwrap(), "Opened x.rs");
+        let root = dir.path().to_path_buf();
+        let asked = thread::spawn(move || request(&root, "open /tmp/gone.rs").unwrap());
+        answer_open(
+            &server,
+            "/tmp/gone.rs",
+            "error: Could not open /tmp/gone.rs",
+        );
+        assert_eq!(asked.join().unwrap(), "error: Could not open /tmp/gone.rs");
+    }
+
+    /// A Cellix opened on a folder another still serves, perhaps left in tmux or behind a
+    /// dropped SSH link, takes its agents: they were told of a file opened and of no such
+    /// comment by the one out of sight. The older sees it lost them, leaves the newer's socket
+    /// alone as it goes, and can take the folder back once the newer one has closed.
+    #[test]
+    fn a_cellix_opened_later_takes_the_folders_agents_and_gives_them_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let older = start(dir.path(), Arc::default()).unwrap();
+        assert!(!older.lost());
+        let newer = take_over(dir.path(), Arc::default()).unwrap();
+        assert!(older.lost() && !newer.lost());
+        let root = dir.path().to_path_buf();
+        let asked = thread::spawn(move || request(&root, "open /tmp/x.rs").unwrap());
+        answer_open(&newer, "/tmp/x.rs", "Opened x.rs");
+        assert_eq!(asked.join().unwrap(), "Opened x.rs");
+        assert!(
+            older.requests.try_recv().is_err(),
+            "nothing reached the older"
+        );
+        // Cleared up after a signal, or dropped, the older takes nothing of the newer's.
+        older.leftover().remove();
+        assert!(socket_path(dir.path()).exists());
+        // While the newer serves, the older can't take it back, and once it's gone it can.
+        assert!(start(dir.path(), Arc::default()).is_err());
+        drop(newer);
+        assert!(!socket_path(dir.path()).exists());
+        let again = start(dir.path(), Arc::default()).unwrap();
+        assert!(!again.lost());
+        drop(older);
+        assert!(
+            socket_path(dir.path()).exists(),
+            "the older left the new socket be"
+        );
+    }
+
+    /// A Cellix too busy to answer in time isn't one without the comment.
+    #[test]
+    fn a_reply_cellix_was_too_busy_for_isnt_called_a_missing_comment() {
+        let dir = tempfile::tempdir().unwrap();
+        let server = start(dir.path(), Arc::default()).unwrap();
+        let root = dir.path().to_path_buf();
+        let said = request(&root, "reply 7 Claude Code\tDone.").unwrap();
+        assert!(
+            said.contains("too busy") && !said.contains("no comment"),
+            "{said}"
+        );
+        // The request still waits for the app, which answers when it gets to it.
         assert!(matches!(
-            server.requests.recv(),
-            Ok(Request::Open(path)) if path == Path::new("/tmp/x.rs")
+            server.requests.try_recv(),
+            Ok(Request::Reply { id: 7, .. })
         ));
     }
 
@@ -772,14 +929,10 @@ mod tests {
         let json = request_with(dir.path(), "comments", over).unwrap();
         let parsed: Vec<Comment> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, vec![comment()]);
-        assert_eq!(
-            request_with(dir.path(), "open /tmp/x.rs", over).unwrap(),
-            "ok"
-        );
-        assert!(matches!(
-            server.requests.recv(),
-            Ok(Request::Open(path)) if path == Path::new("/tmp/x.rs")
-        ));
+        let root = dir.path().to_path_buf();
+        let asked = thread::spawn(move || request_with(&root, "open /tmp/x.rs", over).unwrap());
+        answer_open(&server, "/tmp/x.rs", "Opened x.rs");
+        assert_eq!(asked.join().unwrap(), "Opened x.rs");
         request_with(dir.path(), "take", over).unwrap();
         assert!(shared.lock().unwrap().is_empty());
         assert!(matches!(server.requests.recv(), Ok(Request::CommentsTaken)));
