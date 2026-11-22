@@ -2,6 +2,16 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.13.0] - 2026-11-22
+
+Kiro CLI joins the agents, and a folder a click opened stays open.
+
+### Added
+- Kiro CLI, as an agent in the side pane: `cellix setup kiro` (or Install under Settings › Integrations) writes one file of Cellix's own, `~/.kiro/hooks/cellix.json`, among Kiro CLI's global hooks, and `--remove` takes back exactly that file; your Kiro agent files are left as they are. Kiro says when it's working, when it asks to run something (needs you, with what it asks) and when it's done, on its tab, in the Agents list, on the workspace's tile and in the Inbox, and its tab is named by what you first asked it. The + menu and START offer it where `kiro-cli` is installed, it has a mark of Cellix's own, Resume starts its session again with `kiro-cli chat --resume-id`, and `kiro-cli` typed in a Terminal tab makes that tab Kiro's. Its hooks need Kiro CLI 3.0 or later, which setup says on an older one. It takes your comments through Ask Agent; Ask isn't offered for it yet. It hasn't been tried with the real Kiro CLI.
+
+### Fixed
+- A click that opened a folder in the Explorer sometimes shut it again a moment later, as if clicked twice: a look at the disk that had started before the click came in with the tree as it was. Such a look now leaves the tree alone and only brings git's marks; the next one shows the tree as it is.
+
 ## [0.12.1] - 2026-11-20
 
 The cursor blinks, every box edits text as the others do, and an agent's tab is named by the conversation it holds, wherever it runs.

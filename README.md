@@ -43,7 +43,7 @@ tmux to keep it running there.
 - **A second reader for your review.** Check My Review has the agent weigh each of your comments and
   suggest the ones you missed, without editing a word.
 - **Or inside your agent.** A pane inside Claude Code, plugins for Codex, Gemini CLI, OpenCode,
-  Copilot CLI and Cursor's agent, and the same thing over SSH and in tmux. One static binary in Rust, drawing real pixels in Ghostty, Kitty
+  Copilot CLI, Cursor's agent and Kiro CLI, and the same thing over SSH and in tmux. One static binary in Rust, drawing real pixels in Ghostty, Kitty
   and WezTerm, and text cells everywhere else.
 
 ## Install
@@ -656,12 +656,16 @@ for your comments as JSON, or `cellix open <file>` to show you something.
 The IDE connection follows what Claude Code's VS Code extension does, which isn't a
 published protocol, so a Claude Code update could change it. It was built against 2.1.309.
 
-### OpenCode, Copilot CLI and Cursor's agent
+### OpenCode, Copilot CLI, Cursor's agent and Kiro CLI
 
-`cellix setup opencode`, `cellix setup copilot` or `cellix setup cursor` connects each through its
-own hooks or plugin, and `--remove` takes it back. They say when they're working, done or need you,
-and Resume finds their sessions. Cursor's agent has no hook for asking you something. None of the
-three has been tried on the real tool yet.
+`cellix setup opencode`, `cellix setup copilot`, `cellix setup cursor` or `cellix setup kiro`
+connects each through its own hooks or plugin, and `--remove` takes it back. They say when they're
+working, done or need you, and Resume finds their sessions. Cursor's agent has no hook for asking
+you something. Kiro CLI's hooks are one file of Cellix's own, `~/.kiro/hooks/cellix.json`, beside
+yours, which needs Kiro CLI 3.0 or later (setup says so on 2.x), and its agent files are left as
+they are; it takes your comments through Ask Agent, and Ask isn't offered for it yet. `kiro-cli`
+typed in a Terminal tab makes that tab Kiro's, as `claude` does. None of the four has been tried on
+the real tool yet.
 
 ### Codex and Gemini CLI
 
