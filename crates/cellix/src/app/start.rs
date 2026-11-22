@@ -287,13 +287,33 @@ mod tests {
             });
             panels.count()
         };
-        // A place on the list's Gemini CLI row that the menu will stand over.
-        let (_, y) = place_of(&screen(&app), "Gemini CLI");
+        // A place on one of the list's rows that the menu will stand over, on a row of the
+        // menu that can be chosen: a dimmed one, an agent not installed, lights nothing. On
+        // the list's Gemini CLI row, the menu's row there became one when Kiro CLI joined it,
+        // so every agent but Claude Code counts as installed here, each a row of both.
+        let others = [
+            "codex",
+            "gemini",
+            "opencode",
+            "copilot",
+            "cursor-agent",
+            "kiro-cli",
+        ];
+        app.agents.pretend_installed(&others);
+        let list = screen(&app);
         plus(&mut app);
         let Overlay::Menu(menu) = &app.overlay else {
             unreachable!()
         };
         let x = menu.area().x + 2;
+        let y = others
+            .iter()
+            .map(|program| place_of(&list, crate::agents::display_name(program)).1)
+            .find(|y| {
+                let row = menu.row_at(x, f32::from(*y) + 0.5);
+                menu.contains(x, *y) && row.is_some_and(|row| menu.action(row).is_some())
+            })
+            .expect("a row of the list under one of the menu's that can be chosen");
         app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
         let moved = |app: &mut App, x: u16, y: u16| {
             app.handle(Event::Mouse(MouseEvent {
@@ -376,6 +396,51 @@ mod tests {
             "1 is the first installed"
         );
         assert_eq!(heard(&mut app, &file), "started\n", "and plainly");
+    }
+
+    /// Kiro CLI is offered where `kiro-cli` is installed: under START, and in the + menu with
+    /// its key. Where it isn't, START leaves it out and the menu dims it, saying so, as any
+    /// agent not installed. Started, it runs its chat, `kiro-cli chat`, under its own mark.
+    #[cfg(unix)]
+    #[test]
+    fn kiro_cli_is_offered_where_it_is_installed_and_starts_its_chat() {
+        let (dir, mut app) = project();
+        let kiro = crate::agents::mark("kiro-cli", &app.theme);
+        assert_eq!(kiro.0, Icon::AgentKiro);
+        let marks = |grid: &Grid| -> Vec<(Icon, Rgb)> {
+            let icons = grid.paint.iter().filter_map(|p| match p {
+                Paint::Icon { icon, color, .. } => Some((*icon, *color)),
+                _ => None,
+            });
+            icons.collect()
+        };
+        // Not installed: not under START, and dimmed in the menu, where a press does nothing.
+        app.run(Command::ListAgents);
+        assert!(!screen(&app).text().contains("Kiro CLI"));
+        plus(&mut app);
+        let grid = screen(&app);
+        let row = grid.row_text(place_of(&grid, "Kiro CLI").1);
+        assert!(row.trim_end().ends_with("not installed"), "{row}");
+        assert!(marks(&grid).contains(&(kiro.0, app.theme.disabled)));
+        app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
+
+        // Installed: under START with what it runs, and in the menu with its key.
+        app.agents
+            .pretend_installed(&["codex", "gemini", "kiro-cli"]);
+        let grid = screen(&app);
+        let (_, y) = place_of(&grid, "K Kiro CLI");
+        assert!(grid.row_text(y).trim_end().ends_with("kiro-cli"));
+        assert!(marks(&grid).contains(&kiro), "its own mark, in its colour");
+        plus(&mut app);
+        let grid = screen(&app);
+        let row = grid.row_text(place_of(&grid, "Kiro CLI").1);
+        assert!(row.trim_end().ends_with('3'), "{row}");
+        let file = stand_in(&mut app, dir.path(), "kiro");
+        app.handle(Event::Key(KeyEvent::plain(Key::Char('3'))));
+        assert_eq!(app.dock.sessions.len(), 1);
+        assert_eq!(app.dock.sessions[0].name, "Kiro CLI");
+        assert_eq!(app.dock.sessions[0].icon(), Icon::AgentKiro);
+        assert_eq!(heard(&mut app, &file), "started\nchat\n");
     }
 
     /// A role starts its agent with the role's body as its first prompt, given the way the

@@ -591,6 +591,7 @@ pub fn program_icon(name: &str, shell: bool, browser: bool) -> Icon {
         "OpenCode" => Icon::AgentOpenCode,
         "Copilot CLI" | "Copilot" => Icon::AgentCopilot,
         "Cursor CLI" | "Cursor" => Icon::AgentCursor,
+        "Kiro CLI" | "Kiro" => Icon::AgentKiro,
         _ => Icon::Program,
     }
 }
@@ -607,12 +608,14 @@ fn view_icon(view: Front) -> Icon {
     }
 }
 
-/// The colour a program's mark is drawn in: Claude Code's warm clay, Gemini CLI's blue, a
-/// shell's and any other program's in the quieter text colour, Codex's in the text's own.
+/// The colour a program's mark is drawn in: Claude Code's warm clay, Gemini CLI's blue, Kiro
+/// CLI's violet, a shell's and any other program's in the quieter text colour, Codex's in the
+/// text's own.
 pub fn icon_colour(icon: Icon, theme: &Theme) -> Rgb {
     match icon {
         Icon::AgentClaude => theme.claude_mark(),
         Icon::AgentGemini => theme.gemini_mark(),
+        Icon::AgentKiro => theme.kiro_mark(),
         Icon::AgentCodex => theme.text.fg,
         _ => theme.tab.fg,
     }
@@ -860,10 +863,7 @@ impl Session {
         if self.registered.is_some() {
             return Some("Claude Code");
         }
-        let mut known = crate::agents::AGENTS.iter();
-        known
-            .find(|(_, command)| *command == program)
-            .map(|(name, _)| *name)
+        crate::agents::named_by_command(program)
     }
 
     /// The process its agent runs as: an agent's tab's own program, or the command in front
@@ -4703,6 +4703,14 @@ mod tests {
             "Codex",
             "a new conversation isn't named by the last"
         );
+
+        // `kiro-cli` typed at the prompt is Kiro CLI's tab, as is its chat's own process.
+        for command in ["kiro-cli", "kiro-cli-chat"] {
+            front(&mut shell, command);
+            assert_eq!(shell.agent_in_front(), Some("Kiro CLI"), "{command}");
+            assert_eq!(shell.label(), "Kiro CLI");
+            assert_eq!(shell.icon(), Icon::AgentKiro);
+        }
 
         // A process Claude Code says is its own is Claude Code, whatever it runs as.
         front(&mut shell, "node");

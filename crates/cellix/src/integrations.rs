@@ -461,6 +461,107 @@ pub fn remove_cursor(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
     write_settings(&file, &settings)
 }
 
+/// How long `kiro-cli --version` may take before setup goes on without knowing.
+const KIRO_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Kiro CLI's version, as its major and minor numbers.
+pub type KiroVersion = (u32, u32);
+
+/// Where Kiro CLI's V3 chat reads hooks in every workspace, beside the workspace's own and
+/// the person's: a file of Cellix's own in its global hooks folder. No agent's file is
+/// touched, which is where Kiro CLI 2.x kept hooks.
+fn kiro_hooks(var: &impl Fn(&str) -> Option<String>) -> Option<PathBuf> {
+    Some(PathBuf::from(var("HOME")?).join(".kiro/hooks/cellix.json"))
+}
+
+pub fn kiro_installed(var: impl Fn(&str) -> Option<String>) -> bool {
+    kiro_hooks(&var).is_some_and(|file| file.exists())
+}
+
+/// The version of the Kiro CLI on the PATH, as `kiro-cli --version` says it, as its major and
+/// minor numbers. None where there's none, it takes longer than `KIRO_WAIT`, or it says nothing
+/// like a version.
+pub fn kiro_version(var: impl Fn(&str) -> Option<String>) -> Option<KiroVersion> {
+    let path = std::ffi::OsString::from(var("PATH")?);
+    let program = crate::ask::find("kiro-cli", &path)?;
+    let mut child = Command::new(program)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + KIRO_WAIT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+    let output = child.wait_with_output().ok()?;
+    read_version(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// The first word of `said` that reads as a version, `3.4.1` or `v3.4`, as its major and minor
+/// numbers.
+pub fn read_version(said: &str) -> Option<KiroVersion> {
+    said.split(|c: char| c.is_whitespace() || c == ',')
+        .find_map(|word| {
+            let mut parts = word.trim_start_matches('v').split('.');
+            let major = parts.next()?.parse().ok()?;
+            let minor = parts.next()?.parse().ok()?;
+            Some((major, minor))
+        })
+}
+
+/// Whether the Kiro CLI found has the trigger that runs as a call is about to ask the person,
+/// which came in 3.4. Where that can't be told, it's taken to; 2.x reads none of the file, and
+/// is taken to be updated to one that does.
+fn kiro_asks(version: Option<KiroVersion>) -> bool {
+    version.is_none_or(|v| !((3, 0)..(3, 4)).contains(&v))
+}
+
+/// Writes Cellix's hooks for Kiro CLI, as `version` runs them.
+pub fn install_kiro(
+    var: impl Fn(&str) -> Option<String>,
+    version: Option<KiroVersion>,
+) -> io::Result<()> {
+    let missing = || io::Error::new(io::ErrorKind::NotFound, "no home folder");
+    let file = kiro_hooks(&var).ok_or_else(missing)?;
+    crate::plugin::write_file(&file, &crate::plugin::kiro_hooks(kiro_asks(version)))
+}
+
+/// Takes the file away, and nothing else in Kiro's hooks folder.
+pub fn remove_kiro(var: impl Fn(&str) -> Option<String>) -> io::Result<()> {
+    match kiro_hooks(&var).map(fs::remove_file) {
+        Some(Err(e)) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// What setting Kiro CLI up says of the one found: whether it runs the hooks as they're
+/// written, and what to do where it doesn't. Only V3 reads `~/.kiro/hooks`, its chat's
+/// default from 3.0.
+pub fn kiro_note(version: Option<KiroVersion>) -> String {
+    match version {
+        Some((major, minor)) if major < 3 => format!(
+            "Kiro CLI {major}.{minor} reads hooks only from its agents' own files: from 3.0 its \
+             V3 chat runs this one. Update it with kiro-cli update."
+        ),
+        Some((major, minor)) if !kiro_asks(version) => format!(
+            "Kiro CLI {major}.{minor} runs it, but says when it asks you only from 3.4: update \
+             it, then set it up again."
+        ),
+        _ => "Kiro CLI's V3 chat runs it as it starts.".to_string(),
+    }
+}
+
 /// Whether a program can be run by name.
 pub fn on_path(program: &str, var: impl Fn(&str) -> Option<String>) -> bool {
     let path = var("PATH").unwrap_or_default();
@@ -806,6 +907,90 @@ mod tests {
         remove_copilot(&var).unwrap();
         assert!(!opencode_installed(&var) && !copilot_installed(&var));
         remove_opencode(&var).unwrap();
+    }
+
+    /// Kiro CLI's V3 chat reads every file in its global hooks folder, so Cellix's are a file
+    /// of their own there, in the shape its docs give: each of its triggers calling `cellix
+    /// hook --agent Kiro`, falling back to `CELLIX_BIN`, never failing the agent. Remove takes
+    /// that file and leaves the person's own beside it. Where Kiro CLI is known to be older than
+    /// 3.4, the trigger it doesn't have is left out.
+    #[test]
+    fn kiro_gets_a_hooks_file_of_its_own_and_loses_only_it() {
+        let (dir, var) = home();
+        let folder = dir.path().join(".kiro/hooks");
+        fs::create_dir_all(&folder).unwrap();
+        let theirs = r#"{"version":"v1","hooks":[{"name":"lint","trigger":"Stop","action":{"type":"command","command":"npm run lint"}}]}"#;
+        fs::write(folder.join("lint.json"), theirs).unwrap();
+        assert!(!kiro_installed(&var));
+        install_kiro(&var, None).unwrap();
+        assert!(kiro_installed(&var));
+        let file = folder.join("cellix.json");
+        let hooks: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(hooks["version"], "v1");
+        let said: Vec<(&str, &str)> = hooks["hooks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|hook| {
+                assert_eq!(hook["action"]["type"], "command");
+                let command = hook["action"]["command"].as_str().unwrap();
+                (hook["trigger"].as_str().unwrap(), command)
+            })
+            .collect();
+        let kinds = [
+            ("SessionStart", "session-start"),
+            ("UserPromptSubmit", "prompt"),
+            ("PreToolUse", "working"),
+            ("PermissionRequest", "notify"),
+            ("PostToolUse", "tool-done"),
+            ("Stop", "stop"),
+            ("SessionEnd", "session-end"),
+        ];
+        assert_eq!(said.len(), kinds.len(), "{said:?}");
+        for ((trigger, command), (wanted, kind)) in said.iter().zip(kinds) {
+            assert_eq!(*trigger, wanted);
+            let call = format!("hook --agent Kiro {kind} 2>/dev/null");
+            let wanted = if cfg!(windows) {
+                format!("cellix hook --agent Kiro {kind}")
+            } else {
+                format!("cellix {call} || \"$CELLIX_BIN\" {call} || true")
+            };
+            assert_eq!(*command, wanted);
+        }
+        // Known to be older than 3.4, it's written without what that Kiro can't load.
+        install_kiro(&var, Some((3, 2))).unwrap();
+        let older = fs::read_to_string(&file).unwrap();
+        assert!(!older.contains("PermissionRequest"), "{older}");
+        assert!(older.contains("UserPromptSubmit"), "{older}");
+        install_kiro(&var, Some((3, 5))).unwrap();
+        assert!(
+            fs::read_to_string(&file)
+                .unwrap()
+                .contains("PermissionRequest")
+        );
+
+        remove_kiro(&var).unwrap();
+        assert!(!file.exists() && !kiro_installed(&var));
+        assert_eq!(
+            fs::read_to_string(folder.join("lint.json")).unwrap(),
+            theirs
+        );
+        remove_kiro(&var).unwrap();
+    }
+
+    /// What `kiro-cli --version` says is read for its numbers, and setup says what a Kiro too
+    /// old for the hooks needs.
+    #[test]
+    fn setup_says_what_an_older_kiro_needs() {
+        assert_eq!(read_version("kiro-cli 3.4.1\n"), Some((3, 4)));
+        assert_eq!(read_version("Kiro CLI v2.6.0"), Some((2, 6)));
+        assert_eq!(read_version("kiro-cli"), None);
+        let older = kiro_note(Some((2, 6)));
+        assert!(older.contains("from 3.0"), "{older}");
+        assert!(older.contains("kiro-cli update"), "{older}");
+        let asks = kiro_note(Some((3, 2)));
+        assert!(asks.contains("3.4"), "{asks}");
+        assert_eq!(kiro_note(Some((3, 5))), kiro_note(None));
     }
 
     #[test]

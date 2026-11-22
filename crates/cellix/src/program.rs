@@ -125,6 +125,7 @@ pub fn agent_of(app: &str) -> Option<&'static str> {
         "opencode" => "OpenCode",
         "copilot" | "copilot-cli" | "github-copilot" => "Copilot CLI",
         "cursor" | "cursor-agent" | "cursor-cli" => "Cursor CLI",
+        "kiro" | "kiro-cli" => "Kiro CLI",
         _ => return None,
     })
 }
@@ -284,6 +285,7 @@ mod tests {
         assert_eq!(agent_of("gemini"), Some("Gemini CLI"));
         assert_eq!(agent_of("Codex"), Some("Codex"));
         assert_eq!(agent_of("cursor-agent"), Some("Cursor CLI"));
+        assert_eq!(agent_of("kiro-cli"), Some("Kiro CLI"));
         assert_eq!(agent_of("my-agent"), None);
     }
 

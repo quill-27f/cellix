@@ -344,6 +344,7 @@ pub fn fallback(icon: Icon) -> &'static str {
         // other program's letter is its own name's, put there where it's drawn.
         Icon::AgentOpenCode => "O",
         Icon::AgentCopilot => "C",
+        Icon::AgentKiro => "K",
         Icon::Log => "≣",
         Icon::AgentCursor => "↖",
         Icon::Program => "■",

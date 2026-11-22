@@ -2268,6 +2268,136 @@ fn stand_ins_for_copilot_and_cursor_report_through_the_hooks_setup_installed() {
     screen.send(b"\x11");
 }
 
+/// Kiro CLI isn't installed here, so a stand-in for it is: it says it's 3.5.0 when asked, and
+/// started, it runs the hooks `cellix setup kiro` wrote, as Kiro CLI's docs say a command hook
+/// is run: found by its trigger, in a shell, with the event's JSON on its input and the prompt
+/// in `USER_PROMPT`, which the JSON leaves out. Started from the Agents list as `kiro-cli chat`,
+/// its tab takes the prompt for its name, it needs you in the list and on the workspace's tile,
+/// and its session is left beside its host for Resume. `--remove` takes back the file alone.
+#[test]
+#[cfg(unix)]
+fn a_stand_in_for_kiro_cli_reports_through_the_hooks_setup_installed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = project();
+    let home = tempfile::tempdir().unwrap();
+    let bin = home.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let root = dir.path().canonicalize().unwrap().display().to_string();
+    let session = "f2946a26-3735-4b08-8d05-c928010302d5";
+    let event = |name: &str, more: &str| {
+        format!(r#"{{"hook_event_name":"{name}","cwd":"{root}","session_id":"{session}"{more}}}"#)
+    };
+    let asks = r#","tool_name":"execute_bash","tool_input":{"command":"cargo publish"},"permission":{"capability":"shell","command":"cargo publish"}"#;
+    let script = format!(
+        r##"#!/bin/sh
+if [ "$1" = "--version" ]; then echo "kiro-cli 3.5.0"; exit 0; fi
+hooks="$HOME/.kiro/hooks/cellix.json"
+run() {{
+  cmd=$(awk -v t="$1" 'index($0, "\"trigger\": \"" t "\"") {{ found = 1 }}
+    found && index($0, "\"command\": \"") {{
+      sub(/.*"command": "/, ""); sub(/",?$/, ""); gsub(/\\"/, "\""); print; exit
+    }}' "$hooks")
+  printf '%s' "$2" | USER_PROMPT="$3" sh -c "$cmd"
+}}
+echo "kiro-cli $*"
+run SessionStart '{start}'
+run UserPromptSubmit '{prompt}' 'Refund route for unpaid orders'
+run PermissionRequest '{asks}'
+echo 'stand-in hooks ran'
+sleep 60
+"##,
+        start = event("agentSpawn", ""),
+        prompt = event("userPromptSubmit", ""),
+        asks = event("PermissionRequest", asks),
+    );
+    let stand_in = bin.join("kiro-cli");
+    std::fs::write(&stand_in, script).unwrap();
+    std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let cellix = Path::new(env!("CARGO_BIN_EXE_cellix")).parent().unwrap();
+    let path = std::env::join_paths([
+        bin.as_path(),
+        cellix,
+        Path::new("/usr/bin"),
+        Path::new("/bin"),
+    ])
+    .unwrap();
+    let path = std::path::PathBuf::from(path);
+    // The person's own hooks, which setup and remove leave alone.
+    let hooks = home.path().join(".kiro/hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("mine.json"), r#"{"version":"v1","hooks":[]}"#).unwrap();
+    let setup = |args: &[&str]| {
+        let run = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .arg("setup")
+            .args(args)
+            .env("HOME", home.path())
+            .env("PATH", &path)
+            .output()
+            .unwrap();
+        assert!(run.status.success(), "{run:?}");
+        String::from_utf8_lossy(&run.stdout).to_string()
+    };
+    let said = setup(&["kiro"]);
+    assert!(said.starts_with("Installed."), "{said}");
+    let written = std::fs::read_to_string(hooks.join("cellix.json")).unwrap();
+    assert!(written.contains("PermissionRequest"), "3.5.0 has it");
+
+    let cache = tempfile::tempdir_in("/tmp").unwrap();
+    let env = [
+        ("HOME", home.path()),
+        ("PATH", path.as_path()),
+        ("XDG_CACHE_HOME", cache.path()),
+    ];
+    let mut screen = Screen::start_with(dir.path(), &[], &env);
+    screen.wait_for("other.txt");
+    let list_agents = |screen: &mut Screen| {
+        screen.send(b"\x1b[112;6u");
+        screen.wait_for("Type to search");
+        screen.send(b"List Agents");
+        screen.wait_for("Agent: List Agents");
+        std::thread::sleep(Duration::from_millis(200));
+        screen.send(b"\r");
+        screen.wait_gone("Type to search");
+    };
+    // Installed, it's under START; started, it runs its chat and the hooks.
+    list_agents(&mut screen);
+    screen.wait_for("Kiro CLI");
+    let contents = screen.contents();
+    let (row, column) = contents
+        .lines()
+        .enumerate()
+        .filter_map(|(row, line)| Some((row, line[..line.find("Kiro CLI")?].chars().count())))
+        .last()
+        .unwrap_or_else(|| panic!("no Kiro CLI to start: {contents}"));
+    let (x, y) = (column + 2, row + 1);
+    screen.send(format!("\x1b[<0;{x};{y}M\x1b[<0;{x};{y}m").as_bytes());
+    screen.wait_for("kiro-cli chat");
+    screen.wait_for("stand-in hooks ran");
+    // Its tab is named by the prompt, from `USER_PROMPT`, cut short in a pane this narrow.
+    screen.wait_for("K Refund rou");
+    // The list says it needs you, and what it asks; so does the workspace's tile at the foot.
+    list_agents(&mut screen);
+    screen.wait_for("NEEDS YOU");
+    screen.wait_for("Kiro asks to run");
+    let contents = screen.contents();
+    let foot = contents.lines().rfind(|l| !l.trim().is_empty()).unwrap();
+    assert!(foot.contains("needs you"), "the tile: {foot}\n{contents}");
+    // Its session is left beside its host, which is what Resume reads.
+    let left: Vec<String> = walk(cache.path())
+        .into_iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "agent"))
+        .map(|p| std::fs::read_to_string(p).unwrap())
+        .collect();
+    let word = format!(r#""agent":"Kiro","session":"{session}""#);
+    assert!(left.iter().any(|l| l.contains(&word)), "{word} in {left:?}");
+    screen.send(b"\x11");
+
+    // Remove takes back the file setup wrote, and nothing else.
+    assert_eq!(setup(&["kiro", "--remove"]).trim(), "Removed.");
+    assert!(!hooks.join("cellix.json").exists());
+    assert!(hooks.join("mine.json").exists());
+}
+
 /// A stand-in agent for `cellix agent`: it says it's up and answers each line it's given, and
 /// told `ask` it says through Cellix's real hook, as Codex's would, that it's asking the person
 /// leave to run something. It runs the hook through a shell, as agents do.

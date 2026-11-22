@@ -344,16 +344,41 @@ fn failure_words(input: &Value) -> String {
     }
 }
 
-/// What a request says: its own words, or for Codex, which asks through a permission hook
-/// with none, the command it wants to run.
+/// What a request says: its own words, or for Codex and Kiro CLI, which ask through a
+/// permission hook with none, the command it wants to run, or else the tool and what it's on.
 fn request_words(input: &Value, agent: &str) -> String {
     if let Some(message) = input["message"].as_str().filter(|m| !m.is_empty()) {
         return message.to_string();
     }
-    match input["tool_input"]["command"].as_str() {
-        Some(command) => format!("{agent} asks to run {command}"),
-        None => "Needs your attention".to_string(),
+    if let Some(command) = input["tool_input"]["command"].as_str() {
+        return format!("{agent} asks to run {command}");
     }
+    let tool = input["tool_name"].as_str().filter(|t| !t.is_empty());
+    // Kiro CLI says what a call is on in its permission: the paths it touches.
+    let on = ["path", "file_path"]
+        .iter()
+        .find_map(|key| input["tool_input"][*key].as_str())
+        .or_else(|| input["permission"]["paths"][0].as_str())
+        .filter(|on| !on.is_empty());
+    match (tool, on) {
+        (Some(tool), Some(on)) => format!("{agent} asks to use {tool} on {on}"),
+        (Some(tool), None) => format!("{agent} asks to use {tool}"),
+        _ => "Needs your attention".to_string(),
+    }
+}
+
+/// A hook's input with the prompt given where it lacks one: Kiro CLI gives a command hook the
+/// prompt in `USER_PROMPT`, which its docs name, and may not have it in what it sends. Input
+/// that isn't an object is left as it is.
+pub fn with_prompt(stdin: &str, prompt: Option<&str>) -> String {
+    let (Some(prompt), Ok(mut input)) = (prompt, serde_json::from_str::<Value>(stdin)) else {
+        return stdin.to_string();
+    };
+    if !input.is_object() || input["prompt"].as_str().is_some_and(|p| !p.is_empty()) {
+        return stdin.to_string();
+    }
+    input["prompt"] = json!(prompt);
+    input.to_string()
 }
 
 /// Comments as a message an agent can act on.
@@ -759,9 +784,13 @@ fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
         .or_else(|| response.as_str())
         .unwrap_or("");
     // Agents without a failure hook say so in the result: as a field, or in its words.
+    // Kiro CLI's shell says `exit_status`, which may be a number in words.
+    let status = &response["exit_status"];
     let exit = response["exit_code"]
         .as_i64()
         .or(response["exitCode"].as_i64())
+        .or_else(|| status.as_i64())
+        .or_else(|| status.as_str().and_then(|s| s.trim().parse().ok()))
         .or_else(|| response["llmContent"].as_str().and_then(said_exit))
         .or_else(|| said_exit(text));
     // Claude Code has a hook of its own for a failed run. The others, when the result doesn't
@@ -1834,5 +1863,77 @@ mod tests {
             news(),
             ("OpenCode".into(), "oc-1".into(), Working, "Working".into())
         );
+    }
+
+    /// Kiro CLI's hooks, each sent what its docs say it sends: the hook's event, `cwd` and
+    /// `session_id`, the prompt in `USER_PROMPT` rather than in the JSON, and a call it's about to
+    /// ask the person about as `PermissionRequest`, with the tool and what it's on. Its prompt
+    /// hook can't hand it comments, so they wait, and nothing is printed for it to read.
+    #[test]
+    fn kiro_reports_through_the_same_hooks() {
+        use AgentState::{Ended, Idle, NeedsYou, Working};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let shared: SharedComments = Arc::default();
+        let server = start(&root, shared.clone()).unwrap();
+        let news = || {
+            let event = next_event(&server, Duration::from_secs(5)).unwrap();
+            assert_eq!(
+                (event.agent.as_str(), event.session.as_str()),
+                ("Kiro", "f2946a26")
+            );
+            (event.state, event.detail, event.prompt)
+        };
+        let kiro = |event: &str, extra: Value| {
+            let mut value =
+                json!({"hook_event_name": event, "cwd": root, "session_id": "f2946a26"});
+            let fields = extra.as_object().unwrap().clone();
+            value.as_object_mut().unwrap().extend(fields);
+            value.to_string()
+        };
+        let spawned = kiro("agentSpawn", json!({}));
+        assert_eq!(handle_for("Kiro", "session-start", &spawned), None);
+        assert_eq!(news().0, Idle);
+
+        // The prompt, from `USER_PROMPT`, names its tab; a prompt in the JSON is kept.
+        shared.lock().unwrap().push(comment());
+        let submitted = kiro("UserPromptSubmit", json!({}));
+        let prompt = with_prompt(&submitted, Some("Add a refund route"));
+        assert_eq!(handle_for("Kiro", "prompt", &prompt), None);
+        let asked = (Working, "Working".into(), "Add a refund route".into());
+        assert_eq!(news(), asked);
+        assert_eq!(shared.lock().unwrap().len(), 1, "the comment waits");
+        let given = kiro("UserPromptSubmit", json!({"prompt": "Keep this"}));
+        assert!(with_prompt(&given, Some("Not this")).contains("Keep this"));
+        assert_eq!(with_prompt("not json", Some("x")), "not json");
+
+        // Asking leave to run a command, or to use a tool on a file, needs the person.
+        let run = json!({"tool_name": "execute_bash", "tool_input": {"command": "cargo publish"},
+                         "permission": {"capability": "shell", "command": "cargo publish"}});
+        handle_for("Kiro", "notify", &kiro("PermissionRequest", run));
+        let asks = (
+            NeedsYou,
+            "Kiro asks to run cargo publish".into(),
+            String::new(),
+        );
+        assert_eq!(news(), asks);
+        let write = json!({"tool_name": "fs_write", "tool_input": {"content": "…"},
+                           "permission": {"capability": "fs_write", "paths": ["src/orders.rs"]}});
+        handle_for("Kiro", "notify", &kiro("PermissionRequest", write));
+        assert_eq!(news().1, "Kiro asks to use fs_write on src/orders.rs");
+
+        // A tool starting and ending is working; a test run's exit status says how it went.
+        let starts = kiro("PreToolUse", json!({"tool_name": "execute_bash"}));
+        handle_for("Kiro", "working", &starts);
+        assert_eq!(news().0, Working);
+        let ran = json!({"tool_name": "execute_bash", "tool_input": {"command": "cargo test"},
+                         "tool_response": {"exit_status": "101", "stdout": "error: test failed"}});
+        handle_for("Kiro", "tool-done", &kiro("PostToolUse", ran));
+        assert!(!next_test(&server).passed, "its exit status");
+
+        handle_for("Kiro", "stop", &kiro("Stop", json!({})));
+        assert_eq!(news(), (Idle, "Finished".into(), String::new()));
+        handle_for("Kiro", "session-end", &kiro("SessionEnd", json!({})));
+        assert_eq!(news().0, Ended);
     }
 }

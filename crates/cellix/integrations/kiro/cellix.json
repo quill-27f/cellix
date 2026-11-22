@@ -1,0 +1,68 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "cellix-session-start",
+      "trigger": "SessionStart",
+      "action": {
+        "type": "command",
+        "command": "cellix hook --agent Kiro session-start 2>/dev/null || \"$CELLIX_BIN\" hook --agent Kiro session-start 2>/dev/null || true"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "cellix-prompt",
+      "trigger": "UserPromptSubmit",
+      "action": {
+        "type": "command",
+        "command": "cellix hook --agent Kiro prompt 2>/dev/null || \"$CELLIX_BIN\" hook --agent Kiro prompt 2>/dev/null || true"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "cellix-tool-start",
+      "trigger": "PreToolUse",
+      "action": {
+        "type": "command",
+        "command": "cellix hook --agent Kiro working 2>/dev/null || \"$CELLIX_BIN\" hook --agent Kiro working 2>/dev/null || true"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "cellix-asks",
+      "trigger": "PermissionRequest",
+      "action": {
+        "type": "command",
+        "command": "cellix hook --agent Kiro notify 2>/dev/null || \"$CELLIX_BIN\" hook --agent Kiro notify 2>/dev/null || true"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "cellix-tool-done",
+      "trigger": "PostToolUse",
+      "action": {
+        "type": "command",
+        "command": "cellix hook --agent Kiro tool-done 2>/dev/null || \"$CELLIX_BIN\" hook --agent Kiro tool-done 2>/dev/null || true"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "cellix-stop",
+      "trigger": "Stop",
+      "action": {
+        "type": "command",
+        "command": "cellix hook --agent Kiro stop 2>/dev/null || \"$CELLIX_BIN\" hook --agent Kiro stop 2>/dev/null || true"
+      },
+      "timeout": 10
+    },
+    {
+      "name": "cellix-session-end",
+      "trigger": "SessionEnd",
+      "action": {
+        "type": "command",
+        "command": "cellix hook --agent Kiro session-end 2>/dev/null || \"$CELLIX_BIN\" hook --agent Kiro session-end 2>/dev/null || true"
+      },
+      "timeout": 3
+    }
+  ]
+}

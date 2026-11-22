@@ -103,9 +103,10 @@ pub enum Icon {
     /// Cellix's own marks for the programs in the side pane, never a vendor's logo: Claude
     /// Code an eight-line burst, Codex a hexagon with a prompt inside, Gemini CLI a filled
     /// star of four points. An agent with no mark of its own has a filled square with its
-    /// initial cut out of it: OpenCode's O, Copilot CLI's and Cursor's C, and any other
-    /// program's square has its initial laid over it where it's drawn. A shell, and a task,
-    /// is `Terminal`, its prompt. Nothing is a hollow square, which reads as a box to tick.
+    /// initial cut out of it: OpenCode's O, Copilot CLI's C, Kiro CLI's K, Cursor's a pointer,
+    /// and any other program's square has its initial laid over it where it's drawn. A shell,
+    /// and a task, is `Terminal`, its prompt. Nothing is a hollow square, which reads as a box
+    /// to tick.
     AgentClaude = 67,
     AgentCodex = 68,
     AgentGemini = 69,
@@ -113,6 +114,7 @@ pub enum Icon {
     AgentOpenCode = 71,
     AgentCopilot = 72,
     AgentCursor = 73,
+    AgentKiro = 74,
     /// Lines of what was printed, of different lengths: the side pane's Log tab.
     Log = 92,
     /// `ChevronRight` turned back: a step back, as the Task page's narrow step control has.
@@ -309,7 +311,8 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::Program
         | Icon::AgentOpenCode
         | Icon::AgentCopilot
-        | Icon::AgentCursor => 1.0,
+        | Icon::AgentCursor
+        | Icon::AgentKiro => 1.0,
         Icon::AgentGemini => 0.5,
         Icon::Check => 1.7,
         _ => 1.15,
@@ -957,6 +960,13 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
                 solid(p, (5.0, 5.0), (19.0, 19.0), 3.5)
             }
         }
+        // And with a K, as tall as OpenCode's O and as wide, its arms meeting the stem.
+        Icon::AgentKiro => {
+            let letter = segment(p, (9.4, 8.2), (9.4, 15.8))
+                .min(segment(p, (14.6, 8.2), (9.7, 12.3)))
+                .min(segment(p, (11.4, 10.9), (14.6, 15.8)));
+            cut(solid(p, (5.0, 5.0), (19.0, 19.0), 3.5), letter, 1.15)
+        }
         Icon::Log => segment(p, (4.0, 5.5), (20.0, 5.5))
             .min(segment(p, (4.0, 10.0), (15.0, 10.0)))
             .min(segment(p, (4.0, 14.5), (18.0, 14.5)))
@@ -1059,6 +1069,7 @@ mod tests {
             Icon::AgentOpenCode,
             Icon::AgentCopilot,
             Icon::AgentCursor,
+            Icon::AgentKiro,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

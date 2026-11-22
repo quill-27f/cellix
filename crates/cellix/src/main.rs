@@ -136,10 +136,10 @@ Usage: cellix [--wait] [files]
   cellix comments [--take]  Review comments, as JSON
   cellix comments --waiting Everything no agent has had yet, a document's comments too
   cellix open <file>        Opens a file in the running Cellix
-  cellix setup [claude|codex|gemini|opencode|copilot|cursor]
+  cellix setup [claude|codex|gemini|opencode|copilot|cursor|kiro]
                             Connects an agent
   cellix setup --remove     Disconnects Claude Code
-  cellix setup <opencode|copilot|cursor> --remove
+  cellix setup <opencode|copilot|cursor|kiro> --remove
                             Disconnects that agent
 ";
 
@@ -273,6 +273,7 @@ fn setup_agent(agent: &str) -> ExitCode {
             integrations::install_cursor(var),
             "Cursor's agent loads it as it starts.",
         ),
+        "kiro" => return setup_kiro(),
         _ => (
             integrations::install_gemini(var),
             "Restart Gemini CLI to load it.",
@@ -290,6 +291,29 @@ fn setup_agent(agent: &str) -> ExitCode {
     }
 }
 
+/// `cellix setup kiro` writes Kiro CLI's hooks as the Kiro CLI on the PATH runs them, and says
+/// what one too old for them needs, writing nowhere else.
+fn setup_kiro() -> ExitCode {
+    use cellix::integrations;
+    let var = |name: &str| std::env::var(name).ok();
+    let version = integrations::kiro_version(var);
+    match integrations::install_kiro(var, version) {
+        Ok(()) => {
+            println!("Installed. {}", integrations::kiro_note(version));
+            if version.is_none_or(|(major, _)| major >= 3) {
+                println!(
+                    "If you've chosen its V2 chat, this turns V3 back on: kiro-cli settings chat.agentEngine v3"
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("cellix: could not install: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 /// `cellix setup opencode --remove` and the others take back exactly what setup added.
 fn remove_agent(agent: &str) -> ExitCode {
     use cellix::integrations;
@@ -297,6 +321,7 @@ fn remove_agent(agent: &str) -> ExitCode {
     let done = match agent {
         "opencode" => integrations::remove_opencode(var),
         "copilot" => integrations::remove_copilot(var),
+        "kiro" => integrations::remove_kiro(var),
         _ => integrations::remove_cursor(var),
     };
     match done {
@@ -326,6 +351,11 @@ fn hook(agent: &str, kind: &str) -> ExitCode {
     }
     let mut input = String::new();
     let _ = std::io::stdin().read_to_string(&mut input);
+    // Kiro CLI hands a command hook the prompt in `USER_PROMPT`.
+    if agent == "Kiro" && kind == "prompt" {
+        let prompt = std::env::var("USER_PROMPT").ok();
+        input = cellix_agent::hook::with_prompt(&input, prompt.as_deref());
+    }
     if let Some(output) = cellix_agent::hook::handle_for(agent, kind, &input) {
         println!("{output}");
     }
@@ -410,13 +440,13 @@ fn main() -> ExitCode {
         ["setup", "--install" | "claude"] => return setup(true),
         [
             "setup",
-            agent @ ("codex" | "gemini" | "opencode" | "copilot" | "cursor"),
+            agent @ ("codex" | "gemini" | "opencode" | "copilot" | "cursor" | "kiro"),
         ] => {
             return setup_agent(agent);
         }
         [
             "setup",
-            agent @ ("opencode" | "copilot" | "cursor"),
+            agent @ ("opencode" | "copilot" | "cursor" | "kiro"),
             "--remove",
         ] => {
             return remove_agent(agent);

@@ -191,6 +191,7 @@ pub enum Control {
     ClaudeCode,
     Codex,
     Gemini,
+    Kiro,
     Ghostty,
     /// A language server to install, as an index into `SERVERS`.
     InstallServer(usize),
@@ -398,6 +399,8 @@ pub struct Found {
     pub codex_installed: bool,
     pub gemini: bool,
     pub gemini_installed: bool,
+    pub kiro: bool,
+    pub kiro_installed: bool,
     /// Whether terminal-browser is on the path.
     pub browser: bool,
     /// Whether Ghostty keeps Cmd+D, when this is Ghostty.
@@ -418,6 +421,8 @@ impl Found {
             codex_installed: integrations::codex_installed(var),
             gemini: integrations::on_path("gemini", var),
             gemini_installed: integrations::gemini_installed(var),
+            kiro: integrations::on_path("kiro-cli", var),
+            kiro_installed: integrations::kiro_installed(var),
             browser: integrations::on_path("terminal-browser", var),
             ghostty_keeps_cmd_d: integrations::ghostty_keeps_cmd_d(var),
             // Where installs put them too, which the PATH may lack.
@@ -809,6 +814,10 @@ impl SettingsPage {
             Control::Gemini,
             "Shows its work in Agents, and hands it your comments.",
         ));
+        // Kiro CLI where it's installed, or where its hooks are still there to take away.
+        if found.kiro || found.kiro_installed {
+            blocks.push(Self::kiro_block(found));
+        }
         blocks.push(if found.browser {
             Block {
                 name: "Browser",
@@ -844,6 +853,33 @@ impl SettingsPage {
             None => {}
         }
         blocks
+    }
+
+    /// Kiro CLI's card: its hooks say what it's doing, and its prompt hook can't hand it
+    /// comments, which Ask Agent sends it.
+    fn kiro_block(found: &Found) -> Block {
+        let (state, tone, detail, action) = if found.kiro_installed {
+            (
+                "Installed",
+                Tone::Good,
+                "Shows its work in Agents. Ask Agent sends it your comments.",
+                ("Remove", false),
+            )
+        } else {
+            (
+                "Hooks not installed",
+                Tone::Quiet,
+                "Shows its work in Agents. Needs Kiro CLI 3.0 or later.",
+                ("Install", true),
+            )
+        };
+        Block {
+            name: "Kiro CLI",
+            state,
+            tone,
+            detail,
+            action: Some((action.0, action.1, Control::Kiro)),
+        }
     }
 
     fn claude_block(found: &Found) -> Block {
@@ -2562,6 +2598,38 @@ mod tests {
             right >= middle + half,
             "and end {right} after {}",
             middle + half
+        );
+    }
+
+    /// Integrations lists Kiro CLI with the other agents only where `kiro-cli` is installed,
+    /// or where its hooks are there to remove, with what its button does there.
+    #[test]
+    fn kiro_cli_is_listed_where_it_is_installed() {
+        let mut settings = page(Section::Integrations);
+        let kiro = |s: &SettingsPage| {
+            let blocks = s.blocks();
+            let block = blocks.iter().find(|b| b.name == "Kiro CLI")?;
+            let offered = s.controls(AREA).iter().any(|c| c.1 == Control::Kiro);
+            assert!(offered, "its button is where a click lands");
+            Some((block.state, block.action.map(|a| a.0)))
+        };
+        assert_eq!(kiro(&settings), None, "not here: not listed");
+        settings.found.kiro = true;
+        assert_eq!(
+            kiro(&settings),
+            Some(("Hooks not installed", Some("Install")))
+        );
+        // After Gemini CLI, with the other agents.
+        let names: Vec<&str> = settings.blocks().iter().map(|b| b.name).collect();
+        let at = |name| names.iter().position(|n| *n == name).unwrap();
+        assert_eq!(at("Kiro CLI"), at("Gemini CLI") + 1, "{names:?}");
+        settings.found.kiro_installed = true;
+        assert_eq!(kiro(&settings), Some(("Installed", Some("Remove"))));
+        settings.found.kiro = false;
+        assert_eq!(
+            kiro(&settings),
+            Some(("Installed", Some("Remove"))),
+            "gone from the PATH, its hooks can still be removed"
         );
     }
 

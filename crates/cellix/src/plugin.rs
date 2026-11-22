@@ -96,6 +96,31 @@ pub(crate) fn cursor_hooks() -> String {
     }
 }
 
+/// Kiro CLI's hooks: one file of Cellix's own in its global hooks folder, which its V3 chat
+/// reads in every workspace beside the workspace's own.
+const KIRO_HOOKS: &str = include_str!("../integrations/kiro/cellix.json");
+/// The trigger Kiro CLI has only from 3.4, which runs as a call is about to ask the person.
+pub(crate) const KIRO_ASKS: &str = "PermissionRequest";
+
+/// Kiro CLI's hooks as this machine's Kiro runs them. `asks`: whether its Kiro has the
+/// `PermissionRequest` trigger, left out where it's known not to, as a trigger it doesn't know
+/// may keep the file from loading. On Windows each is the bare command, as Cursor's are.
+pub(crate) fn kiro_hooks(asks: bool) -> String {
+    let mut file: serde_json::Value =
+        serde_json::from_str(KIRO_HOOKS).expect("Kiro's hooks are JSON");
+    if let Some(hooks) = file["hooks"].as_array_mut() {
+        hooks.retain(|hook| asks || hook["trigger"] != KIRO_ASKS);
+        for hook in hooks.iter_mut().filter(|_| cfg!(windows)) {
+            let command = hook["action"]["command"].as_str().unwrap_or("");
+            let bare = command.split(" 2>/dev/null").next().unwrap_or(command);
+            hook["action"]["command"] = serde_json::json!(bare);
+        }
+    }
+    let mut text = serde_json::to_string_pretty(&file).expect("JSON is written");
+    text.push('\n');
+    text
+}
+
 /// Writes one file, and its folder, leaving it alone when it already says that.
 pub(crate) fn write_file(path: &Path, text: &str) -> io::Result<()> {
     if let Some(parent) = path.parent() {

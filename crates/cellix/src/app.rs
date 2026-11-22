@@ -9720,6 +9720,11 @@ impl App {
         if let Some(program) = &self.agent_program {
             launch[0] = program.clone();
         }
+        launch.extend(
+            crate::agents::launch_args(agent)
+                .iter()
+                .map(|w| w.to_string()),
+        );
         // Any agent can answer a comment with `cellix reply`, under its own name.
         let mut env = vec![format!(
             "CELLIX_AGENT={}",
@@ -11044,7 +11049,8 @@ impl App {
             return;
         }
         let job = &stopped.job;
-        let (name, env, mut launch) = match crate::agents::program_of(&job.name) {
+        let program = crate::agents::program_of(&job.name);
+        let (name, env, mut launch) = match program {
             Some(program) => {
                 let (env, launch) = self.agent_launch(program);
                 (crate::agents::display_name(program), env, launch)
@@ -11061,7 +11067,9 @@ impl App {
             .and_then(|a| crate::agents::resume_args(&job.name, &a.session))
             .filter(|_| choice == Revive::Resume);
         if let Some(args) = resume {
-            launch.splice(1..1, args);
+            // After what the program is always given: `kiro-cli chat --resume-id <id>`.
+            let at = 1 + program.map_or(0, |p| crate::agents::launch_args(p).len());
+            launch.splice(at..at, args);
         }
         let count = self.dock.sessions.len();
         self.start_session(name, &launch, &env, &job.folder);
@@ -17496,6 +17504,7 @@ impl App {
             }
             Control::Codex
             | Control::Gemini
+            | Control::Kiro
             | Control::InstallServer(_)
             | Control::InstallBrowser => {
                 self.start_install(control);
@@ -17526,7 +17535,11 @@ impl App {
             page.note = "Another install is still running".to_string();
             return;
         }
-        let found = (page.found.codex_installed, page.found.gemini_installed);
+        let found = (
+            page.found.codex_installed,
+            page.found.gemini_installed,
+            page.found.kiro_installed,
+        );
         // What a server's Install runs here, as its row said while it was pointed at.
         let plan = match control {
             Control::InstallServer(index) => {
@@ -17562,6 +17575,17 @@ impl App {
                     crate::integrations::install_gemini(var),
                     "Installed. Restart Gemini CLI to load it.",
                 ),
+                Control::Kiro if found.2 => said(
+                    crate::integrations::remove_kiro(var),
+                    "Removed from Kiro CLI.",
+                ),
+                // The Kiro CLI here decides what's written, and the note says what it runs.
+                Control::Kiro => {
+                    let version = crate::integrations::kiro_version(var);
+                    let note = crate::integrations::kiro_note(version);
+                    let done = crate::integrations::install_kiro(var, version);
+                    said(done, &format!("Installed. {note}"))
+                }
                 Control::InstallServer(index) => install_server(index, plan, &machine),
                 Control::InstallBrowser => install_with(BROWSER_INSTALL, BROWSER_TOOL),
                 _ => String::new(),
@@ -27502,6 +27526,33 @@ mod tests {
         assert_eq!(app.dock.sessions.len(), 1);
         shows(&mut app, "started with resume abc-123");
         assert!(!notes.exists(), "the record goes once it's resumed");
+        let _ = fs::remove_dir_all(crate::hold::folder_of(dir.path()));
+    }
+
+    /// Kiro CLI's chat is a command of its program, so its session's id goes after it:
+    /// `kiro-cli chat --resume-id <id>`, as Kiro CLI says to resume it as it exits.
+    #[test]
+    #[cfg(unix)]
+    fn a_stopped_kiro_cli_resumes_its_chat_by_id() {
+        let (dir, mut app) = project();
+        left_stopped(
+            dir.path(),
+            "Kiro CLI",
+            "Added the refund route\r\n",
+            Some("f2946a26"),
+        );
+        let fake = dir.path().join("fake-agent");
+        fs::write(&fake, "#!/bin/sh\necho \"started with $*\"; sleep 9\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        app.agent_program = Some(fake.display().to_string());
+        app.rejoin_sessions();
+        let (x, y) = find(&screen(&app), "[Resume]");
+        app.handle(mouse(MouseKind::Left, x, y));
+        assert_eq!(app.dock.sessions[0].name, "Kiro CLI");
+        shows(&mut app, "started with chat --resume-id f2946a26");
         let _ = fs::remove_dir_all(crate::hold::folder_of(dir.path()));
     }
 

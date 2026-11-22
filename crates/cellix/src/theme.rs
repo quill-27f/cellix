@@ -236,6 +236,16 @@ impl Theme {
         }
     }
 
+    /// Kiro CLI's mark: a violet of its own, deeper on a light ground, where it weighs what
+    /// Claude Code's clay does (5:1 on white; #6c3ec4 stood a third stronger).
+    pub fn kiro_mark(&self) -> Rgb {
+        if self.is_light() {
+            Rgb(0x7f, 0x55, 0xd6)
+        } else {
+            Rgb(0xb1, 0x92, 0xf2)
+        }
+    }
+
     pub fn is_light(&self) -> bool {
         let Rgb(r, g, b) = self.text.bg;
         u16::from(r) + u16::from(g) + u16::from(b) > 3 * 128

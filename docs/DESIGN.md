@@ -881,7 +881,12 @@ side pane or disturbs its session, and it brings in no comments. Which command l
 the `ask_agent` setting names (`claude`, `codex`, `gemini`), else the kind of agent in the side
 pane where that's installed, else the first installed of Claude Code, Codex and Gemini CLI.
 With none, the card says what it needs and has Open Integrations, which opens Settings there;
-with the setting naming one that isn't installed, it says that.
+with the setting naming one that isn't installed, it says that. Kiro CLI doesn't answer: its
+`chat --no-interactive` needs a `KIRO_API_KEY` (paid plans) rather than the person's sign-in, runs
+on its V2 harness unless told `--v3`, which a Kiro CLI before 3.0 doesn't know, names its
+read-only tools only by example (`read_file`, `grep_search`; V2's `read` group from 3.3), and
+documents of its `stream-json` output only how a run fails (22 November 2026, from its docs).
+With a Kiro CLI tab in front, Ask goes to the first of the three that's installed.
 
 What it knows, by layer:
 
@@ -1121,7 +1126,7 @@ comments and the threads, in one message to the agent the side pane sends to (in
 starts a turn, which the hook fills). Until 18 November 2026 it sent only the review's, so on a
 page it said there was nothing to send. A waiting card says "Goes to Claude Code with your next
 prompt, or now with Ask Agent"; for an agent whose hooks can't hand comments over (OpenCode,
-Copilot CLI, Cursor's agent) that only Ask Agent sends it; with no agent here, that it goes with
+Copilot CLI, Cursor's agent, Kiro CLI) that only Ask Agent sends it; with no agent here, that it goes with
 the next one's prompt. Once it has gone, "Waiting for Claude Code…" names the agent it went to:
 the one in front of the pane, which is the one sent to, where it named the first agent there.
 Check My Review asks for a verdict on each comment, so each counts as told and the hook doesn't
@@ -2090,11 +2095,14 @@ burst in a warm clay, Codex's a hexagon with a prompt inside it in the text's co
 CLI's a filled star of four points in a blue of its own. OpenCode, Copilot CLI and Cursor's
 agent, which have none of Cellix's, are a filled square in the quieter text colour with
 their initial cut out of it, O and C, and Cursor's a pointer cut out of it (it shared Copilot
-CLI's C, and the two read as one); any other program, one that reports by OSC 7501 under a
+CLI's C, and the two read as one). Kiro CLI's is the same square with a K cut out of it, as
+tall and wide as OpenCode's O, in a violet of its own (#b192f2 on dark, #7f55d6 on light, each
+as strong against its ground as Claude Code's clay), not
+Kiro's ghost; any other program, one that reports by OSC 7501 under a
 name of its own, the same square with its own name's initial; a task's tab has a shell's
 prompt, `>_`. One meaning to a mark: a hollow square stood for an agent not installed, a
 running Copilot CLI and an ended task at once, and read as a box to tick (0.11.0's review).
-On cells one letter each, `✻ ⬡ ✦`, the initial for the squares, `↖` for Cursor's and `>` for
+On cells one letter each, `✻ ⬡ ✦`, the initial for the squares (Kiro CLI's `K`), `↖` for Cursor's and `>` for
 a prompt. In the + menu, an agent that isn't installed keeps its own mark, dimmed; Review
 with… lists only those installed. Every tab has a mark: a shell's has its prompt at its prompt as while a command runs
 in it, the browser's its globe, and where there are pictures each view's the one its icon
@@ -2844,14 +2852,38 @@ weren't counted and /cellix-send said none were waiting.
   no hook for asking the person anything, so Cellix can't say it needs you: only a program's
   own OSC 7501 report could, and Cursor sends none. `stop` says how the turn ended. Resume is
   `cursor-agent --resume <id>`, taking the conversation for the chat Cursor resumes.
-- None of the three can be handed review comments by a hook (Copilot's and Cursor's prompt
-  hooks can't add to the prompt; OpenCode's plugin can't from where it's told), so their
-  comments wait for Ask Agent in their tab, or an agent that can take them.
+- Kiro CLI (`kiro-cli`, started as `kiro-cli chat`, with no flag: from 3.0 its interactive chat
+  is V3 unless the person chose V2, and `--v3` would overrule that choice and may be unknown to
+  an older one): a hooks file of Cellix's own,
+  `~/.kiro/hooks/cellix.json`, in the standalone shape its V3 chat reads in every workspace
+  beside the workspace's and the person's (`{"version": "v1", "hooks": [{name, trigger,
+  action: {type: command, command}, timeout}]}`). Its triggers call `cellix hook --agent Kiro
+  <kind>`, falling back to `$CELLIX_BIN` as Claude Code's do: `SessionStart` is ready,
+  `UserPromptSubmit` working, with the prompt from `USER_PROMPT` where its JSON has none,
+  `PreToolUse` working, `PermissionRequest` (3.4 and later, run just before a call would ask
+  the person) needs you, saying the command or the tool and the path it's on, `PostToolUse` a
+  tool's end and a test run (`exit_status`), `Stop` a finished turn, `SessionEnd` ended. Its
+  hooks print nothing: `SessionStart`'s and a `Stop`'s output would reach the agent, and a
+  permission hook that says nothing leaves Kiro's own question to the person. Kiro CLI 2.x
+  read hooks only from each agent's own file, which Cellix never edits: `cellix setup kiro`
+  asks `kiro-cli --version` and says what an older one needs (3.0 for these hooks; 3.4 for
+  needs you, where the trigger is left out of the file, since a trigger Kiro doesn't know may
+  keep the file from loading), and how to turn V3 back on where V2 was chosen. Its sessions are
+  in its own database, keyed by folder, with no transcript to follow, so it has no context
+  meter. Resume is `kiro-cli chat --resume-id <id>`, the id its hooks give. `kiro-cli` typed at
+  a Terminal's prompt is its tab too, as is its chat's own process, `kiro-cli-chat`. Settings
+  › Integrations lists it, after Gemini CLI, only where `kiro-cli` is installed or its hooks
+  are there to remove.
+- None of the four can be handed review comments by a hook (Copilot's and Cursor's prompt
+  hooks can't add to the prompt; OpenCode's plugin can't from where it's told; Kiro's docs
+  don't say a CLI prompt hook's output reaches the agent, and a comment taken but never read
+  would be lost), so their comments wait for Ask Agent in their tab, or an agent that can take
+  them.
 - They're offered under START only where they're installed (`opencode`, `copilot`,
-  `cursor-agent` on the PATH), and `cellix setup opencode|copilot|cursor` (or Install in
-  Settings) is the only thing that writes their config; `--remove` takes back exactly that.
-  Written from each one's own docs, and proven with stand-ins only: none of the three has
-  been run with Cellix.
+  `cursor-agent`, `kiro-cli` on the PATH), and `cellix setup opencode|copilot|cursor|kiro` (or
+  Install in Settings, for Kiro CLI) is the only thing that writes their config; `--remove`
+  takes back exactly that. Written from each one's own docs, and proven with stand-ins only:
+  none of the four has been run with Cellix.
 - The icons at the top right, as in a desktop app, reach the comments, a terminal, Review, the
   browser and the agents. The pane's own control ends the row, three columns from the
   window's edge. It hides the pane and is drawn as a window with its right part filled, not

@@ -228,7 +228,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 288
+SCENES_IN_ALL = 294
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # The scene shot last, with its picture's digest and what it was taken from; and this one's.
@@ -797,6 +797,29 @@ run("SessionStart", source="startup")
 run("UserPromptSubmit", prompt="Publish the crate")
 run("Notification", notification_type="permission_prompt", message="Allow cargo publish?")
 print("Allow cargo publish? (y/n)", flush=True)
+time.sleep(600)
+"""
+# A stand-in for Kiro CLI: 3.5.0 when asked, and started, it runs the hooks Cellix set up for
+# it as Kiro CLI runs a command hook, by its trigger, with the event's JSON on its input and
+# the prompt in USER_PROMPT, then asks leave to run something.
+KIRO_STANDIN = """#!/usr/bin/env python3
+import json, os, subprocess, sys, time
+if sys.argv[1:] == ["--version"]:
+    print("kiro-cli 3.5.0")
+    sys.exit(0)
+print("A stand-in for Kiro CLI, running the hooks Cellix set up", flush=True)
+with open(os.path.expanduser("~/.kiro/hooks/cellix.json")) as f:
+    hooks = {hook["trigger"]: hook["action"]["command"] for hook in json.load(f)["hooks"]}
+def run(event, prompt="", **fields):
+    said = json.dumps({"hook_event_name": event, "cwd": os.getcwd(),
+                       "session_id": "f2946a26-3735-4b08-8d05-c928010302d5", **fields})
+    subprocess.run(["sh", "-c", hooks[event]], input=said.encode(),
+                   env={**os.environ, "USER_PROMPT": prompt})
+run("SessionStart")
+run("UserPromptSubmit", prompt="Refund route for unpaid orders")
+run("PermissionRequest", tool_name="execute_bash", tool_input={"command": "cargo publish"},
+    permission={"capability": "shell", "command": "cargo publish"})
+print("Allow cargo publish? [y/n/t]", flush=True)
 time.sleep(600)
 """
 
@@ -2039,7 +2062,7 @@ with tempfile.TemporaryDirectory() as made:
     # tour's home, as Copilot CLI runs them, and asks to run something.
     standins = tempfile.mkdtemp(prefix="cx-agents")
     for program, script in [("opencode", PLAIN_STANDIN), ("cursor-agent", PLAIN_STANDIN),
-                            ("copilot", COPILOT_STANDIN)]:
+                            ("copilot", COPILOT_STANDIN), ("kiro-cli", KIRO_STANDIN)]:
         with open(f"{standins}/{program}", "w") as f:
             f.write(script)
         os.chmod(f"{standins}/{program}", 0o755)
@@ -2047,10 +2070,31 @@ with tempfile.TemporaryDirectory() as made:
                    capture_output=True, check=True)
     more = {"PATH": f"{standins}:{os.environ['PATH']}"}
     shoot("51-agent-list-more", [*LIST_AGENTS, ["wait", 1.0]], NOTE_FILE, size="150x44", env=more,
-          expect="Cursor CLI")
+          expect="Kiro CLI")
     asks = [*LIST_AGENTS, ["click", *ON("Copilot CLI", 1, 0, -1)], ["until", "Allow cargo publish? (y/n)"],
             *LIST_AGENTS, ["wait", 1.0]]
     shoot("51-agent-copilot-asks", asks, NOTE_FILE, size="150x44", env=more, expect="needs you")
+    # Kiro CLI, installed: the + menu lists it with its key, and Settings › Integrations has
+    # its card, its hooks not yet installed. Pointed at, never pressed.
+    shoot("51-start-menu-more", [*START_MENU, ["move", *ON("Kiro CLI")], ["wait", 0.4]], NOTE_FILE,
+          size="150x44", env=more, expect="Kiro CLI")
+    shoot("51-settings-kiro", [*settings, ["click", *ON("Integrations")], ["move", *ON("Kiro CLI")],
+                               ["wait", 0.4]], NOTE_FILE, size="150x44", env=more,
+          expect="Hooks not installed")
+    # Its stand-in, started from START, runs the hooks `cellix setup kiro` wrote, as Kiro CLI
+    # runs them: its tab is named by the prompt, and it asks to run something. In front, then
+    # in the list.
+    subprocess.run([binary, "setup", "kiro"], env={**os.environ, "HOME": HOME, **more},
+                   capture_output=True, check=True)
+    kiro = [*LIST_AGENTS, ["click", *ON("Kiro CLI", 1, 0, -1)], ["until", "Allow cargo publish? [y/n/t]"],
+            ["wait", 1.0]]
+    shoot("51-agent-kiro", kiro, NOTE_FILE, size="150x44", env=more, expect="Refund route")
+    shoot("51-agent-kiro-asks", [*kiro, *LIST_AGENTS, ["wait", 1.0]], NOTE_FILE, size="150x44",
+          env=more, expect="needs you")
+    shoot("51-agent-kiro-light", kiro, NOTE_FILE, size="150x44", env=more, expect="Refund route",
+          background="eff1f5")
+    shoot("51-agent-kiro-asks-light", [*kiro, *LIST_AGENTS, ["wait", 1.0]], NOTE_FILE,
+          size="150x44", env=more, expect="needs you", background="eff1f5")
     shutil.rmtree(standins, ignore_errors=True)
     shell = [*LIST_AGENTS, ["wait", 0.6]]
     shoot("52-paper", [], PAPER_FILE, size="150x44", background="eff1f5")

@@ -604,6 +604,7 @@ fn every_program_has_one_mark_and_none_is_a_box_to_tick() {
         "OpenCode",
         "Copilot CLI",
         "Cursor CLI",
+        "Kiro CLI",
         "deploy",
         "make build",
     ] {
@@ -621,6 +622,7 @@ fn every_program_has_one_mark_and_none_is_a_box_to_tick() {
         (Icon::AgentOpenCode, "OpenCode"),
         (Icon::AgentCopilot, "Copilot CLI"),
         (Icon::AgentCursor, "Cursor CLI"),
+        (Icon::AgentKiro, "Kiro CLI"),
         (Icon::Terminal, "a task"),
         (Icon::Program, "any other program"),
     ] {
@@ -637,10 +639,23 @@ fn every_program_has_one_mark_and_none_is_a_box_to_tick() {
         Icon::AgentOpenCode,
         Icon::AgentCopilot,
         Icon::AgentCursor,
+        Icon::AgentKiro,
         Icon::Program,
     ] {
         assert!(cellix_render::inked(icon, 0.25, 0.5), "{icon:?} is filled");
     }
+    // Kiro CLI's K is cut out of its square: its stem, and an arm reaching the corner.
+    assert!(!cellix_render::inked(Icon::AgentKiro, 9.4 / 24.0, 0.5));
+    assert!(!cellix_render::inked(
+        Icon::AgentKiro,
+        14.0 / 24.0,
+        8.8 / 24.0
+    ));
+    assert!(cellix_render::inked(
+        Icon::AgentKiro,
+        14.0 / 24.0,
+        12.0 / 24.0
+    ));
     // Copilot CLI's and Cursor's are told apart: a C, and a pointer, cut out of the square.
     // They were one C.
     let (x, y) = (10.0 / 24.0, 12.0 / 24.0);
@@ -663,7 +678,14 @@ fn every_program_has_one_mark_and_none_is_a_box_to_tick() {
     app.handle(Event::Resize(260, 44));
     let grid = screen(&app);
     let text = grid.row_text(title(&app).y);
-    for shown in ["O OpenCode", "C Copilot", "↖ Cursor", "D deploy", "> make"] {
+    for shown in [
+        "O OpenCode",
+        "C Copilot",
+        "↖ Cursor",
+        "K Kiro",
+        "D deploy",
+        "> make",
+    ] {
         assert!(text.contains(shown), "{shown}: {text}");
     }
     assert!(!text.contains('▫'), "no hollow square: {text}");
@@ -688,6 +710,7 @@ fn every_program_has_one_mark_and_none_is_a_box_to_tick() {
         (Icon::AgentOpenCode, "OpenCode"),
         (Icon::AgentCopilot, "Copilot CLI"),
         (Icon::AgentCursor, "Cursor CLI"),
+        (Icon::AgentKiro, "Kiro CLI"),
     ] {
         if menu.contains(name)
             && !app

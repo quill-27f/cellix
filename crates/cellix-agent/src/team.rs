@@ -197,6 +197,7 @@ pub fn kind_of(program: &str) -> &'static str {
         "opencode" => "opencode",
         "copilot" => "copilot",
         "cursor-agent" => "cursor-agent",
+        "kiro-cli" => "kiro-cli",
         _ => "command",
     }
 }

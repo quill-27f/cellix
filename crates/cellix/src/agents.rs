@@ -56,22 +56,43 @@ const DOCKED_STEPS: [&str; 2] = [
     "An agent you start runs here, under the file.",
     "Select text in the file to comment or ask it.",
 ];
-pub const AGENTS: [(&str, &str); 6] = [
+pub const AGENTS: [(&str, &str); 7] = [
     ("Claude Code", "claude"),
     ("Codex", "codex"),
     ("Gemini CLI", "gemini"),
     ("OpenCode", "opencode"),
     ("Copilot CLI", "copilot"),
     ("Cursor CLI", "cursor-agent"),
+    ("Kiro CLI", "kiro-cli"),
 ];
 /// The name of an agent's tab for the name its hooks give it: Gemini CLI's say "Gemini",
-/// Copilot CLI's "Copilot" and Cursor's "Cursor".
+/// Copilot CLI's "Copilot", Cursor's "Cursor" and Kiro CLI's "Kiro".
 pub fn tab_name(agent: &str) -> &str {
     match agent {
         "Gemini" => "Gemini CLI",
         "Copilot" => "Copilot CLI",
         "Cursor" => "Cursor CLI",
+        "Kiro" => "Kiro CLI",
         other => other,
+    }
+}
+
+/// The agent a running process is, by its command's name: one of `AGENTS` by its program, or
+/// Kiro CLI's chat, which may run as a process of its own (`kiro-cli-chat`) under `kiro-cli`.
+/// `lsof` cuts a name to nine letters, which leaves that one `kiro-cli-`.
+pub fn named_by_command(command: &str) -> Option<&'static str> {
+    let named = AGENTS.iter().find(|(_, program)| *program == command);
+    named
+        .map(|(name, _)| *name)
+        .or_else(|| command.starts_with("kiro-cli-").then_some("Kiro CLI"))
+}
+
+/// What an agent's program is given before anything else it's started with: Kiro CLI's chat
+/// is a command of its program, `kiro-cli chat`.
+pub fn launch_args(program: &str) -> &'static [&'static str] {
+    match program {
+        "kiro-cli" => &["chat"],
+        _ => &[],
     }
 }
 
@@ -126,19 +147,22 @@ pub fn program_of(name: &str) -> Option<&'static str> {
 /// tell: one added to `AGENTS` says here how it takes a prompt.
 pub fn first_prompt(program: &str, prompt: &str) -> Option<Vec<String>> {
     match program {
-        "claude" | "codex" => Some(vec!["--".to_string(), prompt.to_string()]),
+        // Kiro CLI's chat takes its first question as its argument, `kiro-cli chat [INPUT]`.
+        "claude" | "codex" | "kiro-cli" => Some(vec!["--".to_string(), prompt.to_string()]),
         "gemini" => Some(vec![format!("--prompt-interactive={prompt}")]),
         _ => None,
     }
 }
 
-/// What resumes an agent's own session, put after its program: the agents that can be told
-/// which session to pick up.
+/// What resumes an agent's own session, put after its program and what it's always given
+/// (`launch_args`): the agents that can be told which session to pick up.
 pub fn resume_args(name: &str, session: &str) -> Option<Vec<String>> {
     let words: &[&str] = match name {
         "Claude Code" | "Copilot CLI" | "Cursor CLI" => &["--resume"],
         "Codex" => &["resume"],
         "OpenCode" => &["--session"],
+        // `kiro-cli chat --resume-id <id>`, which Kiro CLI prints as it exits.
+        "Kiro CLI" => &["--resume-id"],
         _ => return None,
     };
     let mut args: Vec<String> = words.iter().map(|w| w.to_string()).collect();
@@ -362,8 +386,8 @@ fn agents_in(output: &str, root: &Path) -> Vec<String> {
         } else if let Some(folder) = line.strip_prefix('n')
             && Path::new(folder).starts_with(root)
         {
-            let named = AGENTS.iter().find(|(_, program)| *program == command);
-            found.push(named.map_or_else(|| command.to_string(), |(name, _)| name.to_string()));
+            let named = named_by_command(command);
+            found.push(named.map_or_else(|| command.to_string(), str::to_string));
         }
     }
     found
@@ -459,7 +483,7 @@ impl Agents {
             let output = std::process::Command::new("lsof")
                 .args(["-a", "-d", "cwd", "-c", "claude", "-c", "codex"])
                 .args(["-c", "gemini", "-c", "opencode", "-c", "copilot"])
-                .args(["-c", "cursor-agent", "-Fcn"])
+                .args(["-c", "cursor-agent", "-c", "kiro-cli", "-Fcn"])
                 .output();
             if let (Ok(output), Ok(mut seen)) = (output, seen.lock()) {
                 *seen = agents_in(&String::from_utf8_lossy(&output.stdout), &root);
@@ -1069,6 +1093,27 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
     fn only_agents_in_this_folder_count() {
         let found = agents_in(OUTPUT, Path::new("/work/project"));
         assert_eq!(found, ["Claude Code", "Codex"]);
+    }
+
+    /// Kiro CLI is known by its command, and by its chat's own process, which `lsof` cuts to
+    /// nine letters; it starts as `kiro-cli chat` and resumes a session by its id after that,
+    /// as Kiro CLI says to as it exits; its hooks' "Kiro" is its tab's "Kiro CLI".
+    #[test]
+    fn kiro_cli_is_known_by_its_command_and_resumes_its_chat_by_id() {
+        for command in ["kiro-cli", "kiro-cli-chat", "kiro-cli-"] {
+            assert_eq!(named_by_command(command), Some("Kiro CLI"), "{command}");
+        }
+        assert_eq!(named_by_command("kiro"), None);
+        let lsof = "p4\nckiro-cli-\nfcwd\nn/work/project\n";
+        assert_eq!(agents_in(lsof, Path::new("/work/project")), ["Kiro CLI"]);
+        assert_eq!(launch_args("kiro-cli"), ["chat"]);
+        assert!(launch_args("claude").is_empty());
+        assert_eq!(
+            resume_args("Kiro CLI", "f2946a26"),
+            Some(vec!["--resume-id".to_string(), "f2946a26".to_string()])
+        );
+        assert_eq!(tab_name("Kiro"), "Kiro CLI");
+        assert_eq!(display_name("kiro-cli"), "Kiro CLI");
     }
 
     #[test]
