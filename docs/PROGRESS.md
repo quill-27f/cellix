@@ -4488,3 +4488,7 @@ Track K, on the user's "Yes build kiro and release automatically with the fix", 
 - Unverified: everything about Kiro against the real `kiro-cli` (not installed here; stand-ins run the hooks as its docs say they're run). Its docs don't settle the JSON of UserPromptSubmit, PostToolUse, Stop and SessionEnd, the `--version` output, how 3.0–3.3 take a trigger they don't know, whether a V3 prompt hook's output reaches the agent, or whether global hooks need trusting. The folder fix on the user's Linux machine.
 - Next: the user's test of 0.13.0, Kiro first.
 
+## The blink's cost test watches for eight seconds (2026-11-22)
+
+- 0.13.0's first CI run failed on Linux in `a_blinking_caret_costs_a_placement_and_no_wake_of_its_own`, at its first check: each of its two windows (in front, behind) needs three whole lines of the profile, and in five seconds CI's Linux wrote only two in front, its lines coming every second and a half. What it measured was in bounds: 2 wakes a second in front with no tile and about 180 bytes a second, then 2 wakes a second and nothing sent behind. Each window is eight seconds now, and the bytes allowed in front are eight seconds' worth at the same rate (200 a blink); nothing else in it changed. It passed on 0.12.1's CI, so it was a matter of timing.
+

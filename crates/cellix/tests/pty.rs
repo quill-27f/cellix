@@ -2703,7 +2703,9 @@ fn a_blinking_caret_costs_a_placement_and_no_wake_of_its_own() {
         r#"["wait", 3]"#.to_string(),
         at(1),
         r#"["bytes", "settled"]"#.to_string(),
-        r#"["wait", 5]"#.to_string(),
+        // Long enough for three whole lines of the profile, which comes every second or
+        // second and a half: five seconds held two on CI's Linux.
+        r#"["wait", 8]"#.to_string(),
         r#"["bytes", "in front"]"#.to_string(),
         at(2),
         // The terminal says the window went behind another.
@@ -2711,7 +2713,7 @@ fn a_blinking_caret_costs_a_placement_and_no_wake_of_its_own() {
         r#"["wait", 1.5]"#.to_string(),
         at(3),
         r#"["bytes", "left"]"#.to_string(),
-        r#"["wait", 5]"#.to_string(),
+        r#"["wait", 8]"#.to_string(),
         r#"["bytes", "behind"]"#.to_string(),
         at(4),
     ];
@@ -2747,7 +2749,7 @@ fn a_blinking_caret_costs_a_placement_and_no_wake_of_its_own() {
     // In front: a present each half, a placement's few dozen bytes, and no picture.
     let (bytes, files, _) = counted(&printed, "in front");
     eprintln!(
-        "in front: {:.2} wakes a second, {} presents sent, {bytes} bytes in five seconds; \
+        "in front: {:.2} wakes a second, {} presents sent, {bytes} bytes in eight seconds; \
          behind: {:.2} wakes a second, {} bytes",
         rate(front),
         sum(front, "sent"),
@@ -2761,8 +2763,8 @@ fn a_blinking_caret_costs_a_placement_and_no_wake_of_its_own() {
     assert_eq!(sum(front, "tiles"), 0, "no tile: {front:#?}");
     assert_eq!(files, 0, "{printed}");
     assert!(
-        bytes > 0 && bytes < 5 * 2 * 200,
-        "{bytes} bytes in five seconds"
+        bytes > 0 && bytes < 8 * 2 * 200,
+        "{bytes} bytes in eight seconds"
     );
     assert!(
         rate(front) <= 2.05,
