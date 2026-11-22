@@ -2,6 +2,16 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.13.2] - 2026-11-22
+
+Agents reach the Cellix you're looking at, and a file one opens comes into view.
+
+### Fixed
+- With a second Cellix open on the same folder, say one left running in tmux or behind an SSH connection that dropped, agents reached the one opened first: `cellix open` opened their file in it, out of sight, and their replies to comments you could see were told "there's no comment". The Cellix you opened last now takes the folder's agents. The other says so, and takes them back within a few seconds of that one closing. A Cellix stopped by a hang-up also no longer deletes the newer one's socket.
+- A file an agent opened with `cellix open` could stand behind the side pane given the whole window, Review, or the sidebar in a narrow window, where Claude Code's own `openFile` brought it forward. It now comes into view either way, and the keyboard stays with the agent.
+- `cellix open` said "ok" before Cellix had tried. It now answers once the file is open, and says when it opened in a workspace that isn't on screen, or why it couldn't open it, and fails then.
+- A reply Cellix was too busy to take within two seconds was told "there's no comment N". It's now told Cellix was busy, and not to send the reply again.
+
 ## [0.13.1] - 2026-11-22
 
 The keyboard starts in the agent, and Claude Code's cursor shows only where your typing goes.

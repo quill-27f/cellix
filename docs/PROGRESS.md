@@ -4525,3 +4525,10 @@ Track F, on the user's report: "When I open a cellix workspace I see claudecode 
 - Tests: `a_file_an_agent_opens_comes_out_from_behind_the_pane_given_the_window`, `…_from_behind_review`, `…_from_under_the_sidebars_drawer`, `an_agent_hears_when_its_file_isnt_on_screen` (App); `open_reaches_the_app_and_brings_back_what_came_of_it`, `a_cellix_opened_later_takes_the_folders_agents_and_gives_them_back`, `a_reply_cellix_was_too_busy_for_isnt_called_a_missing_comment` (socket); `a_workspace_gives_its_agents_to_a_cellix_opened_later_and_takes_them_back` (Workspaces); `an_agent_reaches_the_cellix_opened_last_on_its_folder` (PTY: two real Cellix on one folder, `cellix open` shows in the second, then in the first once the second quits) and `cli_reads_comments_over_socket` now checks what `open` prints and that a missing file fails.
 - Unverified: the user's machine. Whether a second Cellix was the cause there is their "possibly"; `ps aux | grep cellix` on the box would say. Linux runs the PTY test on CI.
 - Changed behaviour: two Cellix windows kept open on one folder on purpose now give agents to the one opened last, where it was the first.
+
+## Release 0.13.2 (2026-11-22)
+
+- On the user's word: "yes, release it as 0.13.2". 0.13.2 is `68930d8` (entry above): the Cellix opened last on a folder serves its agents, and a file an agent opens with `cellix open` comes into view and the agent is told what came of it.
+- Before this: a pass of every test with no agent on the PATH, and Linux's input path (crossterm's `use-dev-tty`) built and tested on macOS (PTY, hold and CLI tests).
+- Unverified: the user's Amazon Linux box, where a second Cellix on the folder is the likely cause ("possibly", in their words). CI's Linux runs the two-Cellix PTY test.
+- Next: the user's test of 0.13.2 on that box, and of Kiro.

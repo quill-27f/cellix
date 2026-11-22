@@ -654,7 +654,10 @@ and the pane to size them, down to 24 columns for either.
 
 Set `VISUAL="cellix --wait"` so Ctrl+G in Claude Code opens plans in Cellix. Comments are
 written back into the file when you quit. Any other agent can run `cellix comments --take`
-for your comments as JSON, or `cellix open <file>` to show you something.
+for your comments as JSON, or `cellix open <file>` to show you something. The file comes into
+view even from behind Review or a pane that has the whole window, and the agent is told it opened,
+or why it didn't. If two Cellix have the same folder open, say one left running in tmux, agents
+reach the one you opened last, and the other takes them back when that one closes.
 
 The IDE connection follows what Claude Code's VS Code extension does, which isn't a
 published protocol, so a Claude Code update could change it. It was built against 2.1.309.
