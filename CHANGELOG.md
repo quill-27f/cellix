@@ -2,6 +2,17 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.13.1] - 2026-11-22
+
+The keyboard starts in the agent, and Claude Code's cursor shows only where your typing goes.
+
+### Changed
+- A workspace that opens with an agent in front of its side pane starts with the keyboard in that agent, where it started in the file, so the first thing typed reaches it. Not where a file was named on the command line, or a dialog or Settings is open; a workspace you come back to keeps the keyboard where you left it.
+
+### Fixed
+- Claude Code's cursor showed in the side pane while the keyboard was elsewhere, so it looked as if typing would go there. A program in the side pane that asks to be told (focus reports) is now told when it gets the keyboard and when it loses it: a click elsewhere, another tab in front, another workspace, or Cellix's window behind another. Claude Code draws its cursor only while it has it. A session kept running while Cellix was closed is told again when Cellix comes back, and the file's caret hides while the pane has the keyboard.
+- A helper shown live over the pane (peek) takes the keys while it's open; they went to the tab under it.
+
 ## [0.13.0] - 2026-11-22
 
 Kiro CLI joins the agents, and a folder a click opened stays open.

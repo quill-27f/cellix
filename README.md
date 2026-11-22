@@ -559,7 +559,10 @@ tmux source-file ~/.tmux.conf 2>/dev/null   # only needed if tmux is already run
 
 Click the Agents icon at the top right, or press Ctrl+Shift+P and choose `Open Claude Code`. The real program
 opens in a side pane beside your file, already connected to Cellix. Ctrl+` moves the keyboard
-between the two, and the side pane also runs Codex, Gemini CLI or a plain shell.
+between the two, and the side pane also runs Codex, Gemini CLI or a plain shell. A workspace that
+opens with an agent in front of its side pane starts with the keyboard there, and a program in the
+pane is told when it has the keyboard and when it hasn't, so Claude Code shows its cursor only
+where your typing goes.
 
 Or the other way round: `/cellix` in Claude Code on the server opens Cellix beside the
 conversation, drawn as it is on your Mac. Over SSH it goes a row at a time and only the rows that

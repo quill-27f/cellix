@@ -4507,3 +4507,11 @@ Track F, on the user's report: "When I open a cellix workspace I see claudecode 
 - Looked at: `m1-prompt-keys-in-file` (the caret in queue.rs, the prompt's `>` with no block), `-typed` (the block after "fix the queue"), `-window-behind` (no block), `-reopened` (queue.rs back with its caret where it was left, Claude Code's tab in front, "go on" typed straight into the prompt, the block after it: the stand-in had been told `O` by the run before and was told `I` as it was joined); and, retaken for what changed, `m1-agent-tab` (the shell block with the keys), `m1-agent-tab-menu` (no block while the menu has the keys), `108-terminal-find` (the shell's block gone while Find's field has the caret), `108-terminal-link-menu`, `173-peek` (the helper's block shows in the card), `174-name-peek`.
 - Unverified: a real Claude Code (2.1.311's `isTerminalFocused` read from its binary's strings, not run here); a real terminal's FocusLost/FocusGained reaching Cellix (term.py's `CSI O` stands for it); Linux.
 - Left: the status bar's "kept running while you were away" never showed in the tour's terminal as the project was opened again, so the scene can't wait for it; not looked into (perhaps cleared by the first event at start).
+
+## Release 0.13.1 (2026-11-22)
+
+- On the user's word: "yes, release it automatically when it lands". 0.13.1 is track F (`698dd58`, entry above): focus reports to the side pane's programs, so Claude Code hides its prompt's cursor when it hasn't the keyboard, and the keyboard starting in the agent of a newly opened workspace.
+- Looked at: `m1-prompt-keys-in-file` (Claude Code's stand-in shows no cursor while the file has the keys) and `m1-prompt-keys-reopened` (the keys start in the agent; the file's caret hidden), with track F's ui-expert review of those and the peek and menu scenes.
+- Unverified: a real Claude Code (its cursor's rule is read from its 2.1.311 binary), a real terminal's focus events, Linux.
+- Next: the user's test of 0.13.1 and of Kiro.
+
