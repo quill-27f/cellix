@@ -737,6 +737,8 @@ enum Choice {
     Undo(String),
     /// Remove a comment and its replies.
     DeleteComment(u32),
+    /// Removes a reply: its comment, and its place among the replies.
+    DeleteReply(u32, usize),
     /// Write the review over the file there.
     SaveReview(PathBuf),
     Git(GitChoice),
@@ -5968,6 +5970,22 @@ impl App {
         let mut asked = None;
         match draft.thread {
             // The comment itself, changed: and so is what waits to go with the review.
+            Some(id) if draft.editing && draft.reply.is_some() => {
+                let n = draft.reply.unwrap_or_default();
+                let reply = self
+                    .threads
+                    .iter_mut()
+                    .find(|t| t.id == id)
+                    .and_then(|t| t.replies.get_mut(n))
+                    .filter(|r| r.author == YOU);
+                // Its new words reach an agent with the rest of what it hasn't been told; one
+                // that was told of it already isn't told again, as a comment changed isn't.
+                if let Some(reply) = reply {
+                    reply.text = text;
+                }
+                self.save_threads();
+                return;
+            }
             Some(id) if draft.editing => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
                     if let Ok(mut comments) = self.comments.lock() {
@@ -6695,6 +6713,7 @@ impl App {
                 places,
             }),
             editing: false,
+            reply: None,
             kind: String::new(),
         });
     }
@@ -6761,6 +6780,7 @@ impl App {
             code: true,
             about: Some(About::Problem { message }),
             editing: false,
+            reply: None,
             kind: String::new(),
         });
     }
@@ -6941,6 +6961,7 @@ impl App {
             code: false,
             about: None,
             editing: false,
+            reply: None,
             kind: String::new(),
         });
     }
@@ -7079,6 +7100,7 @@ impl App {
             code: false,
             about: None,
             editing: false,
+            reply: None,
             kind: String::new(),
         });
     }
@@ -7718,6 +7740,21 @@ impl App {
                 self.refresh_tree();
             }
             Choice::SaveReview(path) => self.write_review(&path),
+            Choice::DeleteReply(id, n) => {
+                if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id)
+                    && n < thread.replies.len()
+                {
+                    thread.replies.remove(n);
+                    // An agent was told of the replies before this many: one fewer of those
+                    // now, so what it already had isn't handed over again, and what it hadn't
+                    // still is.
+                    if let Some(told) = thread.told.filter(|told| n < *told) {
+                        thread.told = Some(told - 1);
+                    }
+                    self.save_threads();
+                    self.say("Reply deleted");
+                }
+            }
             Choice::DeleteComment(id) => {
                 if let Some(at) = self.threads.iter().position(|t| t.id == id) {
                     let thread = self.threads.remove(at);
@@ -12028,6 +12065,7 @@ impl App {
                     Some(ThreadHit::Sort) => self.show_sort_menu((screen.x + 2, y + 1)),
                     // Edit and Delete, from under the "⋯" that stands for them.
                     Some(ThreadHit::More(id)) => self.show_card_menu(id, (x, y + 1)),
+                    Some(ThreadHit::ReplyMore(id, n)) => self.show_reply_menu(id, n, (x, y + 1)),
                     // Every emoji, in a panel dropping from under the buttons that send what's
                     // written: from its own button it covered the hint between them.
                     Some(ThreadHit::Emoji) => {
@@ -13325,6 +13363,23 @@ impl App {
         self.show_menu(at, items);
     }
 
+    /// Edit and Delete for a reply, from the "⋯" that stands for them where they don't fit
+    /// beside who wrote it: only Delete for an agent's.
+    fn show_reply_menu(&mut self, id: u32, n: usize, at: (u16, u16)) {
+        let own = self
+            .threads
+            .iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.replies.get(n))
+            .is_some_and(|r| r.author == YOU);
+        let mut items = Vec::new();
+        if own {
+            items.push(MenuItem::new("Edit", MenuAction::EditReply(id, n)));
+        }
+        items.push(MenuItem::new("Delete", MenuAction::DeleteReply(id, n)));
+        self.show_menu(at, items);
+    }
+
     /// The order comments are listed in as the settings have it now: another Cellix on the
     /// machine may have picked one since this one read them. Read again as the order's menu
     /// opens, as the list is shown and as the terminal comes back to this window; a setting
@@ -14086,6 +14141,7 @@ impl App {
                     code: false,
                     about: None,
                     editing: false,
+                    reply: None,
                     kind: String::new(),
                 });
             }
@@ -14173,6 +14229,64 @@ impl App {
                     self.show_card_menu(id, (panel.x + 2, panel.y + 4));
                 }
             }
+            ThreadHit::ReplyMore(id, n) => {
+                if let Some(panel) = self.dock_panel() {
+                    self.show_reply_menu(id, n, (panel.x + 2, panel.y + 4));
+                }
+            }
+            // Only the reviewer's own words are theirs to change.
+            ThreadHit::EditReply(id, n) => {
+                let Some(reply) = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == id)
+                    .and_then(|t| t.replies.get(n))
+                    .filter(|r| r.author == YOU)
+                else {
+                    return;
+                };
+                self.dock.draft = Some(Draft {
+                    thread: Some(id),
+                    file: String::new(),
+                    line: 0,
+                    quote: String::new(),
+                    selection: String::new(),
+                    text: TextBox::new(reply.text.clone()),
+                    ask: false,
+                    code: false,
+                    about: None,
+                    editing: true,
+                    reply: Some(n),
+                    kind: String::new(),
+                });
+            }
+            ThreadHit::DeleteReply(id, n) => {
+                let Some(reply) = self
+                    .threads
+                    .iter()
+                    .find(|t| t.id == id)
+                    .and_then(|t| t.replies.get(n))
+                else {
+                    return;
+                };
+                let detail = if reply.author == YOU {
+                    "It's removed from the comment. This can't be undone.".to_string()
+                } else {
+                    format!(
+                        "{}'s answer is removed from the comment. This can't be undone.",
+                        reply.author
+                    )
+                };
+                self.overlay = Overlay::Confirm(Confirm {
+                    title: "Delete this reply?".to_string(),
+                    detail,
+                    buttons: vec![
+                        ("Delete", Choice::DeleteReply(id, n)),
+                        ("Cancel", Choice::Cancel),
+                    ],
+                    selected: 1,
+                });
+            }
             ThreadHit::Quick(which) => {
                 if let Some(quick) = self.quick_emoji() {
                     self.put_emoji(quick[which.min(quick.len() - 1)], false);
@@ -14247,6 +14361,7 @@ impl App {
                     code: false,
                     about: None,
                     editing: false,
+                    reply: None,
                     kind: String::new(),
                 });
             }
@@ -14294,6 +14409,7 @@ impl App {
                     code: false,
                     about: None,
                     editing: true,
+                    reply: None,
                     kind,
                 });
             }
@@ -14518,6 +14634,7 @@ impl App {
                     code,
                     about: None,
                     editing: false,
+                    reply: None,
                     kind: String::new(),
                 });
                 return;
@@ -17627,6 +17744,8 @@ impl App {
             }
             MenuAction::EditComment(id) => self.thread_hit(ThreadHit::Edit(id)),
             MenuAction::DeleteComment(id) => self.thread_hit(ThreadHit::Delete(id)),
+            MenuAction::EditReply(id, n) => self.thread_hit(ThreadHit::EditReply(id, n)),
+            MenuAction::DeleteReply(id, n) => self.thread_hit(ThreadHit::DeleteReply(id, n)),
             MenuAction::CloseSession(index) => self.close_session_tab(index),
             MenuAction::RenameSession(index) => self.rename_session(index),
             MenuAction::CloseAllTabs => {
@@ -22557,6 +22676,8 @@ mod motion_tests;
 mod page_look_tests;
 #[cfg(test)]
 mod pane_tab_tests;
+#[cfg(test)]
+mod reply_tests;
 #[cfg(test)]
 mod report_tests;
 #[cfg(test)]

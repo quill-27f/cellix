@@ -2038,6 +2038,32 @@ with tempfile.TemporaryDirectory() as made:
         json.dump(mentions, f)
     mentioned = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0]]
     shoot("50-comment-mentions", mentioned, NOTE_FILE, size="150x44", cellix=True)
+    # A comment with the reviewer's reply and an agent's: the pointer on the reviewer's shows
+    # its Edit and Delete at the end of the line over it, and on the agent's only Delete. Then
+    # the reviewer's being changed, in the box replies are written in.
+    replied = [
+        {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
+         "text": "Say which normaliser this assumes.",
+         "replies": [{"author": "You", "text": "Softmax, or a sparse one too?"},
+                     {"author": "Claude", "text": "Softmax only; a sentence now says so."}],
+         "resolved": False, "told": 1, "asked": False, "kind": "Clarity", "suggested_by": ""},
+    ]
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(replied, f)
+    shown = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0]]
+    hovered = [*shown, ["move", *ON("or a sparse", 2)], ["wait", 0.6]]
+    shoot("50-reply-edit-hover", hovered, NOTE_FILE, size="150x44", cellix=True, expect="or a sparse")
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(replied, f)
+    agent = [*shown, ["move", *ON("a sentence now", 2)], ["wait", 0.6]]
+    shoot("50-reply-delete-hover", agent, NOTE_FILE, size="150x44", cellix=True, expect="sentence now")
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(replied, f)
+    # Edit is painted words with no cells of their own, so it's found from the reply's words:
+    # the row over them, at the card's right.
+    editing = [*hovered, ["click", *ON("Softmax, or", 41, -1)], ["until", "Enter saves"], ["keys", " Or both?"],
+               ["wait", 0.6]]
+    shoot("50-reply-editing", editing, NOTE_FILE, size="150x44", cellix=True, expect="Save")
     # A card's words selected with a drag, tinted as a page's selection is, and a right click on
     # them: Copy, Copy Comment and Copy Quote. Each scene has the comments written afresh, so
     # none stands on what the one before left.

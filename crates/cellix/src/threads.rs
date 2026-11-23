@@ -116,6 +116,12 @@ pub enum Hit {
     /// Changes the reviewer's own comment, or removes it.
     Edit(u32),
     Delete(u32),
+    /// Changes one of the reviewer's own replies, or removes a reply, the reviewer's or an
+    /// agent's: the comment, and the reply's place among its replies.
+    EditReply(u32, usize),
+    DeleteReply(u32, usize),
+    /// The "⋯" that stands for those two where they don't fit beside who wrote the reply.
+    ReplyMore(u32, usize),
     /// Opens a menu of those two, from the "⋯" that stands for them on a narrow card.
     More(u32),
     /// Shows the resolved comments too, or hides them again.
@@ -210,7 +216,7 @@ enum Line {
     Text(u32, String),
     /// Opens an answer, under a line across the card: its verdict if it gives one, and who
     /// wrote it.
-    Answer(u32, Option<String>, String),
+    Answer(u32, Option<String>, String, usize, bool),
     /// A row of an answer, on the card's column. It stood in a box whose words were 10 px from
     /// its edge where the card's are 24 from its own.
     Reply(u32, String),
@@ -404,6 +410,9 @@ pub struct Draft {
     pub about: Option<About>,
     /// It's the comment of `thread` being changed, in place of its text, not a reply to it.
     pub editing: bool,
+    /// With `editing`, the reply of `thread` being changed, by its place among them, in place
+    /// of the comment itself.
+    pub reply: Option<usize>,
     /// The kind picked for it from the chips under it, empty for none: a comment of the
     /// reviewer's own being made or changed has them, a reply doesn't.
     pub kind: String,
@@ -821,7 +830,7 @@ fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out
         Line::Suggest(found)
     });
     // Its kind, picked rather than typed, for a comment and not for a reply.
-    if draft.thread.is_none() || draft.editing {
+    if draft.thread.is_none() || (draft.editing && draft.reply.is_none()) {
         let mut row = Vec::new();
         let mut used = 0.0;
         for kind in KINDS {
@@ -2511,7 +2520,7 @@ fn lay_out(
         } else {
             out.push(Line::Quote(id, quote, words));
         }
-        let editing = draft.filter(|d| d.thread == Some(id) && d.editing);
+        let editing = draft.filter(|d| d.thread == Some(id) && d.editing && d.reply.is_none());
         // In a narrow pane a card is short until it's lit or being written on.
         let short = is_short(id, draft, view);
         // Its pictures are counted through its words and then its answers.
@@ -2560,8 +2569,17 @@ fn lay_out(
                 Some(ago) => format!("{author} · {ago}"),
                 None => author,
             };
-            out.push(Line::Answer(id, word, author));
+            out.push(Line::Answer(id, word, author, n, reply.author == YOU));
             let (words, pictures) = shown(&body, view);
+            // Being changed: what's written stands in its place, in the same box a reply is
+            // written in; Save and Cancel take the card's buttons' place, as a comment's do.
+            let changing =
+                draft.filter(|d| d.thread == Some(id) && d.editing && d.reply == Some(n));
+            if let Some(edit) = changing {
+                draft_lines(edit, view, width, measure, &mut out);
+                which += pictures.len();
+                continue;
+            }
             // A rewrite still to be decided stands in a box of its own over its buttons.
             if deciding && n + 1 == answers {
                 let room = width - box_padding(measure) * 2.0;
@@ -2701,6 +2719,44 @@ fn rewrite_rows(width: f32, measure: &dyn Measure) -> Vec<Vec<&'static str>> {
         }
     }
     rows
+}
+
+/// The comment and the reply a row of the cards is part of: its answer's line, its words, its
+/// pictures, by the answer's line over them.
+fn reply_of(all: &[Line], row: usize) -> Option<(u32, usize)> {
+    let mut at = row;
+    loop {
+        match all.get(at)? {
+            Line::Answer(id, _, _, n, _) => return Some((*id, *n)),
+            Line::Reply(..) | Line::Picture { .. } | Line::Proposed(..) => {
+                at = at.checked_sub(1)?
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// A reply's Edit and Delete, or only Delete for an agent's, at the end of the line that says
+/// who wrote it, as (label, cells, start column), with how far right of their cells they're
+/// painted; the "⋯" in their place where they'd reach the author's words.
+fn reply_edits(
+    area: Rect,
+    (author, own): (&str, bool),
+    view: View,
+    measure: &dyn Measure,
+) -> (Vec<(&'static str, String, u16)>, f32) {
+    let labels: &[&'static str] = if own { &EDITS } else { &EDITS[1..] };
+    let a = across(area, view, measure);
+    let said = a.text + measure.width(author, small()) + f32::from(BUTTON_GAP);
+    let (placed, nudge) = edits(area, labels, view, measure);
+    let fits = placed
+        .first()
+        .is_some_and(|(_, _, x)| f32::from(*x) >= said);
+    if fits {
+        (placed, nudge)
+    } else {
+        edits(area, &[MORE], view, measure)
+    }
 }
 
 /// Each button as (label, padded cells, start column): Edit and Delete with the others when
@@ -3205,11 +3261,26 @@ pub fn hit(
                 Hit::Open(*id)
             })
         }
-        Line::Quote(id, ..)
-        | Line::Diff(id, _)
-        | Line::Answer(id, ..)
-        | Line::Pill(id, ..)
-        | Line::Header(id, ..) => Some(Hit::Open(*id)),
+        Line::Answer(id, _, author, n, own) => {
+            let changing = shown.1.is_some_and(|d| d.thread == Some(*id) && d.editing);
+            let placed = if changing {
+                Vec::new()
+            } else {
+                reply_edits(area, (author, *own), view, measure).0
+            };
+            let pressed = placed
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            Some(match pressed.map(|(label, ..)| label) {
+                Some("Edit") => Hit::EditReply(*id, *n),
+                Some("Delete") => Hit::DeleteReply(*id, *n),
+                Some(_) => Hit::ReplyMore(*id, *n),
+                None => Hit::Open(*id),
+            })
+        }
+        Line::Quote(id, ..) | Line::Diff(id, _) | Line::Pill(id, ..) | Line::Header(id, ..) => {
+            Some(Hit::Open(*id))
+        }
         _ => None,
     }
 }
@@ -3648,7 +3719,14 @@ pub fn draw(
                     Some("VISUAL") => "d deletes what's selected, y copies it. Esc ends it.",
                     _ => "Enter sends. Shift+Enter starts a new line. Esc cancels.",
                 };
-                let hint = pointed.unwrap_or(usual);
+                // What's changed is saved, not sent.
+                let saves = shown_draft.is_some_and(|d| d.editing);
+                let usual = if saves {
+                    usual.replace("Enter sends", "Enter saves")
+                } else {
+                    usual.to_string()
+                };
+                let hint = pointed.unwrap_or(&usual);
                 grid.label_at(a.text, text_x, y, hint, inner_dim, right, SMALL);
             }
             Line::Empty(resolved) => {
@@ -3764,7 +3842,7 @@ pub fn draw(
                     grid.lift_since(from, over_answer_lift(100, measure));
                 }
             }
-            Line::Answer(_, word, author) => {
+            Line::Answer(id, word, author, n, own) => {
                 // A line across the card over it, between what was said and the answer, its
                 // words on the card's column: it stood in a box whose words were 10 px from its
                 // edge where the card's are 24 from its own. `ANSWER_AIR` from the words
@@ -3802,6 +3880,40 @@ pub fn draw(
                 let at = (x.ceil() as u16).max(text_x);
                 grid.label_at(x, at, y, author, muted, right, SMALL);
                 grid.drop_last(VERDICT_DROP);
+                // Edit and Delete for the reply the pointer is on, plain words at the row's
+                // end as the comment's own are: only Delete for an agent's, whose words aren't
+                // the reviewer's to change.
+                let changing = draft.is_some_and(|d| d.thread == Some(*id) && d.editing);
+                let on_reply = pointed.and_then(|row| reply_of(&all, row)) == Some((*id, *n));
+                if on_reply && !changing {
+                    let card = card_fill(*id);
+                    let (placed, at_end) = reply_edits(area, (author, *own), view, measure);
+                    for (label, cells, x) in placed {
+                        let width = cells.chars().count() as u16;
+                        let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                        let fill = if on_it {
+                            theme.secondary(card, false)
+                        } else {
+                            card
+                        };
+                        let style = Style {
+                            bg: fill,
+                            fg: if on_it {
+                                inner.fg
+                            } else {
+                                theme.secondary_words()
+                            },
+                            ..inner
+                        };
+                        let drawn = grid.painted_so_far();
+                        if label == MORE {
+                            draw_more(grid, (x, y), &cells, (fill, style), measure);
+                        } else {
+                            grid.button(x, y, &cells, label, fill, style);
+                        }
+                        grid.nudge_since(drawn, at_end);
+                    }
+                }
                 // Up with the line over it, and over a rewrite's box no nearer it than
                 // `LINE_AIR`: up with the box, it stood 10 px under the line.
                 grid.lift_since(lines_from, words_lift);

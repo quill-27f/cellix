@@ -790,6 +790,16 @@ under a comment and 10 over "Claude suggests a rewrite"): it stood in a box of t
 buttons' colour whose words were 10 px from its edge. Edit and Delete stand at the end of a
 card's buttons where all five fit, and where they don't, a "⋯" there opens a menu of the two:
 on a row of their own, a narrow card had three rows of buttons.
+A reply has them too, as plain words at the end of the line that says who wrote it, while the
+pointer is on that reply (`threads::reply_edits`): Edit and Delete on the reviewer's own, only
+Delete on an agent's, whose words aren't the reviewer's to change, and the "⋯" in their place
+where they'd reach the author's name. Edit opens the reply's words in the box replies are
+written in, the caret after them, Enter saving and Esc leaving them as they were; Delete asks
+first. An edited reply an agent hasn't been told of goes with its new words; one it was told of
+isn't sent again, as a changed comment isn't. Deleting a reply an agent was told of counts it out
+of `told`, so nothing it had is handed over again; an agent's "done" goes with its reply. Until
+23 November 2026 only the comment itself had Edit and Delete (the user: "make it possible to
+edit delete the reply").
 
 Whatever can be seen can be talked about. A selection, in code or on a page, gets Comment and Ask
 Agent beside it, each naming in brackets the keys that do the same as they're set now (Alt+C and

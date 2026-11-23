@@ -7677,5 +7677,12 @@
     "title": "With the vim or neovim keymap the boxes written in (comment and reply, Ask's field, the commit message) follow Vim through the built-in engine: open in Insert, Esc to Normal, motions, counts, operators, text objects, Visual, u and Ctrl+R, y and p with the clipboard, the mode shown in the box, Esc and Enter in Normal the box's own; one-line boxes stay natural",
     "test": "vim_keys_work_in_the_boxes_written_in",
     "passes": true
+  },
+  {
+    "id": "replies-edit-and-delete",
+    "milestone": 15,
+    "title": "A reply on a comment's card has Edit and Delete as the comment does, on the line that says who wrote it while the pointer is on it: the reviewer's own can be changed in the reply box and deleted, an agent's only deleted, and what agents are told stays right",
+    "test": "the_reviewers_own_reply_can_be_changed_and_an_agents_cannot",
+    "passes": true
   }
 ]

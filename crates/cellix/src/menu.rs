@@ -51,6 +51,9 @@ pub enum Action {
     /// Changes a comment of the reviewer's own, or removes it, from its card's "⋯".
     EditComment(u32),
     DeleteComment(u32),
+    /// A reply's: its comment, and its place among the replies.
+    EditReply(u32, usize),
+    DeleteReply(u32, usize),
     /// One of the language server's fixes, by its place in the list it sent.
     ServerFix(usize),
     NewFile(PathBuf),
