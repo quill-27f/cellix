@@ -2,6 +2,18 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.14.0] - 2026-11-23
+
+Every text box writes as the file does, and replies can be edited and deleted.
+
+### Changed
+- Every text box edits with the file's own code: the comment and reply boxes, Ask, the side pane's field, the commit message, the palette, Find, Rename and the other prompts, Go to Line, Search, Settings' filter, New Worktree and the emoji picker. Shift with any move selects; typing or pasting replaces the selection; copy, cut, undo and redo work; Option+Left/Right moves by word in every form a terminal sends it. Ctrl+A (Cmd+A) now selects the box's whole text, where it went to the start of the line.
+- The mouse works in every box as in the file: a click puts the caret where you press, a drag selects, a double-click takes a word, a triple-click the line, and Shift+click extends. The comment box and Ask's field took no clicks before.
+- With the `vim` or `neovim` keymap, the boxes you write in (comments, replies, Ask, the side pane's field, the commit message) follow Vim: they open in Insert, Esc goes to Normal, shown in the box, with motions, counts, operators, text objects and Visual, and Esc again closes them as before. One-line boxes keep the plain keys in every keymap, so Esc closes them at once. Boxes use Cellix's own Vim, not your Neovim config.
+
+### Added
+- Replies on a comment have Edit and Delete, as the comment does. Your own replies can be edited and deleted; an agent's can be deleted but not edited. Deleting an agent's "done" reply marks the comment not addressed again.
+
 ## [0.13.2] - 2026-11-22
 
 Agents reach the Cellix you're looking at, and a file one opens comes into view.

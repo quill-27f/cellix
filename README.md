@@ -231,8 +231,14 @@ Both lists scroll with the arrows, Page Up and Page Down and the wheel, their fi
 caret keys and Ctrl+V, and the letters you typed are picked out in each row.
 
 Ctrl+W closes a tab and Ctrl+Q quits; in a text box Ctrl+W deletes the word before the caret, as
-in a shell. Every box edits as the comment box does: the arrows, Home and End, a word at a time
-with Alt or Ctrl, Option+Backspace, Cmd+Backspace, and a click puts the caret where you press. Ghostty keeps Cmd+W and Cmd+Q for itself, so they
+in a shell. Every text box edits as the file does, with the same code: the arrows, Home and End, a
+word at a time with Alt or Ctrl, Shift with any of them to select, Ctrl+A (Cmd+A) for all of it,
+copy, cut, paste over a selection, and undo and redo. The mouse works as in the file too: a click
+puts the caret where you press, a drag selects, a double-click takes a word and a triple-click the
+line. With the `vim` or `neovim` keymap, the boxes you write in (comments, replies, Ask, the commit
+message) follow Vim: they open in Insert, Esc goes to Normal, shown in the box, and Esc again
+closes them. One-line boxes such as the palette, Find and Rename keep the plain keys, so Esc
+closes them at once. Ghostty keeps Cmd+W and Cmd+Q for itself, so they
 only reach Cellix if you unbind them with `keybind = cmd+w=unbind` and
 `keybind = cmd+q=unbind` in your Ghostty config.
 
@@ -372,7 +378,8 @@ under your words, and a click opens it in the Preview; in a terminal without pic
 link that does the same.
 
 What you're writing stands in a box, with a button under it that sends it and one that cancels, for
-the mouse; Enter and Esc do the same from the keyboard.
+the mouse; Enter and Esc do the same from the keyboard. Your own replies have Edit and Delete, as the
+comment does; an agent's reply can be deleted but not edited.
 
 **Ask** is for a question rather than a comment: a word you don't know, what a formula means, why a
 line is there. Ask on a selection (Alt+A), with **Explain**, **Define** and **Simplify** for the usual
@@ -704,7 +711,8 @@ saved to `~/.config/cellix/settings.json`. You can also edit that file, or
 ```
 
 `keymap` is `simple`, `vim` or `neovim`, which runs your own `nvim` and config behind the
-editor. `theme` is `auto`, `dark` (herdr's graphite: near-black greys and a soft blue) or `light` (Catppuccin Latte's surfaces, with text and code deepened to read clearly), and `auto` also matches your
+editor. In text boxes both Vim keymaps use Cellix's own Vim, so your Neovim config doesn't reach
+them. `theme` is `auto`, `dark` (herdr's graphite: near-black greys and a soft blue) or `light` (Catppuccin Latte's surfaces, with text and code deepened to read clearly), and `auto` also matches your
 terminal's background. Either theme sets its frame on your terminal's own background, so the window's
 padding shows no seam; on a light terminal that makes the light theme a shade paler than Latte. `tier` is `direct`, `placeholder` or `cells`. `row_height` is `airy` (a row 1.4 times your terminal's line, which is what a new install has),
 `comfortable` (1.2 times) or `terminal`; it takes effect in Ghostty and kitty outside tmux, where Cellix can lay out rows of its own, and
