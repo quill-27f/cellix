@@ -1246,7 +1246,7 @@ impl SettingsPage {
                             let words = SWITCHES.iter().find(|(switch, _)| switch == control);
                             if let Some((_, words)) = words {
                                 let on = switch_on(*control, values);
-                                draw_toggle(grid, page, rect.y, *words, on, theme);
+                                draw_toggle(grid, page, rect.y, *words, on, (theme, measure));
                             }
                         }
                     }
@@ -1559,7 +1559,14 @@ impl SettingsPage {
                 Row::Switch(control) => {
                     let words = SWITCHES.iter().find(|s| s.0 == control).map(|s| s.1);
                     let words = words.unwrap_or_default();
-                    draw_toggle(grid, page, y, words, switch_on(control, values), theme);
+                    draw_toggle(
+                        grid,
+                        page,
+                        y,
+                        words,
+                        switch_on(control, values),
+                        (theme, measure),
+                    );
                     let stop = page.right().saturating_sub(TOGGLE_WIDTH.ceil() as u16 + 2);
                     tag(grid, (words.0, bold), (y, stop), row);
                 }
@@ -1900,7 +1907,7 @@ impl SettingsPage {
             page.y + FORMAT_ROW,
             FORMAT,
             values.format_on_save,
-            theme,
+            (theme, measure),
         );
         let y = page.y + AUTO_SAVE_ROW;
         let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
@@ -1926,10 +1933,24 @@ impl SettingsPage {
         let y = page.y + READING_ROW;
         let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
-        draw_toggle(grid, page, y, READING, values.reading_width, theme);
+        draw_toggle(
+            grid,
+            page,
+            y,
+            READING,
+            values.reading_width,
+            (theme, measure),
+        );
         // Its line over it is the toggle's own.
         let y = page.y + CURSOR_ROW;
-        draw_toggle(grid, page, y, CURSOR_BLINK, values.cursor_blink, theme);
+        draw_toggle(
+            grid,
+            page,
+            y,
+            CURSOR_BLINK,
+            values.cursor_blink,
+            (theme, measure),
+        );
         let line_y = page.y + SERVERS_ROW - 1;
         let above = Bounds::cells(page.x as f32, line_y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
@@ -2292,20 +2313,79 @@ pub(crate) fn draw_segments(
     }
 }
 
-fn draw_toggle(grid: &mut Grid, page: Rect, y: u16, text: (&str, &str), on: bool, theme: &Theme) {
+/// A switch's track and knob, as (left from the page's right, top under the row's, width,
+/// height) in cells and each one's radius as `Grid::panel` takes it: a pill and a circle,
+/// whatever a cell's shape. A control shorter than a row is drawn on the scale of the line
+/// words are sized for, in the middle of its row (`stand` in the rasterizer), so heights and
+/// radii here are shares of that line and widths of a column. The knob was 1.03 columns by
+/// 0.6 lines: a tall oval wherever a column is narrower than 0.6 of a line, as in Ghostty's
+/// usual fonts.
+/// Left from the page's right, top under the row's, width and height in cells, and the
+/// radius as `Grid::panel` takes it.
+type SwitchPart = (f32, f32, f32, f32, u8);
+
+fn switch_shape(measure: &dyn Measure) -> (SwitchPart, SwitchPart) {
+    let Some((cw, ch)) = measure.cell_pixels() else {
+        // In cells nothing is drawn round; the shapes only stand for the switch.
+        let track = (TOGGLE_WIDTH, 0.12, TOGGLE_WIDTH, 0.76, 38);
+        return (track, (1.2, 0.2, 1.03, 0.6, 30));
+    };
+    let cw = cw.max(1) as f32;
+    let line = ch.max(1) as f32 / measure.row_air().max(1.0);
+    let share = |px: f32| (px / 2.0 / line * 100.0).round().clamp(0.0, 255.0) as u8;
+    // Two thirds of the line tall, and about twice as wide as tall, as VS Code's and a Mac's
+    // are, within the room beside the words. At 0.7 of the line or more the rasterizer takes
+    // a shape for a chip and grows it to a chip's height on an airy row, past its radius.
+    let track_px = (0.66 * line).min(TOGGLE_WIDTH * cw / 1.75);
+    let track_w = (track_px * 1.8 / cw).min(TOGGLE_WIDTH);
+    let knob_px = track_px * 0.78;
+    let gap = (track_px - knob_px) / 2.0;
+    let middle = |px: f32| 0.5 - px / line / 2.0;
+    let track = (
+        track_w,
+        middle(track_px),
+        track_w,
+        track_px / line,
+        share(track_px),
+    );
+    let knob = (
+        (gap + knob_px) / cw,
+        middle(knob_px),
+        knob_px / cw,
+        knob_px / line,
+        share(knob_px),
+    );
+    (track, knob)
+}
+
+fn draw_toggle(
+    grid: &mut Grid,
+    page: Rect,
+    y: u16,
+    text: (&str, &str),
+    on: bool,
+    (theme, measure): (&Theme, &dyn Measure),
+) {
     let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
     grid.hairline(above, theme.border);
     let room = page.right().saturating_sub(TOGGLE_WIDTH.ceil() as u16 + 2);
     draw_text(grid, page, (y, room), text, theme);
     let right = page.right() as f32;
-    let x = right - TOGGLE_WIDTH;
+    let ((left, top, width, height, radius), knob) = switch_shape(measure);
+    let x = right - left;
     let track = if on { theme.button } else { theme.popup_border };
-    let bounds = Bounds::cells(x, y as f32 + 0.12, TOGGLE_WIDTH, 0.76);
-    grid.panel(bounds, 38, Some(track), None);
-    let knob_x = if on { right - 1.2 } else { x + 0.17 };
+    let bounds = Bounds::cells(x, y as f32 + top, width, height);
+    grid.panel(bounds, radius, Some(track), None);
+    let (knob_left, knob_top, knob_w, knob_h, knob_radius) = knob;
+    // Off, it stands as far in from the track's left as on it does from its right.
+    let knob_x = if on {
+        right - knob_left
+    } else {
+        x + (knob_left - knob_w)
+    };
     let knob_color = if on { theme.button_text } else { theme.text.fg };
-    let knob = Bounds::cells(knob_x, y as f32 + 0.2, 1.03, 0.6);
-    grid.panel(knob, 30, Some(knob_color), None);
+    let knob = Bounds::cells(knob_x, y as f32 + knob_top, knob_w, knob_h);
+    grid.panel(knob, knob_radius, Some(knob_color), None);
     let hidden = Style {
         painted: true,
         ..theme.text

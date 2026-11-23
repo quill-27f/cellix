@@ -7684,5 +7684,12 @@
     "title": "A reply on a comment's card has Edit and Delete as the comment does, on the line that says who wrote it while the pointer is on it: the reviewer's own can be changed in the reply box and deleted, an agent's only deleted, and what agents are told stays right",
     "test": "the_reviewers_own_reply_can_be_changed_and_an_agents_cannot",
     "passes": true
+  },
+  {
+    "id": "settings-switch-round-on-any-cell",
+    "milestone": 15,
+    "title": "A switch in Settings is a pill with a round knob whatever a cell's shape and the row height: its sizes are pixels on the words' line's scale, under the height the rasterizer grows to a chip's",
+    "test": "a_settings_switch_is_a_pill_with_a_round_knob_on_any_cell",
+    "passes": true
   }
 ]

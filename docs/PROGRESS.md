@@ -4584,3 +4584,11 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - Before this: a pass of every test with no agent on the PATH, Linux's input path (crossterm's `use-dev-tty`) on macOS, and track W's scenes retaken on the release tree and looked at (`50-comment-shift-select`, `50-comment-vim-normal`, `50-reply-edit-hover`, `50-reply-editing`, with the others of `TOUR_ONLY`).
 - Unverified: real terminals' key and drag forms beyond the tests; Linux.
 - Left from track W: Save and Cancel when editing a reply stand at the card's foot, not under the box; no block caret in Vim's Normal mode in boxes; the Ask and emoji fields don't scroll a long text.
+
+## Settings' switches are round (2026-11-23)
+
+- The user: "In the settings switches are warped from the width". The knob was 1.03 columns by 0.6 of the line words are sized for (a control shorter than a row is drawn on that line's scale, in the middle of its row, `raster::stood`): 17.5 by 21.6 px in the tour's terminal, a tall oval wherever a column is narrower than 0.6 of a line, as in Ghostty's usual fonts.
+- Now `settings_page::switch_shape` sizes the switch in pixels from the measure: the track two thirds of the line tall and about 1.8 times as wide, within the room beside the words; the knob 0.78 of the track, as wide as tall; both radii half their height, as shares of the line. The track stays under 0.7 of the line: at that share or more `stood` takes a shape for a chip and grows it to 0.714 of an airy row, past its radius (a first try at 0.76 came out a rounded square). In the cell tier nothing is drawn round and the shapes are as they were.
+- Test: `a_settings_switch_is_a_pill_with_a_round_knob_on_any_cell` (the tour's airy rows, a terminal's own line, a narrow font's tall cells: each knob square within 1 px, each radius half its height as `stood` stands it, each track at least 1.6 times as wide as tall). It fails on the old shape and on the 0.76 track.
+- Looked at: `16-settings-editor` (on and off switches cropped at four times), `15-settings-appearance`, `136-settings-filter-select`.
+- Unverified: the user's own font and window.

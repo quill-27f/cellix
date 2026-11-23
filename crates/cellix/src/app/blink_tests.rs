@@ -327,3 +327,83 @@ fn a_terminal_panes_cursor_blinks_unless_its_program_asks_for_a_steady_one() {
         assert_eq!(app.next_blink(&grid), None, "the terminal blinks it");
     }
 }
+
+/// A switch on Settings is a pill with a round knob, whatever a cell's shape. Its knob was
+/// 1.03 columns by 0.6 rows, and its corners a share of the line words are sized for, so with
+/// the airy rows a new install has, taller than that line, the knob stood as an oval and the
+/// track's ends weren't round (the user: "switches are warped").
+#[test]
+fn a_settings_switch_is_a_pill_with_a_round_knob_on_any_cell() {
+    // The tour's airy rows, a terminal's own line, and a narrow font's tall cells.
+    for (cell, line) in [((17, 50), 36), ((17, 37), 37), ((9, 30), 21)] {
+        let (_dir, mut app) = file();
+        app.set_measure(Rc::new(
+            FontMeasure::new(cell.0, cell.1).with_type_row(line),
+        ));
+        app.run(Command::OpenSettings);
+        let editor = {
+            let page = app.settings_page.as_ref().unwrap();
+            let spots = page.controls(app.sheet_area());
+            let editor = spots
+                .iter()
+                .find(|(_, c)| *c == Control::Section(crate::settings_page::Section::Editor));
+            editor.unwrap().0
+        };
+        click(&mut app, editor.x + 1, editor.y);
+        let theme = *app.theme();
+        let grid = screen(&app);
+        let px = |units: i32, per_cell: usize| {
+            units as f32 * per_cell as f32 / cellix_render::UNIT as f32
+        };
+        // Heights as the rasterizer stands them: a control shorter than a row on the line's
+        // scale, and one tall enough to count as a chip grown to a chip's height.
+        let tall = |b: &cellix_render::Bounds| {
+            cellix_render::stood(b.y, b.h, cell.1 as f32, line as f32).1
+        };
+        let shapes = |fill| {
+            grid.paint
+                .iter()
+                .filter_map(move |p| match p {
+                    cellix_render::Paint::Panel {
+                        bounds,
+                        radius,
+                        fill: Some(f),
+                        ..
+                    // A switch is at most its room wide and a quarter of a row tall at least: Auto
+                    // save's chosen segment, in the same colour, is far wider, and the bar
+                    // under the tab in front a few pixels tall.
+                    } if *f == fill
+                        && bounds.w <= cellix_render::units(2.6)
+                        && bounds.h >= cellix_render::units(0.25) =>
+                    {
+                        Some((*bounds, *radius))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // Cursor blinking and Reading width are on: their tracks in the button's colour,
+        // their knobs in its text's.
+        let knobs = shapes(theme.button_text);
+        let tracks = shapes(theme.button);
+        assert!(!knobs.is_empty() && !tracks.is_empty(), "{cell:?}");
+        for (bounds, radius) in knobs.iter().chain(&tracks) {
+            let (w, h) = (px(bounds.w, cell.0), tall(bounds));
+            // A radius is a share of the line words are sized for.
+            let r = f32::from(*radius) * line as f32 / 100.0;
+            assert!(
+                (r - h / 2.0).abs() <= 1.0,
+                "{cell:?}: radius {r} for height {h}"
+            );
+            assert!(w >= h - 1.0, "{cell:?}: {w} wide, {h} tall");
+        }
+        for (bounds, _) in &knobs {
+            let (w, h) = (px(bounds.w, cell.0), tall(bounds));
+            assert!((w - h).abs() <= 1.0, "{cell:?}: the knob is {w} by {h}");
+        }
+        for (bounds, _) in &tracks {
+            let (w, h) = (px(bounds.w, cell.0), tall(bounds));
+            assert!(w >= h * 1.6, "{cell:?}: the track is {w} by {h}");
+        }
+    }
+}
