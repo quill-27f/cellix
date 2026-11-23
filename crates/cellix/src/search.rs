@@ -142,6 +142,23 @@ impl Search {
         }
     }
 
+    /// The byte of the box with the keyboard a press or a drag at `x`, with its fraction of a
+    /// column, on row `y` stands at: when it's on that box, or with `clamp`, anywhere.
+    pub fn place(
+        &self,
+        area: Rect,
+        (x, y): (f32, u16),
+        (measure, theme): (&dyn Measure, &Theme),
+        clamp: bool,
+    ) -> Option<usize> {
+        let field = self.focus?;
+        let (line, shown) = self.field_box(area, field, theme);
+        if !clamp && !line.contains(x as u16, y) {
+            return None;
+        }
+        Some(crate::palette::input_press(line, &shown, x, measure))
+    }
+
     /// A press in a box at `x`, with its fraction of a column: the box has the keyboard, with
     /// its caret at the letter pressed.
     pub fn press_field(

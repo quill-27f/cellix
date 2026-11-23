@@ -1868,6 +1868,15 @@ selection's colour behind the words (`palette::box_selection`), and the caret wh
 to. A table test sends the same keys to a one-line file and to each kind of box and compares
 words, caret and selection (`every_key_does_in_every_box_what_it_does_in_the_file`).
 
+The mouse in a box is the file's too (`App::box_mouse`): a press puts the caret at the nearer
+edge of the letter painted under the pointer, a drag selects from it, a second press selects the
+word and a third the line, all of a box of one line, and Shift with a press selects from the
+caret. Each box says which byte a place is (`App::box_place`: `palette::input_press` for the boxes
+`palette::input` draws, and the palette's, Settings', the commit message's, the emoji picker's,
+the comment's (`threads::input_place`) and Ask's own), and a drag that leaves the box goes to the
+nearest place in it. Until 23 November 2026 the comment's box and Ask's took no press at all.
+With something selected the caret stands on the selection's edge (`palette::caret_nudge_in`, with `selected`).
+
 A box of one line gives its words afresh with its caret as far from their end as it stood
 (`TextBox::set`), so one opened with words in it, Rename tab with the tab's name, has its caret
 at their end; Up and Down aren't its own (`TextBox::line_key`), they step through matches or
@@ -1876,7 +1885,7 @@ nearer edge of the letter pressed
 (`palette::input_press`). `palette::input` draws the caret where it stands, and a text longer
 than its box shows the part the caret is in (`hidden_before`, shared with the palette's field),
 its words cut a column short of the box's far edge. Painted, the caret keeps clear of the
-letters either side of it (`palette::caret_nudge`, which the palette's field and Settings' filter
+letters either side of it (`palette::caret_nudge_in`, which the palette's field and Settings' filter
 share): just past the ink of the letter it follows where a space or the end comes next, in the
 middle of a space it follows, and centred on the edge between two letters, the only room there
 is. Placed 0.1 of a column before the end of the letter it followed, it stood 1 px from a "p"

@@ -578,6 +578,53 @@ impl App {
         self.side.as_ref().is_some_and(|side| side.field.is_some())
     }
 
+    /// The byte of the field's words a press or a drag at `mouse` stands at: on the field's
+    /// row and across it, or with `clamp`, anywhere. Its words start where `draw_side` sets
+    /// them.
+    pub(super) fn side_field_place(&self, mouse: MouseEvent, clamp: bool) -> Option<usize> {
+        let card = self.side_card()?;
+        let field = self.side.as_ref()?.field.as_ref()?;
+        let area = card.area;
+        let row = card.rows.iter().position(|r| matches!(r, Row::Field(..)))?;
+        let y = area.y + 1 + row as u16;
+        let x = area.x + INSET;
+        let right = area.right().saturating_sub(INSET);
+        let on = mouse.y == y && mouse.x + 1 >= x && mouse.x < right;
+        if !clamp && !on {
+            return None;
+        }
+        let lead = self.card_lead(area);
+        let inset = measures::columns(Self::card_room(), &*self.measure);
+        let start = match inset {
+            Some(inset) => {
+                let left = f32::from(area.x) + lead + inset;
+                let pad = measures::columns(COMMAND_PADDING, &*self.measure);
+                left + pad.unwrap_or(0.0)
+            }
+            None => f32::from(x),
+        };
+        let mut edge = if self.measure.in_cells() {
+            start.floor()
+        } else {
+            start
+        };
+        let text = field.text();
+        let advances = self.measure.advances(text, Font::default());
+        let mut letters = 0;
+        for advance in advances.iter() {
+            if mouse.fine_x < edge + advance / 2.0 {
+                break;
+            }
+            edge += advance;
+            letters += 1;
+        }
+        Some(
+            text.char_indices()
+                .nth(letters)
+                .map_or(text.len(), |(at, _)| at),
+        )
+    }
+
     /// Keys while the card is up: a field's when one is open, Esc anyway. True when taken.
     pub(super) fn side_key(&mut self, key: KeyEvent) -> bool {
         let Some(side) = self.side.as_mut() else {
@@ -1203,6 +1250,15 @@ impl App {
         grid.lift_since(words_from, lift);
         if let Some((cx, cy)) = caret {
             grid.set_caret(cx, cy, 0.62);
+            // The caret takes the colour of the cell it's in, which before a hint is the hint's:
+            // it's the words' colour, as in every box (the ui-expert's review of q1-ask-field).
+            if !self.measure.in_cells() {
+                let cell = Rect::new(cx.max(0.0) as u16, cy, 1, 1);
+                grid.set_style(cell, |style| Style {
+                    fg: theme.text.fg,
+                    ..style
+                });
+            }
             // Raised with the words it's among.
             if let Some(caret) = &mut grid.caret {
                 caret.y -= cellix_render::units(lift);

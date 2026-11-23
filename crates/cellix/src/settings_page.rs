@@ -1369,7 +1369,13 @@ impl SettingsPage {
             // Where the text before it really ends, which proportional letters make short of
             // its cells; in cells, the cell typing goes into.
             let before: f32 = shown.advances[shown.hidden..shown.before].iter().sum();
-            let nudge = crate::palette::caret_nudge(&self.filter, &shown.advances, shown.before);
+            let selected = self.filter.selection().is_some();
+            let nudge = crate::palette::caret_nudge_in(
+                &self.filter,
+                &shown.advances,
+                shown.before,
+                selected,
+            );
             let at = match nudge {
                 _ if measure.in_cells() => f32::from(cell) + before,
                 // Clear of the letters either side of it, as in every box.
@@ -1424,11 +1430,28 @@ impl SettingsPage {
     /// A press on the filter's field, at `x` with its fraction of a column, puts its caret at
     /// the letter pressed, and the keyboard back in it. Returns whether it was on the field.
     pub fn press_filter(&mut self, area: Rect, (x, y): (f32, u16), measure: &dyn Measure) -> bool {
+        let Some(at) = self.filter_place(area, (x, y), measure, false) else {
+            return false;
+        };
+        self.filter.set_caret(at);
+        self.focus = None;
+        true
+    }
+
+    /// The byte of the filter a press at `x` on row `y` stands at, when it's on the field; with
+    /// `clamp`, as a drag that's left it, the nearest place in it.
+    pub fn filter_place(
+        &self,
+        area: Rect,
+        (x, y): (f32, u16),
+        measure: &dyn Measure,
+        clamp: bool,
+    ) -> Option<usize> {
         let field = Self::filter_field(area);
         let count = self.filter_count();
         let shown = self.filter_shown(area, count.as_deref(), measure);
-        if y != field.y || x < f32::from(field.x) || x >= f32::from(shown.end) {
-            return false;
+        if !clamp && (y != field.y || x < f32::from(field.x) || x >= f32::from(shown.end)) {
+            return None;
         }
         let mut edge = if measure.in_cells() {
             f32::from(shown.cell)
@@ -1444,10 +1467,7 @@ impl SettingsPage {
             letters += 1;
         }
         let at = self.filter.char_indices().nth(letters);
-        let at = at.map_or(self.filter.len(), |(at, _)| at);
-        self.filter.set_caret(at);
-        self.focus = None;
-        true
+        Some(at.map_or(self.filter.len(), |(at, _)| at))
     }
 
     /// What the filter found, in the page's place: each row as its own page draws it, with

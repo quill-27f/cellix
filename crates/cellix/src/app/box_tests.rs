@@ -470,6 +470,11 @@ fn one_line() -> (TempDir, App) {
 /// Opens a box of `kind`, its words emptied and the table's words pasted in, its caret after
 /// them; for the file, the same done to the file, so the undo behind each is alike.
 fn opened(kind: Kind) -> (TempDir, App) {
+    opened_with(kind, WORDS)
+}
+
+/// `opened`, with `words` pasted into the box in place of the table's.
+fn opened_with(kind: Kind, words: &str) -> (TempDir, App) {
     let (dir, mut app) = one_line();
     match kind {
         Kind::File => {}
@@ -525,7 +530,7 @@ fn opened(kind: Kind) -> (TempDir, App) {
         press(&mut app, Key::Char('a'), CTRL);
         plain(&mut app, Key::Backspace);
     }
-    app.handle(Event::Paste(WORDS.into()));
+    app.handle(Event::Paste(words.into()));
     (dir, app)
 }
 
@@ -700,5 +705,67 @@ fn every_key_does_in_every_box_what_it_does_in_the_file() {
             }
             assert_eq!(state(&app, kind), want, "{name}, in {kind:?}");
         }
+    }
+}
+
+/// A press, a drag or a release of the left button at `x`, with its fraction, on row `y`.
+fn pointer(app: &mut App, kind: MouseKind, x: f32, y: u16, shift: bool) {
+    app.handle(Event::Mouse(MouseEvent {
+        kind,
+        x: x as u16,
+        y,
+        fine_x: x,
+        fine_y: f32::from(y) + 0.5,
+        mods: Mods {
+            shift,
+            ..Mods::default()
+        },
+    }));
+}
+
+/// The mouse does in every box what it does in the file: a press puts the caret at the letter
+/// under it, a drag selects, a double click selects the word and a triple click the line, and
+/// Shift with a press selects from the caret. Until now a comment's box and Ask's took no
+/// press at all, and no box selected.
+#[test]
+fn the_mouse_does_in_every_box_what_it_does_in_the_file() {
+    // Short, for the Search sidebar's box, which is narrow.
+    const TEXT: &str = "ab cde fgh";
+    for kind in KINDS.into_iter().skip(1) {
+        let (_dir, mut app) = opened_with(kind, TEXT);
+        let grid = screen(&app);
+        let (x0, y) = (0..app.size().1)
+            .find_map(|y| on_row(&grid, y, TEXT).map(|x| (x, y)))
+            .unwrap_or_else(|| panic!("{kind:?}: the words aren't on screen"));
+        let at = |letter: u16| f32::from(x0 + letter) + 0.2;
+        let shown = |caret, selected| (TEXT.to_string(), caret, selected);
+        pointer(&mut app, MouseKind::Left, at(3), y, false);
+        assert_eq!(state(&app, kind), shown(3, None), "{kind:?}: a press");
+        pointer(&mut app, MouseKind::Drag, at(5), y, false);
+        pointer(&mut app, MouseKind::Drag, at(6), y, false);
+        pointer(&mut app, MouseKind::Up, at(6), y, false);
+        assert_eq!(
+            state(&app, kind),
+            shown(6, Some((3, 6))),
+            "{kind:?}: a drag"
+        );
+        for _ in 0..2 {
+            pointer(&mut app, MouseKind::Left, at(8), y, false);
+            pointer(&mut app, MouseKind::Up, at(8), y, false);
+        }
+        let word = shown(10, Some((7, 10)));
+        assert_eq!(state(&app, kind), word, "{kind:?}: a double click");
+        pointer(&mut app, MouseKind::Left, at(8), y, false);
+        pointer(&mut app, MouseKind::Up, at(8), y, false);
+        let line = shown(10, Some((0, 10)));
+        assert_eq!(state(&app, kind), line, "{kind:?}: a triple click");
+        pointer(&mut app, MouseKind::Left, at(0), y, false);
+        pointer(&mut app, MouseKind::Up, at(0), y, false);
+        pointer(&mut app, MouseKind::Left, at(2), y, true);
+        let extended = shown(2, Some((0, 2)));
+        assert_eq!(state(&app, kind), extended, "{kind:?}: Shift with a press");
+        // What's typed goes over what the mouse selected.
+        typed(&mut app, "zz");
+        assert_eq!(state(&app, kind).0, "zz cde fgh", "{kind:?}");
     }
 }

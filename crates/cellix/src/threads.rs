@@ -218,9 +218,9 @@ enum Line {
     /// own, `BOX_PADDING` round them.
     Proposed(u32, String),
     Status(String),
-    /// A row of what's being written, where the caret is on it, in bytes, when it is, and
-    /// what's selected of it.
-    Input(String, Option<usize>, Option<(usize, usize)>),
+    /// A row of what's being written, where the caret is on it, in bytes, when it is, what's
+    /// selected of it, and where it starts in what's written.
+    Input(String, Option<usize>, Option<(usize, usize)>, usize),
     /// Between what's being written and the tools under it, in their box: the words stand
     /// a little down into it and the tools a little up, so neither is on the box's lines.
     Pad,
@@ -799,7 +799,12 @@ fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out
         let on_row = selected
             .map(|(a, b)| (a.clamp(start, end) - start, b.clamp(start, end) - start))
             .filter(|(a, b)| a < b);
-        out.push(Line::Input(draft.text[start..end].to_string(), at, on_row));
+        out.push(Line::Input(
+            draft.text[start..end].to_string(),
+            at,
+            on_row,
+            start,
+        ));
     }
     // The pictures it names so far, so what's being sent is in view.
     let named: Vec<String> = picture_spans(&draft.text)
@@ -1382,6 +1387,11 @@ pub(crate) const FIELD_INSET: f32 = 0.22;
 /// How far the words are dropped and the tools lifted into the row kept between them, so
 /// each is a quarter of a row and more inside the box's line.
 const FIELD_SHIFT: f32 = 0.3;
+/// How far inside its row a selection in what's being written stands, top and foot: lower
+/// than the commit message's, as the words are dropped in their rows (`FIELD_SHIFT`), so it's
+/// centred on them; at the commit message's it stood 9 px over them and 3 under (the
+/// ui-expert's review of 50-reply-double-click).
+const COMMENT_SELECTION_INSET: (f32, f32) = (0.17, 0.05);
 /// Columns a tool takes: an emoji's two and one before the next.
 const TOOL: u16 = 3;
 /// The size the quick emoji are drawn at, as a percentage of the words'.
@@ -2916,6 +2926,62 @@ pub fn last_top(area: Rect, shown: Shown, measure: &dyn Measure) -> usize {
     last_of(lines(shown, width, measure).len(), area.h)
 }
 
+/// The byte of what's being written that a press or a drag at `x`, with its fraction of a
+/// column, on row `y` stands at: the nearer edge of the letter there, on the row pressed. Only
+/// on its rows unless `clamp`, as a drag that's left them: then over them is its start and
+/// under them its end.
+pub fn input_place(
+    area: Rect,
+    shown: Shown,
+    top: usize,
+    (x, y): (f32, u16),
+    measure: &dyn Measure,
+    clamp: bool,
+) -> Option<usize> {
+    let width = text_width(area, shown.4, measure);
+    let all = lines(shown, width, measure);
+    let top = top.min(last_of(all.len(), area.h));
+    let rows: Vec<(usize, &str, usize)> = all
+        .iter()
+        .enumerate()
+        .filter_map(|(i, line)| match line {
+            Line::Input(text, _, _, start) => Some((i, text.as_str(), *start)),
+            _ => None,
+        })
+        .collect();
+    let (first, last) = (rows.first()?, rows.last()?);
+    let row = top as isize + y as isize - area.y as isize;
+    let a = across(area, shown.4, measure);
+    let found = rows.iter().find(|(i, ..)| *i as isize == row);
+    let (_, text, start) = match found {
+        Some(found) if clamp || (x >= a.text && x < a.end) => *found,
+        _ if !clamp => return None,
+        _ if row < first.0 as isize => return Some(first.2),
+        _ if row > last.0 as isize => return Some(last.2 + last.1.len()),
+        _ => return None,
+    };
+    let begin = a.text + field_pad(measure);
+    let mut edge = if measure.in_cells() {
+        f32::from(cell_of(begin).0)
+    } else {
+        begin
+    };
+    let advances = measure.advances(text, Font::default());
+    let mut letters = 0;
+    for advance in advances.iter() {
+        if x < edge + advance / 2.0 {
+            break;
+        }
+        edge += advance;
+        letters += 1;
+    }
+    let at = text
+        .char_indices()
+        .nth(letters)
+        .map_or(text.len(), |(at, _)| at);
+    Some(start + at)
+}
+
 /// What a press at column `x`, row `y` lands on. `fine_y` is the row with its fraction,
 /// where the terminal says, and the row's middle where it doesn't.
 pub fn hit(
@@ -3380,7 +3446,7 @@ pub fn draw(
             Line::Status(text) => {
                 grid.label_at(a.text, text_x, y, text, inner_dim, right, SMALL);
             }
-            Line::Input(text, caret, selected) => {
+            Line::Input(text, caret, selected, _) => {
                 // A field's padding inside its box, which stands on the card's columns.
                 let start = a.text + pad;
                 let (cell, _) = cell_of(start);
@@ -3393,7 +3459,7 @@ pub fn draw(
                             (start, cell, y),
                             text,
                             range,
-                            (100, right, crate::palette::ROWS_SELECTION_INSET),
+                            (100, right, COMMENT_SELECTION_INSET),
                             inner.bg,
                             pair,
                             drawn,
@@ -3409,7 +3475,8 @@ pub fn draw(
                     // Clear of the letters either side of it, as in every box.
                     let advances = measure.advances(text, font);
                     let before = text[..*at].chars().count();
-                    let x = match crate::palette::caret_nudge(text, &advances, before) {
+                    let held = selected.is_some();
+                    let x = match crate::palette::caret_nudge_in(text, &advances, before, held) {
                         Some(nudge) if !measure.in_cells() => (edge + nudge).max(start),
                         _ => edge,
                     };

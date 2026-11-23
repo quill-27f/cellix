@@ -229,7 +229,7 @@ impl App {
 
     /// How far its parts and its buttons are raised in their rows (`measures::dialog_lifts`):
     /// its last control is the choice of agent.
-    fn worktree_lifts(&self) -> (f32, f32) {
+    pub(super) fn worktree_lifts(&self) -> (f32, f32) {
         measures::dialog_lifts(measures::DialogLast::Control, &*self.measure)
     }
 
@@ -271,7 +271,7 @@ impl App {
     }
 
     /// The branch's box: its line, on the dialog's text edges, and what it shows.
-    fn worktree_field<'a>(&self, form: &'a NewWorktree) -> (Rect, Input<'a>) {
+    pub(super) fn worktree_field<'a>(&self, form: &'a NewWorktree) -> (Rect, Input<'a>) {
         let area = self.new_worktree_area();
         let (left, right) = (area.x + 2, area.right().saturating_sub(2));
         let line = Rect::new(left, area.y + FIELD_ROW, right - left, 1);

@@ -421,6 +421,38 @@ impl Picker {
         true
     }
 
+    /// The byte of the field a press or a drag at `x`, with its fraction of a column, on row
+    /// `y` stands at: when it's on the field, or with `clamp`, anywhere.
+    pub fn place(&self, (x, y): (f32, u16), measure: &dyn Measure, clamp: bool) -> Option<usize> {
+        let area = self.area();
+        let left = area.x + INSET;
+        let right = area.right().saturating_sub(INSET);
+        if !clamp && (y != area.y || x < f32::from(left) || x >= f32::from(right)) {
+            return None;
+        }
+        // Where its words start, as `draw` sets them: painted, or in cells.
+        let mut edge = if measure.in_cells() {
+            f32::from(left + 2)
+        } else {
+            f32::from(left) + 2.3
+        };
+        let text = self.query.text();
+        let advances = measure.advances(text, Font::default());
+        let mut letters = 0;
+        for advance in advances.iter() {
+            if x < edge + advance / 2.0 {
+                break;
+            }
+            edge += advance;
+            letters += 1;
+        }
+        Some(
+            text.char_indices()
+                .nth(letters)
+                .map_or(text.len(), |(at, _)| at),
+        )
+    }
+
     /// Takes pasted words into the field.
     pub fn paste(&mut self, text: &str) {
         self.query.insert(text.trim());

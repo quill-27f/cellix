@@ -928,6 +928,13 @@ impl Palette {
     /// Puts the caret where the field was pressed, `x` with its fraction of a column: at the
     /// nearer edge of the letter there.
     pub fn press_field(&mut self, screen: Rect, x: f32, measure: &dyn Measure) {
+        let at = self.field_place(screen, x, measure);
+        self.query.set_caret(at);
+    }
+
+    /// The byte of what's typed a press or a drag at `x` stands at: the nearer edge of the
+    /// letter there, and past the words, their end.
+    pub fn field_place(&self, screen: Rect, x: f32, measure: &dyn Measure) -> usize {
         let area = Self::area(screen);
         let (painted, advances, hidden) = self.typed_window(area, measure);
         // In cells the words start on a cell, a little before where they're painted.
@@ -946,8 +953,7 @@ impl Palette {
             letters += 1;
         }
         let at = self.query.char_indices().nth(letters);
-        let at = at.map_or(self.query.len(), |(at, _)| at);
-        self.query.set_caret(at);
+        at.map_or(self.query.len(), |(at, _)| at)
     }
 
     /// Takes what Quick Open is asked for, to list by at the next `filter`.
@@ -1533,7 +1539,8 @@ impl Palette {
         // Just before the hint, which starts where what's typed will, so the first letter
         // doesn't move anything; and just after the letter it follows.
         let edge = x + wide(&advances[hidden..before]);
-        let caret = match caret_nudge(&self.query, &advances, before) {
+        let selected = self.query.selection().is_some();
+        let caret = match caret_nudge_in(&self.query, &advances, before, selected) {
             None => x - CARET_BEFORE,
             // Clear of the letters either side of it, where there are pictures.
             Some(nudge) if !measure.in_cells() => (edge + nudge).max(x - CARET_BEFORE),
@@ -2058,7 +2065,13 @@ const CARET_PAST: f32 = 0.12;
 /// stem 1 px from it, and ran into an "r"'s arm before it at the end. `None` before the first
 /// letter, which each box places by its placeholder. `before` counts the letters before the
 /// caret, `advances` has one for each letter.
-pub fn caret_nudge(text: &str, advances: &[f32], before: usize) -> Option<f32> {
+/// With something `selected`, the caret stands on the selection's edge, as in the file, where
+/// it stood 2 or 3 px past the band (the ui-expert's review of 50-reply-double-click and
+/// 11-find-drag).
+pub fn caret_nudge_in(text: &str, advances: &[f32], before: usize, selected: bool) -> Option<f32> {
+    if selected && before > 0 {
+        return Some(0.0);
+    }
     let index = before.checked_sub(1)?;
     let mut letters = text.chars().skip(index);
     let previous = letters.next()?;
@@ -2219,10 +2232,11 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
             .iter()
             .sum::<f32>();
         // In cells it's the cell typing goes into. Painted, it keeps clear of the letters
-        // either side of it (`caret_nudge`), and of the first letter or the placeholder's,
+        // either side of it (`caret_nudge_in`), and of the first letter or the placeholder's,
         // standing just before it.
         let first = x - 0.1;
-        let at = match caret_nudge(field.text, &shown.advances, shown.before) {
+        let selected = field.selection.is_some();
+        let at = match caret_nudge_in(field.text, &shown.advances, shown.before, selected) {
             _ if measure.in_cells() => edge,
             Some(nudge) => (edge + nudge).max(first),
             None => first,

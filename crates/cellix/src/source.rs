@@ -710,7 +710,8 @@ impl Source {
             // Clear of the letters either side of it, as in every box.
             let advances = measure.advances(text, Font::default());
             let before = self.message[start..caret].chars().count();
-            let x = match crate::palette::caret_nudge(text, &advances, before) {
+            let selected = self.message.selection().is_some();
+            let x = match crate::palette::caret_nudge_in(text, &advances, before, selected) {
                 Some(nudge) if !measure.in_cells() => (edge + nudge).max(left as f32 + 1.0),
                 _ => edge,
             };
@@ -759,18 +760,47 @@ impl Source {
     /// A press on the message's box at `x`, with its fraction of a column, on row `y`: the
     /// caret goes to the nearer edge of the letter pressed, on the row pressed.
     pub fn press_message(&mut self, area: Rect, (x, y): (f32, u16), measure: &dyn Measure) {
-        let Some(offset) = y.checked_sub(area.y) else {
-            return;
-        };
+        if let Some(at) = self.message_place(area, (x, y), measure, false) {
+            self.message.set_caret(at);
+        }
+    }
+
+    /// The byte of the message a press at `x` on row `y` stands at, when it's on the message's
+    /// box; with `clamp`, as a drag that's left it, the nearest place in what shows.
+    pub fn message_place(
+        &self,
+        area: Rect,
+        (x, y): (f32, u16),
+        measure: &dyn Measure,
+        clamp: bool,
+    ) -> Option<usize> {
         let lines = self.lines();
-        let row = self.line_at(&lines, offset as usize);
-        let Some(Line::Message(row)) = lines.get(row).cloned() else {
-            return;
+        // The box's rows, as the lines show them.
+        let boxed: Vec<(usize, u16)> = lines
+            .iter()
+            .enumerate()
+            .filter_map(|(i, line)| match line {
+                Line::Message(row) => Some((i, *row)),
+                _ => None,
+            })
+            .collect();
+        let offset = y.checked_sub(area.y).map(usize::from);
+        let at = offset.map(|offset| self.line_at(&lines, offset));
+        let row = match boxed.iter().find(|(i, _)| Some(*i) == at) {
+            Some((_, row)) => *row,
+            None if !clamp => return None,
+            None => {
+                let before = at.is_none_or(|at| boxed.first().is_some_and(|(i, _)| at < *i));
+                if before {
+                    0
+                } else {
+                    boxed.last().map_or(0, |(_, row)| *row)
+                }
+            }
         };
         let (rows, _, shown) = self.message_rows(area, measure);
         let Some(&(start, end)) = rows.get(shown + row as usize) else {
-            self.message.set_back(0);
-            return;
+            return Some(self.message.len());
         };
         let text = &self.message[start..end];
         let advances = measure.advances(text, Font::default());
@@ -787,7 +817,7 @@ impl Source {
         if at == end && end < self.message.len() && !self.message[end..].starts_with('\n') {
             at = self.message[..end].trim_end_matches(' ').len().max(start);
         }
-        self.message.set_caret(at);
+        Some(at)
     }
 
     /// Commit and Push or Pull. Painted, each is a chip inside its row on the sidebar's

@@ -1619,6 +1619,8 @@ pub struct App {
     preview_press: Option<PreviewPress>,
     /// The last press in text, with where it was and how many it made in a row.
     last_click: Option<(std::time::Instant, u16, u16, u8)>,
+    /// A press in the text box with the keyboard is held: a drag selects in it.
+    box_drag: bool,
     /// The folder a click last opened or closed in the explorer, and when, so the second
     /// press of a double click doesn't close it again.
     last_toggle: Option<(std::time::Instant, PathBuf)>,
@@ -2073,6 +2075,7 @@ impl App {
             pointer: (0.0, 0.0),
             glance: None,
             last_click: None,
+            box_drag: false,
             last_toggle: None,
             preview_press: None,
             maximized: None,
@@ -5640,6 +5643,192 @@ impl App {
         let shown = self.sidebar_area().is_some();
         (self.source.focused && self.sidebar_view == SidebarView::Source)
             || (shown && self.search.focus.is_some() && self.sidebar_view == SidebarView::Search)
+    }
+
+    /// `focused_box`, to change.
+    pub(crate) fn focused_box_mut(&mut self) -> Option<&mut TextBox> {
+        let bare = matches!(self.overlay, Overlay::None);
+        if bare && self.side.as_ref().is_some_and(|s| s.field.is_some()) {
+            return self.side.as_mut().and_then(|s| s.field.as_mut());
+        }
+        if bare && self.dock.draft.is_some() {
+            return self.dock.draft.as_mut().map(|draft| &mut draft.text);
+        }
+        if bare && self.source.focused {
+            return Some(&mut self.source.message);
+        }
+        if !bare {
+            return match &mut self.overlay {
+                Overlay::Palette(palette) => Some(&mut palette.query),
+                Overlay::Prompt(prompt) => Some(&mut prompt.input),
+                Overlay::Find(find) => Some(find.field_mut()),
+                Overlay::NewWorktree(form) => Some(&mut form.branch),
+                Overlay::Emoji(picker) => Some(&mut picker.query),
+                _ => None,
+            };
+        }
+        if self.dock.focused {
+            return None;
+        }
+        if self.settings_page.is_some() {
+            return self.settings_page.as_mut().map(|page| &mut page.filter);
+        }
+        if self.sidebar_area().is_some() {
+            return self.search.field_mut();
+        }
+        None
+    }
+
+    /// The byte of the box with the keyboard that a press or a drag stands at: the nearer
+    /// edge of the letter under the pointer, as the file places its caret. None off the box,
+    /// unless `clamp`, as a drag that's left it, which goes to the nearest place in it.
+    fn box_place(&self, mouse: MouseEvent, clamp: bool) -> Option<usize> {
+        let (x, y) = (mouse.x, mouse.y);
+        let bare = matches!(self.overlay, Overlay::None);
+        let measure = &*self.measure;
+        if bare && self.side_field_open() {
+            return self.side_field_place(mouse, clamp);
+        }
+        if bare && self.dock.draft.is_some() {
+            if !(self.dock.open && self.dock.front == Front::Comments) {
+                return None;
+            }
+            let screen = self.dock_panel()?;
+            let (threads, resolved) = self.shown_threads();
+            let agent = self.comment_agent().0;
+            let view = self.comments_view();
+            let shown = (
+                threads.as_slice(),
+                self.dock.draft.as_ref(),
+                agent.as_str(),
+                resolved,
+                view,
+            );
+            let top = self.dock.tops.of(Front::Comments);
+            if !clamp && !screen.contains(x, y) {
+                return None;
+            }
+            return threads::input_place(screen, shown, top, (mouse.fine_x, y), measure, clamp);
+        }
+        if bare && self.source.focused {
+            if self.sidebar_view != SidebarView::Source {
+                return None;
+            }
+            let area = self.sidebar_area()?;
+            return self
+                .source
+                .message_place(area, (mouse.fine_x, y), measure, clamp);
+        }
+        match &self.overlay {
+            Overlay::Palette(palette) => {
+                let screen = self.palette_screen();
+                let area = Palette::area(screen);
+                let on = y == area.y && x >= area.x && x < area.right();
+                (clamp || on).then(|| palette.field_place(screen, mouse.fine_x, measure))
+            }
+            Overlay::Prompt(prompt) => {
+                let (_, line) = self.prompt_area();
+                let field = self.prompt_field(prompt);
+                (clamp || line.contains(x, y))
+                    .then(|| input_press(line, &field, mouse.fine_x, measure))
+            }
+            Overlay::Find(find) => {
+                let area = self.find_bar_for(find.replace.is_some());
+                let (field, switches, _, _) = Self::find_layout(area, find.replaces());
+                if find.in_replace {
+                    let row = Rect::new(field.x, area.y + 1, field.w, 1);
+                    let shown = find_replacement(find, &self.theme)?;
+                    (clamp || row.contains(x, y))
+                        .then(|| input_press(row, &shown, mouse.fine_x, measure))
+                } else {
+                    let on = field.contains(x, y) && x < switches;
+                    let shown = find_query(find, field, switches, &self.theme);
+                    (clamp || on).then(|| input_press(field, &shown, mouse.fine_x, measure))
+                }
+            }
+            Overlay::NewWorktree(form) => {
+                let (line, field) = self.worktree_field(form);
+                let (lift, _) = self.worktree_lifts();
+                let row = (mouse.fine_y + lift) as u16;
+                (clamp || line.contains(x, row))
+                    .then(|| input_press(line, &field, mouse.fine_x, measure))
+            }
+            Overlay::Emoji(picker) => picker.place((mouse.fine_x, y), measure, clamp),
+            Overlay::None => {
+                if self.dock.focused {
+                    return None;
+                }
+                if let Some(page) = &self.settings_page {
+                    return page.filter_place(self.sheet_area(), (mouse.fine_x, y), measure, clamp);
+                }
+                if let Some(area) = self
+                    .sidebar_area()
+                    .filter(|_| self.sidebar_view == SidebarView::Search)
+                {
+                    return self.search.place(
+                        area,
+                        (mouse.fine_x, y),
+                        (measure, &self.theme),
+                        clamp,
+                    );
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// The mouse in the box with the keyboard, as in the file: a press puts the caret at the
+    /// letter under it, a drag selects, a second press selects the word and a third the line
+    /// (all of a box of one line), and Shift with a press selects from where the caret was.
+    /// True when it was the box's.
+    fn box_mouse(&mut self, mouse: MouseEvent) -> bool {
+        match mouse.kind {
+            MouseKind::Left => {
+                self.box_drag = false;
+                let Some(at) = self.box_place(mouse, false) else {
+                    return false;
+                };
+                let shift = mouse.mods.shift;
+                let count = if shift {
+                    1
+                } else {
+                    self.count_click(mouse.x, mouse.y)
+                };
+                // A press in Settings' filter takes the keyboard from the control that had it.
+                if let Some(page) = self
+                    .settings_page
+                    .as_mut()
+                    .filter(|_| matches!(self.overlay, Overlay::None))
+                {
+                    page.focus = None;
+                }
+                let Some(field) = self.focused_box_mut() else {
+                    return false;
+                };
+                match count {
+                    _ if shift => field.extend_to(at),
+                    2 => field.select_word_at(at),
+                    3 => field.select_line_at(at),
+                    _ => field.set_caret(at),
+                }
+                self.box_drag = true;
+                true
+            }
+            MouseKind::Drag if self.box_drag => {
+                if let Some(at) = self.box_place(mouse, true)
+                    && let Some(field) = self.focused_box_mut()
+                {
+                    field.extend_to(at);
+                }
+                true
+            }
+            MouseKind::Up if self.box_drag => {
+                self.box_drag = false;
+                true
+            }
+            _ => false,
+        }
     }
 
     /// Copy and Cut in the box with the keyboard, whichever it is, as in the file: what's
@@ -16163,6 +16352,9 @@ impl App {
         }
         if self.tab_drag.is_some() && matches!(mouse.kind, MouseKind::Drag | MouseKind::Up) {
             self.drag_tab(mouse);
+            return;
+        }
+        if self.box_mouse(mouse) {
             return;
         }
         if !matches!(self.overlay, Overlay::None) {

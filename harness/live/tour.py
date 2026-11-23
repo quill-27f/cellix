@@ -105,6 +105,7 @@ EXPECT = {
     "13-source-message": "what changed and",
     "13-source-message-select": "what changed and",
     "11-find-select": "1 of",
+    "11-find-drag": "1 of",
     "11-find-select-light": "1 of",
     "136-settings-filter-select": " setting",
     "08-open-file-select": "src/queue",
@@ -1741,6 +1742,10 @@ with tempfile.TemporaryDirectory() as made:
     # Shift+Home in Find's box selects what's typed, as in the file.
     shoot("11-find-select", [["until", "VecDeque"], ["wait", 0.3], ["keys", CTRL("f")], ["keys", "item"],
                              ["until", "1 of"], ["keys", "\\e[1;2H"], ["wait", 0.4]], CODE_FILE)
+    # A drag across what's typed in Find's box selects it, as in the file.
+    shoot("11-find-drag", [["until", "VecDeque"], ["wait", 0.3], ["keys", CTRL("f")], ["keys", "push_back(item)"],
+                           ["until", "1 of"], ["drag", *ON("push_back", 2), *ON("push_back", 12)],
+                           ["wait", 0.4]], CODE_FILE)
     shoot("11-find-select-light", [["until", "VecDeque"], ["wait", 0.3], ["keys", CTRL("f")], ["keys", "item"],
                                    ["until", "1 of"], ["keys", "\\e[1;2H"], ["wait", 0.4]], CODE_FILE,
           background="eff1f5")
@@ -1940,6 +1945,12 @@ with tempfile.TemporaryDirectory() as made:
     comment += [["until", "Enter sends"], ["keys", "Is this true for multi-head attention?\r"]]
     comment += [["gone", "Enter sends"], ["wait", 0.5]]
     shoot("50-comments", comment, NOTE_FILE, size="150x44", background="eff1f5")
+    # A reply being written, a word of it double-clicked: the word selected as the file selects
+    # one, the caret at its end.
+    reply = [*comment, ["click", *ON("Reply")], ["until", "Enter sends"],
+             ["keys", "Only when the heads share a cache"], ["wait", 0.5],
+             ["double", *ON("share", 2)], ["wait", 0.8]]
+    shoot("50-reply-double-click", reply, NOTE_FILE, size="150x44", expect="Enter sends")
     # Being typed: the caret stands after the space just typed.
     typing = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], *command("add comment", F1),
               ["until", "Enter sends"], ["keys", "Is this true for "], ["wait", 1.5]]

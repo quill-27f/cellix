@@ -7663,5 +7663,12 @@
     "title": "Every text box is the file's own editing core: Shift with each move selects, Ctrl+A selects all, typing and pasting replace the selection, undo and redo group as the file's, Copy and Cut take what's selected, in every form a terminal sends the keys",
     "test": "every_key_does_in_every_box_what_it_does_in_the_file",
     "passes": true
+  },
+  {
+    "id": "mouse-in-every-box",
+    "milestone": 15,
+    "title": "The mouse in every text box as in the file: a press puts the caret at the letter under it, a drag selects, a double click selects the word and a triple click the line, Shift with a press selects from the caret; the comment composer and Ask's field, which took no press, too",
+    "test": "the_mouse_does_in_every_box_what_it_does_in_the_file",
+    "passes": true
   }
 ]
