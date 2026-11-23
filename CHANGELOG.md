@@ -2,6 +2,13 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.14.1] - 2026-11-23
+
+Settings' switches are round.
+
+### Fixed
+- A switch in Settings drew its knob as an oval and could stretch its track, depending on the font and the row height: its knob was sized in columns and lines, which are rarely the same width as height. Switches are now sized in pixels, a pill with a round knob in any terminal and at any row height.
+
 ## [0.14.0] - 2026-11-23
 
 Every text box writes as the file does, and replies can be edited and deleted.

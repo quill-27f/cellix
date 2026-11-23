@@ -4592,3 +4592,9 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - Test: `a_settings_switch_is_a_pill_with_a_round_knob_on_any_cell` (the tour's airy rows, a terminal's own line, a narrow font's tall cells: each knob square within 1 px, each radius half its height as `stood` stands it, each track at least 1.6 times as wide as tall). It fails on the old shape and on the 0.76 track.
 - Looked at: `16-settings-editor` (on and off switches cropped at four times), `15-settings-appearance`, `136-settings-filter-select`.
 - Unverified: the user's own font and window.
+
+## Release 0.14.1 (2026-11-23)
+
+- On the user's word: "go ahead and release automatically after that". 0.14.1 is `2f979f9` (entry above): Settings' switches drawn as a pill with a round knob on any cell. README has nothing on the switches' shape, so it's unchanged.
+- Before this: a pass of every test with no agent on the PATH, and Linux's input path (crossterm's `use-dev-tty`) on macOS.
+- Next: the Mac shortcuts proposal (Cmd apart from Ctrl, `cellix setup ghostty`, smart dashes) waits for the user's pick.
