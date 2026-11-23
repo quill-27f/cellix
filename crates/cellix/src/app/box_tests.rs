@@ -769,3 +769,84 @@ fn the_mouse_does_in_every_box_what_it_does_in_the_file() {
         assert_eq!(state(&app, kind).0, "zz cde fgh", "{kind:?}");
     }
 }
+
+/// Keys as Vim's Normal mode reads them, a letter at a time, and Esc.
+fn vim_keys(app: &mut App, keys: &str) {
+    for c in keys.chars() {
+        match c {
+            '\x1b' => plain(app, Key::Esc),
+            c => plain(app, Key::Char(c)),
+        }
+    }
+}
+
+/// With the `vim` keymap the boxes written in follow Vim, as the file does: they open in
+/// Insert, Esc goes to Normal, and motions, operators with motions and text objects, undo,
+/// yank and put work on them; Normal's mode shows in the box, and Esc there closes the box as
+/// it always has. The one-line boxes stay natural, and Esc closes them at once.
+#[test]
+fn vim_keys_work_in_the_boxes_written_in() {
+    for kind in [Kind::Comment, Kind::Reply, Kind::Ask, Kind::Commit] {
+        let (_dir, mut app) = opened(kind);
+        app.settings.keymap = Some("vim".to_string());
+        let shown = |app: &App| state(app, kind);
+        // Typing is Insert's; Esc steps back onto the last letter, as Vim does.
+        vim_keys(&mut app, "\x1b");
+        assert_eq!(shown(&app), (WORDS.to_string(), 16, None), "{kind:?}: Esc");
+        assert!(
+            screen(&app).text().contains("NORMAL"),
+            "{kind:?}: its mode shows"
+        );
+        if matches!(kind, Kind::Comment | Kind::Reply) {
+            let text = screen(&app).text();
+            assert!(text.contains("i to type. Esc cancels."), "{kind:?}: {text}");
+        }
+        vim_keys(&mut app, "b");
+        assert_eq!(shown(&app).1, 14, "{kind:?}: b, to the word's start");
+        vim_keys(&mut app, "dw");
+        assert_eq!(shown(&app).0, "fix the cache ", "{kind:?}: dw");
+        vim_keys(&mut app, "u");
+        assert_eq!(shown(&app).0, WORDS, "{kind:?}: u");
+        vim_keys(&mut app, "0x");
+        assert_eq!(shown(&app).0, "ix the cache now", "{kind:?}: 0 and x");
+        vim_keys(&mut app, "u");
+        // A text object, then Insert, typing, and Normal again.
+        vim_keys(&mut app, "0ciwmend\x1b");
+        assert_eq!(shown(&app).0, "mend the cache now", "{kind:?}: ciw");
+        // Yank a word and put it after the last letter.
+        vim_keys(&mut app, "0yiw$p");
+        assert_eq!(
+            shown(&app).0,
+            "mend the cache nowmend",
+            "{kind:?}: yiw and p"
+        );
+        // Ctrl+R takes back what u undid.
+        vim_keys(&mut app, "u");
+        assert_eq!(shown(&app).0, "mend the cache now", "{kind:?}: u");
+        press(&mut app, Key::Char('r'), CTRL);
+        assert_eq!(shown(&app).0, "mend the cache nowmend", "{kind:?}: Ctrl+R");
+        // Visual: v, a motion, d, the letter after the motion taken too, as in the file.
+        vim_keys(&mut app, "0ved");
+        assert_eq!(shown(&app).0, "the cache nowmend", "{kind:?}: ved");
+        // Esc in Normal does what Esc does to the box today: it's closed, or let go.
+        vim_keys(&mut app, "\x1b");
+        assert!(
+            app.focused_box().is_none(),
+            "{kind:?}: Esc in Normal closes it"
+        );
+    }
+
+    // A one-line box stays natural: the letters are typed, and Esc closes it at once.
+    for kind in [Kind::Palette, Kind::Find, Kind::Prompt] {
+        let (_dir, mut app) = opened(kind);
+        app.settings.keymap = Some("vim".to_string());
+        vim_keys(&mut app, "dw");
+        assert_eq!(state(&app, kind).0, format!("{WORDS}dw"), "{kind:?}");
+        assert!(!screen(&app).text().contains("NORMAL"), "{kind:?}");
+        vim_keys(&mut app, "\x1b");
+        assert!(
+            matches!(app.overlay, Overlay::None),
+            "{kind:?}: Esc closes it"
+        );
+    }
+}

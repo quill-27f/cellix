@@ -700,6 +700,17 @@ impl Source {
             grid.label(left + 1, y, row, writing, frame.right());
             mark(grid, true);
         }
+        // Vim's mode at the box's foot on the right, as the status bar says the file's.
+        if self.focused
+            && let Some(word) = self.message.mode_word()
+        {
+            let quiet = Style {
+                fg: theme.gutter.fg,
+                ..writing
+            };
+            let last = y + MESSAGE_ROWS - 1;
+            grid.label_right(frame.right().saturating_sub(1), last, word, quiet, 80);
+        }
         if self.focused {
             // After the letters before it on its row, spaces too, so a space moves it.
             let caret = self.message_caret();

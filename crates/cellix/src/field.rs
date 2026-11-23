@@ -9,7 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 
 use cellix_core::{Buffer, Motion, Selection, Selections};
-use cellix_input::{Command, Direction, Key, KeyEvent, simple_keymap};
+use cellix_input::{Command, Direction, Key, KeyEvent, Vim, VimMode, simple_keymap};
 
 /// The file's motion for a direction, `page` lines to a page. The file and every box move
 /// through this one table.
@@ -44,6 +44,9 @@ pub struct TextBox {
     text: String,
     buffer: Buffer,
     selections: Selections,
+    /// Vim's state in a box written in, with the `vim` or `neovim` keymap: made as the box
+    /// first takes a key, in Insert.
+    pub vim: Option<Vim>,
 }
 
 impl TextBox {
@@ -56,7 +59,31 @@ impl TextBox {
             text,
             buffer,
             selections: Selections::single(Selection::cursor(end)),
+            vim: None,
         }
+    }
+
+    /// Vim's mode in the box, while Vim's keys are its.
+    pub fn vim_mode(&self) -> Option<VimMode> {
+        self.vim.as_ref().map(|vim| vim.mode)
+    }
+
+    /// The word the box shows for its Vim mode, as the status bar says the file's.
+    pub fn mode_word(&self) -> Option<&'static str> {
+        self.vim_mode().map(|mode| match mode {
+            VimMode::Normal => "NORMAL",
+            VimMode::Insert => "INSERT",
+            VimMode::Visual => "VISUAL",
+        })
+    }
+
+    /// The box's Vim, made in Insert the first time: a box opens to be written in.
+    pub fn vim_or_insert(&mut self) -> &mut Vim {
+        self.vim.get_or_insert_with(|| {
+            let mut vim = Vim::default();
+            vim.mode = VimMode::Insert;
+            vim
+        })
     }
 
     pub fn text(&self) -> &str {
@@ -247,6 +274,22 @@ impl TextBox {
                     .apply_motion(self.buffer.rope(), motion, extend);
             }
             Command::Type(c) => self.type_char(c),
+            // Vim's `dd` and `yy`: whole lines, from the caret's.
+            Command::SelectLines(count) => {
+                let rope = self.buffer.rope();
+                let line = rope.char_to_line(self.selections.primary().head);
+                let last = rope.len_lines();
+                let end = if line + count < last {
+                    rope.line_to_char(line + count)
+                } else {
+                    rope.len_chars()
+                };
+                self.selections.set_single(Selection {
+                    anchor: rope.line_to_char(line),
+                    head: end,
+                    goal: None,
+                });
+            }
             Command::Newline => {
                 self.buffer.type_text(&mut self.selections, "\n");
                 self.sync();

@@ -5831,6 +5831,73 @@ impl App {
         }
     }
 
+    /// Vim in the boxes written in, the comment and reply box, Ask's field and the commit
+    /// message, with the `vim` or `neovim` keymap: through the built-in engine, as Neovim has
+    /// no box to embed in. A box opens in Insert; Esc goes to Normal, where Vim's motions,
+    /// counts, operators, text objects, Visual, `u` and Ctrl+R, `y` and `p` work on it as on
+    /// the file. In Normal with nothing pending, Esc and Enter are the box's own, as they are
+    /// today: Esc closes it, Enter sends it. One-line boxes and lists stay natural in every
+    /// keymap, as VSCodeVim leaves VS Code's input boxes alone. True when Vim took the key.
+    fn box_vim_key(&mut self, key: KeyEvent) -> bool {
+        let wanted = matches!(self.settings.keymap.as_deref(), Some("vim" | "neovim"));
+        let writing = self.side_field_open() || self.dock.draft.is_some() || self.source.focused;
+        if !wanted || !writing || !matches!(self.overlay, Overlay::None) {
+            return false;
+        }
+        let Some(field) = self.focused_box_mut() else {
+            return false;
+        };
+        let vim = field.vim_or_insert();
+        let quiet = vim.mode == VimMode::Normal && !vim.pending();
+        if quiet && matches!(key.key, Key::Esc | Key::Enter) {
+            return false;
+        }
+        match vim.key(key) {
+            VimAction::Passthrough => false,
+            VimAction::Pending => true,
+            VimAction::Commands(commands) => {
+                for command in commands {
+                    self.box_vim_run(command);
+                }
+                true
+            }
+        }
+    }
+
+    /// One of the commands Vim makes of a key, on the box written in: the clipboard's are the
+    /// app's, and what saves, closes or finds in the file means nothing in a box.
+    fn box_vim_run(&mut self, command: Command) {
+        match command {
+            Command::Copy | Command::Cut => {
+                let Some(field) = self.focused_box_mut() else {
+                    return;
+                };
+                let Some(text) = field.selected().map(str::to_string) else {
+                    return;
+                };
+                if command == Command::Cut {
+                    field.delete_selection();
+                }
+                self.clipboard.clone_from(&text);
+                self.outgoing_clipboard = Some(text);
+            }
+            // After the letter under the caret, as Vim's `p` puts it.
+            Command::Paste | Command::PasteLine => {
+                let text = system_clipboard().unwrap_or_else(|| self.clipboard.clone());
+                if let Some(field) = self.focused_box_mut() {
+                    field.run(Command::Move(cellix_input::Direction::Right, false));
+                    field.insert(&text);
+                }
+            }
+            Command::Save | Command::CloseTab | Command::Quit | Command::FindInFile => {}
+            other => {
+                if let Some(field) = self.focused_box_mut() {
+                    field.run(other);
+                }
+            }
+        }
+    }
+
     /// Copy and Cut in the box with the keyboard, whichever it is, as in the file: what's
     /// selected goes on the clipboard, and Cut takes it away as Delete would, so the box does
     /// what it does after any edit. With nothing selected the keys do what they did.
@@ -7030,6 +7097,9 @@ impl App {
             return;
         }
         if self.box_clipboard(key) {
+            return;
+        }
+        if self.box_vim_key(key) {
             return;
         }
         if matches!(self.overlay, Overlay::None) && self.side_key(key) {

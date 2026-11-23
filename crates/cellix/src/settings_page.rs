@@ -76,7 +76,10 @@ const CURSOR_BLINK: (&str, &str) = (
     "Cursor blinking",
     "The cursor blinks in files, pages, text boxes and terminals. Off, it stays still.",
 );
-const KEYMAP: (&str, &str) = ("Keymap", "Standard works as in VS Code.");
+const KEYMAP: (&str, &str) = (
+    "Keymap",
+    "Standard works as in VS Code. Vim keys apply in the file and in comment and message boxes.",
+);
 const ROW_HEIGHT: (&str, &str) = ("Row height", "How much air each row has.");
 /// The row heights as `row_height` names them and as the page shows them.
 const ROW_HEIGHTS: [(&str, &str); 3] = [

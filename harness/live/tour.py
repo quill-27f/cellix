@@ -1951,6 +1951,20 @@ with tempfile.TemporaryDirectory() as made:
              ["keys", "Only when the heads share a cache"], ["wait", 0.5],
              ["double", *ON("share", 2)], ["wait", 0.8]]
     shoot("50-reply-double-click", reply, NOTE_FILE, size="150x44", expect="Enter sends")
+    # With Vim's keys: the comment box opens in Insert, Esc goes to Normal, whose mode shows at
+    # the box's right, and b goes back a word. Opened from the selection's Comment chip, as the
+    # file's own keys are Vim's (or Neovim's) here.
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
+    with open(f"{ROOT}/.cellix/settings.json", "w") as f:
+        json.dump({"keymap": "vim"}, f)
+    normal = [["wait", 3.0], ["double", *ON("roma sfm", 6)], ["wait", 0.5],
+              ["click", *ON("Comment (Alt")], ["until", "Enter sends"],
+              ["keys", "Is this true for multi-head attention"], ["keys", "\\e"], ["until", "NORMAL"],
+              ["keys", "b"], ["wait", 0.8]]
+    shoot("50-comment-vim-normal", normal, NOTE_FILE, size="150x44", cellix=True, expect="NORMAL")
+    # Vim's keys are this scene's alone, whichever scenes are taken after it.
+    if os.path.exists(f"{ROOT}/.cellix/settings.json"):
+        os.unlink(f"{ROOT}/.cellix/settings.json")
     # Being typed: the caret stands after the space just typed.
     typing = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], *command("add comment", F1),
               ["until", "Enter sends"], ["keys", "Is this true for "], ["wait", 1.5]]

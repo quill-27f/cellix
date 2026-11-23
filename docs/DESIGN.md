@@ -2234,6 +2234,18 @@ A single input layer maps keys to editor commands.
   counts, `d`, `c`, `y`, `p`, `x`, `u`, Visual and Insert. No `:` commands or registers.
 - **Neovim:** drives `nvim --embed`, using the user's config. Requires `nvim` on the host.
 
+With `vim` or `neovim`, the boxes written in, the comment and reply box, Ask's field and the
+commit message, follow Vim too, through the built-in engine whichever of the two is picked:
+Neovim has no box to embed in, so the user's own Neovim config doesn't reach them
+(`App::box_vim_key`). A box opens in Insert; Esc goes to Normal, where motions, counts, operators
+with motions and text objects, Visual, `u` and Ctrl+R, `y` and `p` with the clipboard work on it as
+on the file. In Normal with nothing pending, Esc and Enter are the box's own, as in every keymap:
+Esc closes it, Enter sends it. The box says its mode at its right, in its quiet words, as the
+status bar says the file's. The caret stays a bar, as the file's Vim mode draws it. One-line boxes
+and lists (the palette, Find, prompts, Go to Line, Settings' filter, Search's boxes, New
+Worktree, the emoji picker) stay natural in every keymap, and Esc closes them at its first press,
+as VSCodeVim leaves VS Code's input boxes alone. Settings' keymap row says so.
+
 Order: Simple, then Vim, then Neovim.
 
 ## Scope: VS Code's built-in features

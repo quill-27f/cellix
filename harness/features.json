@@ -7670,5 +7670,12 @@
     "title": "The mouse in every text box as in the file: a press puts the caret at the letter under it, a drag selects, a double click selects the word and a triple click the line, Shift with a press selects from the caret; the comment composer and Ask's field, which took no press, too",
     "test": "the_mouse_does_in_every_box_what_it_does_in_the_file",
     "passes": true
+  },
+  {
+    "id": "vim-in-the-writing-boxes",
+    "milestone": 15,
+    "title": "With the vim or neovim keymap the boxes written in (comment and reply, Ask's field, the commit message) follow Vim through the built-in engine: open in Insert, Esc to Normal, motions, counts, operators, text objects, Visual, u and Ctrl+R, y and p with the clipboard, the mode shown in the box, Esc and Enter in Normal the box's own; one-line boxes stay natural",
+    "test": "vim_keys_work_in_the_boxes_written_in",
+    "passes": true
   }
 ]

@@ -21,7 +21,7 @@ pub enum VimAction {
 /// Visual and Insert, and the `:` commands that save and close. Anything it doesn't know is
 /// swallowed, never typed: an unknown key in Normal mode must not reach the file. With Neovim
 /// installed, the `vim` keymap runs that instead.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Vim {
     pub mode: VimMode,
     count: Option<usize>,
@@ -72,6 +72,16 @@ impl Vim {
         self.g_pending = false;
         self.object = None;
         self.awaiting = None;
+    }
+
+    /// Whether the keys so far wait for more, as the `d` of `dw` does, or the `:` line.
+    pub fn pending(&self) -> bool {
+        self.count.is_some()
+            || self.operator.is_some()
+            || self.g_pending
+            || self.object.is_some()
+            || self.awaiting.is_some()
+            || self.line.is_some()
     }
 
     /// The `:` line being typed, for the status bar.

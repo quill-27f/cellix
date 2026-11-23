@@ -1203,6 +1203,15 @@ impl App {
                     mark(grid, false);
                     grid.label_at(start, cell, y, text, style, right, 100);
                     mark(grid, true);
+                    // Vim's mode at the field's right, as the status bar says the file's.
+                    if let Some(word) = side.field.as_ref().and_then(TextBox::mode_word) {
+                        let quiet = Style {
+                            fg: theme.popup_dim,
+                            ..well
+                        };
+                        let ends = inside.map_or(f32::from(right), |(left, wide)| left + wide);
+                        grid.label_right_at(ends - 1.0, right, y, word, quiet, 80);
+                    }
                     if let Some(at) = at {
                         let before = if *hint {
                             ""

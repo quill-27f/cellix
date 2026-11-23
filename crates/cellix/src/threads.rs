@@ -3490,6 +3490,22 @@ pub fn draw(
             }
             Line::Pad => {}
             Line::Tools => {
+                // Vim's mode at the box's right, where it stays in view, as the status bar
+                // says the file's.
+                // Only where it stands two columns clear of the last tool: a narrow pane drops it.
+                let last = tools(area, view, measure)
+                    .last()
+                    .map_or(0.0, |(_, at)| f32::from(at + TOOL));
+                let word = shown_draft.and_then(|d| d.text.mode_word());
+                if let Some(word) =
+                    word.filter(|w| a.end - pad - measure.width(w, small()) >= last + 2.0)
+                {
+                    let quiet = Style {
+                        fg: raised_muted,
+                        ..inner
+                    };
+                    grid.label_right_at(a.end - pad, right, y, word, quiet, SMALL);
+                }
                 // In the box with the words, from where they start.
                 let (_, past) = cell_of(a.text + pad);
                 for (tool, at) in tools(area, view, measure) {
@@ -3625,7 +3641,13 @@ pub fn draw(
                             .find(|(_, at)| h.0 >= *at && h.0 < at + TOOL)
                     })
                     .and_then(|(tool, _)| tool_hint(tool));
-                let usual = "Enter sends. Shift+Enter starts a new line. Esc cancels.";
+                // What the keys do now: with Vim's, Esc goes to Normal before it cancels.
+                let usual = match shown_draft.and_then(|d| d.text.mode_word()) {
+                    Some("INSERT") => "Enter sends. Shift+Enter starts a new line. Esc for Normal.",
+                    Some("NORMAL") => "Enter sends. i to type. Esc cancels.",
+                    Some("VISUAL") => "d deletes what's selected, y copies it. Esc ends it.",
+                    _ => "Enter sends. Shift+Enter starts a new line. Esc cancels.",
+                };
                 let hint = pointed.unwrap_or(usual);
                 grid.label_at(a.text, text_x, y, hint, inner_dim, right, SMALL);
             }
