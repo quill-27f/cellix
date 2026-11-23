@@ -11,6 +11,7 @@ use cellix_render::{Bounds, Font, Grid, Icon, Measure, Paint, Rect, Style};
 use cellix_review::threads::{ADDRESSED, Reply, YOU};
 use cellix_review::{About, Thread};
 
+use crate::field::TextBox;
 use crate::measures::BUTTON_GAP;
 use crate::theme::Theme;
 
@@ -217,8 +218,9 @@ enum Line {
     /// own, `BOX_PADDING` round them.
     Proposed(u32, String),
     Status(String),
-    /// A row of what's being written, and where the caret is on it, in bytes, when it is.
-    Input(String, Option<usize>),
+    /// A row of what's being written, where the caret is on it, in bytes, when it is, and
+    /// what's selected of it.
+    Input(String, Option<usize>, Option<(usize, usize)>),
     /// Between what's being written and the tools under it, in their box: the words stand
     /// a little down into it and the tools a little up, so neither is on the box's lines.
     Pad,
@@ -392,9 +394,8 @@ pub struct Draft {
     pub quote: String,
     /// All that was selected, when it ran past the quote's one line.
     pub selection: String,
-    pub text: String,
-    /// Where the caret is in `text`, in bytes.
-    pub caret: usize,
+    /// What's written, with its caret or selection.
+    pub text: TextBox,
     /// Goes straight to the agent when it's done.
     pub ask: bool,
     /// It's about code, so it also goes with the review.
@@ -787,14 +788,18 @@ fn draft_lines(draft: &Draft, view: View, width: f32, measure: &dyn Measure, out
     // Inside its box, which stands on the card's columns with the box's padding inside it.
     let inside = width - field_pad(measure) * 2.0;
     let spans = wrap_spans(&draft.text, inside, measure);
-    let caret = draft.caret.min(draft.text.len());
+    let caret = draft.text.caret();
+    let selected = draft.text.selection();
     // At a row's end and the next one's start, it's at the start of the next.
     let on = spans
         .iter()
         .rposition(|(start, end)| *start <= caret && caret <= *end);
     for (index, (start, end)) in spans.into_iter().enumerate() {
         let at = (on == Some(index)).then(|| caret - start);
-        out.push(Line::Input(draft.text[start..end].to_string(), at));
+        let on_row = selected
+            .map(|(a, b)| (a.clamp(start, end) - start, b.clamp(start, end) - start))
+            .filter(|(a, b)| a < b);
+        out.push(Line::Input(draft.text[start..end].to_string(), at, on_row));
     }
     // The pictures it names so far, so what's being sent is in view.
     let named: Vec<String> = picture_spans(&draft.text)
@@ -1271,6 +1276,8 @@ fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dy
     let mut hasher = DefaultHasher::new();
     threads.hash(&mut hasher);
     draft.hash(&mut hasher);
+    // Where its caret and selection stand, which its words alone don't say.
+    draft.map(|draft| draft.text.ends()).hash(&mut hasher);
     agent.hash(&mut hasher);
     resolved.hash(&mut hasher);
     (
@@ -1352,7 +1359,7 @@ pub const SUGGESTED: usize = 5;
 
 /// The emoji offered for the name being typed at a draft's caret, each with its name.
 pub fn suggested(draft: &Draft, view: View) -> Vec<(&'static str, &'static str)> {
-    let caret = draft.caret.min(draft.text.len());
+    let caret = draft.text.caret();
     let Some(quick) = view.quick else {
         return Vec::new();
     };
@@ -3245,7 +3252,8 @@ pub fn draw(
                 a.end - a.text,
                 height - FIELD_INSET * 2.0,
             );
-            grid.panel(bounds, 16, Some(theme.input), Some(theme.popup_border));
+            // It has the keyboard, so it has the focus ring every box with the keyboard has.
+            grid.panel(bounds, 16, Some(theme.input), Some(theme.focus));
         }
     }
     // An agent's rewrite still to be decided stands in a box, `BOX_PADDING` round its words
@@ -3372,14 +3380,39 @@ pub fn draw(
             Line::Status(text) => {
                 grid.label_at(a.text, text_x, y, text, inner_dim, right, SMALL);
             }
-            Line::Input(text, caret) => {
+            Line::Input(text, caret, selected) => {
                 // A field's padding inside its box, which stands on the card's columns.
                 let start = a.text + pad;
                 let (cell, _) = cell_of(start);
+                // What's selected, as the file shows its selection.
+                let mark = |grid: &mut Grid, drawn| {
+                    if let Some(range) = *selected {
+                        let pair = (measure, theme);
+                        crate::palette::box_selection(
+                            grid,
+                            (start, cell, y),
+                            text,
+                            range,
+                            (100, right, crate::palette::ROWS_SELECTION_INSET),
+                            inner.bg,
+                            pair,
+                            drawn,
+                        );
+                    }
+                };
+                mark(grid, false);
                 grid.label_at(start, cell, y, text, inner, right, 100);
+                mark(grid, true);
                 if let Some(at) = caret {
                     let font = Font::default();
-                    let x = start + measure.width(&text[..*at], font);
+                    let edge = start + measure.width(&text[..*at], font);
+                    // Clear of the letters either side of it, as in every box.
+                    let advances = measure.advances(text, font);
+                    let before = text[..*at].chars().count();
+                    let x = match crate::palette::caret_nudge(text, &advances, before) {
+                        Some(nudge) if !measure.in_cells() => (edge + nudge).max(start),
+                        _ => edge,
+                    };
                     grid.set_caret(x, y, 0.62);
                     // The caret goes down into the box with the words it's among.
                     if let Some(caret) = &mut grid.caret {

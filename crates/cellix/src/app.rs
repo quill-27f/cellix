@@ -46,6 +46,7 @@ use crate::context::{ContextPanel, Hit as ContextHit};
 use crate::dock::{ACTION_ICON, ACTION_PILL, BROWSER, CellPixels, Dock, Front, Session, TabHit};
 use crate::editor::{self, Editor, Marks};
 use crate::explorer::Explorer;
+use crate::field::TextBox;
 use crate::find::{Find, Looked};
 use crate::inbox::{Hit as InboxHit, Inbox, Kind as Waits, Listed, Target as WaitTarget, Waiting};
 use crate::install::{Machine, Plan};
@@ -484,6 +485,7 @@ fn find_query<'a>(find: &'a Find, line: Rect, switches: u16, theme: &Theme) -> I
         behind: theme.popup,
         caret: find.caret(),
         kept: line.right().saturating_sub(switches),
+        selection: find.query.selection(),
     }
 }
 
@@ -496,6 +498,7 @@ fn find_replacement<'a>(find: &'a Find, theme: &Theme) -> Option<Input<'a>> {
         behind: theme.popup,
         caret: find.replace_caret(),
         kept: 0,
+        selection: find.replace.as_ref().and_then(TextBox::selection),
     })
 }
 
@@ -565,10 +568,8 @@ enum PromptAction {
 
 struct Prompt {
     label: String,
-    input: String,
-    /// How much of `input` stands after the caret (`field::caret_of`): none as it opens, so
-    /// a name it's opened with has the caret at its end.
-    back: usize,
+    /// What's typed: it opens with the caret at the end of a name it's opened with.
+    input: TextBox,
     action: PromptAction,
 }
 
@@ -576,15 +577,14 @@ impl Prompt {
     fn new(label: &str, input: String, action: PromptAction) -> Self {
         Self {
             label: label.to_string(),
-            input,
-            back: 0,
+            input: TextBox::new(input),
             action,
         }
     }
 
     /// Where the caret is in what's typed, in bytes.
     fn caret(&self) -> usize {
-        crate::field::caret_of(&self.input, self.back)
+        self.input.caret()
     }
 }
 
@@ -3407,7 +3407,10 @@ impl App {
             Key::Enter if key.mods.shift || key.mods.alt => self.source.message_insert("\n"),
             Key::Enter => self.commit_message(),
             // Written as any text box is; what it doesn't take is a shortcut.
-            _ => return self.source.message_key(key),
+            _ => {
+                let command = self.workflow.keys.command(key);
+                return self.source.message_key(key, command);
+            }
         }
         true
     }
@@ -5211,7 +5214,7 @@ impl App {
                 return;
             }
             Overlay::Prompt(prompt) => {
-                crate::field::line_insert(&mut prompt.input, &mut prompt.back, text);
+                prompt.input.insert(text);
                 return;
             }
             Overlay::Find(find) => {
@@ -5226,12 +5229,17 @@ impl App {
         if self.peek_paste(text) {
             return;
         }
+        // Ask's field, while it has the keyboard: a question is one line.
+        if let Some(field) = self.side.as_mut().and_then(|s| s.field.as_mut()) {
+            field.insert(text.lines().next().unwrap_or_default());
+            return;
+        }
         if self.dock.draft.is_some() {
             // A picture's file dropped on the terminal arrives as its path.
             if let Some(path) = dropped_image(text) {
                 self.attach_picture(&path);
             } else if let Some(draft) = &mut self.dock.draft {
-                crate::field::insert(&mut draft.text, &mut draft.caret, text);
+                draft.text.insert(text);
             }
             return;
         }
@@ -5255,15 +5263,15 @@ impl App {
         // with the keyboard has it too, at its caret.
         if let Some(page) = &mut self.settings_page {
             let line = text.lines().next().unwrap_or_default();
-            crate::field::line_insert(&mut page.filter, &mut page.filter_back, line);
+            page.filter.insert(line);
             page.found_top = 0;
             page.focus = None;
             return;
         }
         if self.sidebar_area().is_some()
-            && let Some((field, back)) = self.search.field_mut()
+            && let Some(field) = self.search.field_mut()
         {
-            crate::field::line_insert(field, back, text);
+            field.insert(text);
             self.search_edited();
             return;
         }
@@ -5590,12 +5598,80 @@ impl App {
         }
     }
 
+    /// The text box with the keyboard, if a box has it, found in the order keys reach them:
+    /// Ask's field, the comment being written and the commit message under no overlay; the
+    /// box of the overlay that's open; Settings' filter; the Search sidebar's box.
+    pub(crate) fn focused_box(&self) -> Option<&TextBox> {
+        let bare = matches!(self.overlay, Overlay::None);
+        if bare && let Some(field) = self.side.as_ref().and_then(|s| s.field.as_ref()) {
+            return Some(field);
+        }
+        if bare && let Some(draft) = &self.dock.draft {
+            return Some(&draft.text);
+        }
+        if bare && self.source.focused {
+            return Some(&self.source.message);
+        }
+        match &self.overlay {
+            Overlay::Palette(palette) => return Some(&palette.query),
+            Overlay::Prompt(prompt) => return Some(&prompt.input),
+            Overlay::Find(find) => return Some(find.field()),
+            Overlay::NewWorktree(form) => return Some(&form.branch),
+            Overlay::Emoji(picker) => return Some(&picker.query),
+            Overlay::None => {}
+            _ => return None,
+        }
+        if self.dock.focused {
+            return None;
+        }
+        if let Some(page) = &self.settings_page {
+            return Some(&page.filter);
+        }
+        if self.sidebar_area().is_some() {
+            return self.search.field();
+        }
+        None
+    }
+
+    /// Whether the commit message or the Search sidebar's box has the keyboard: then the file
+    /// has no caret, as an unfocused editor has none in VS Code. It showed one beside the
+    /// commit message's (the ui-expert's review of 13-source-message-select).
+    fn sidebar_box_has_keyboard(&self) -> bool {
+        let shown = self.sidebar_area().is_some();
+        (self.source.focused && self.sidebar_view == SidebarView::Source)
+            || (shown && self.search.focus.is_some() && self.sidebar_view == SidebarView::Search)
+    }
+
+    /// Copy and Cut in the box with the keyboard, whichever it is, as in the file: what's
+    /// selected goes on the clipboard, and Cut takes it away as Delete would, so the box does
+    /// what it does after any edit. With nothing selected the keys do what they did.
+    fn box_clipboard(&mut self, key: KeyEvent) -> bool {
+        let command = self.workflow.keys.command(key);
+        if !matches!(command, Some(Command::Copy | Command::Cut)) {
+            return false;
+        }
+        let Some(text) = self
+            .focused_box()
+            .and_then(|f| f.selected())
+            .map(str::to_string)
+        else {
+            return false;
+        };
+        self.clipboard.clone_from(&text);
+        self.outgoing_clipboard = Some(text);
+        if command == Some(Command::Cut) {
+            self.key(KeyEvent::plain(Key::Delete));
+        }
+        true
+    }
+
     /// Types into the comment being written. Returns true if there is one.
     fn draft_key(&mut self, key: KeyEvent) -> bool {
         if self.dock.draft.is_none() {
             return false;
         }
-        if self.workflow.keys.command(key) == Some(Command::Paste) {
+        let command = self.workflow.keys.command(key);
+        if command == Some(Command::Paste) {
             self.paste_into_draft();
             return true;
         }
@@ -5604,9 +5680,7 @@ impl App {
         };
         match key.key {
             Key::Esc => self.dock.draft = None,
-            Key::Enter if key.mods.shift || key.mods.alt => {
-                crate::field::insert(&mut draft.text, &mut draft.caret, "\n");
-            }
+            Key::Enter if key.mods.shift || key.mods.alt => draft.text.insert("\n"),
             Key::Enter => {
                 let draft = self.dock.draft.take().expect("checked above");
                 self.finish_draft(draft);
@@ -5617,10 +5691,10 @@ impl App {
             }
             // Everything else is typing, as in any text box: words, moves and deletes.
             _ => {
-                crate::field::key(&mut draft.text, &mut draft.caret, key);
+                draft.text.key_as(key, command);
                 // A name's second colon makes it its emoji, where the screen draws them.
                 let closed = (key.key == Key::Char(':') && self.measure.shows_emoji())
-                    .then(|| crate::emoji::close_code(&mut draft.text, &mut draft.caret))
+                    .then(|| crate::emoji::close_code_in(&mut draft.text))
                     .flatten();
                 if let Some(emoji) = closed {
                     self.used_emoji(emoji);
@@ -6356,8 +6430,7 @@ impl App {
             line: 0,
             quote,
             selection,
-            text: String::new(),
-            caret: 0,
+            text: TextBox::default(),
             ask,
             code: false,
             about: Some(About::Output {
@@ -6427,8 +6500,7 @@ impl App {
             line,
             quote,
             selection: code,
-            text: String::new(),
-            caret: 0,
+            text: TextBox::default(),
             ask: true,
             code: true,
             about: Some(About::Problem { message }),
@@ -6608,8 +6680,7 @@ impl App {
             line,
             quote,
             selection: String::new(),
-            text: String::new(),
-            caret: 0,
+            text: TextBox::default(),
             ask: false,
             code: false,
             about: None,
@@ -6747,8 +6818,7 @@ impl App {
             line: line + 1,
             quote,
             selection: String::new(),
-            text: String::new(),
-            caret: 0,
+            text: TextBox::default(),
             ask: false,
             code: false,
             about: None,
@@ -6768,6 +6838,9 @@ impl App {
 
     fn key(&mut self, key: KeyEvent) {
         if key.key == Key::Esc && self.cancel_drag() {
+            return;
+        }
+        if self.box_clipboard(key) {
             return;
         }
         if matches!(self.overlay, Overlay::None) && self.side_key(key) {
@@ -7552,7 +7625,11 @@ impl App {
         // Ctrl+V pastes into a list's field or a box, as it does into a file.
         let boxed = matches!(
             self.overlay,
-            Overlay::Palette(_) | Overlay::Prompt(_) | Overlay::Find(_)
+            Overlay::Palette(_)
+                | Overlay::Prompt(_)
+                | Overlay::Find(_)
+                | Overlay::NewWorktree(_)
+                | Overlay::Emoji(_)
         );
         if boxed && self.workflow.keys.command(key) == Some(Command::Paste) {
             let text = system_clipboard().unwrap_or_else(|| self.clipboard.clone());
@@ -7580,7 +7657,7 @@ impl App {
                     if let Some(Item::Folder(_, label, note)) = palette.current().cloned()
                         && note != crate::folders::THIS_FOLDER
                     {
-                        palette.query = format!("{label}/");
+                        palette.query.set(format!("{label}/"));
                         palette.refresh();
                     }
                     self.overlay = Overlay::Palette(palette);
@@ -7613,7 +7690,7 @@ impl App {
                 // A box like any other: letters go in at the caret, and the arrows, Home,
                 // End, the moves by word and the deletes do what they do everywhere.
                 _ => {
-                    crate::field::line_key(&mut prompt.input, &mut prompt.back, key);
+                    prompt.input.line_key(key);
                     self.overlay = Overlay::Prompt(prompt);
                 }
             },
@@ -7643,9 +7720,9 @@ impl App {
                         self.put_emoji(emoji, false);
                     }
                 }
-                // By word or to the start, as in any box; else a letter with Ctrl or Alt is
+                // What edits its field, as in any box; else a letter with Ctrl or Alt is
                 // nothing here.
-                _ if picker.delete(key) => self.overlay = Overlay::Emoji(picker),
+                _ if picker.edit(key) => self.overlay = Overlay::Emoji(picker),
                 Key::Char(_) if key.mods.ctrl || key.mods.alt => {
                     self.overlay = Overlay::Emoji(picker);
                 }
@@ -8296,7 +8373,7 @@ impl App {
             .filter(|text| !text.contains('\n'))
             .unwrap_or_default();
         self.overlay = Overlay::Find(Find {
-            query,
+            query: TextBox::new(query),
             ..Find::default()
         });
         self.search_file();
@@ -8464,20 +8541,20 @@ impl App {
                 mouse.fine_x,
                 measure,
             );
-            crate::field::set_caret(&find.query, &mut find.back, at);
+            find.query.set_caret(at);
         }
         if let Some(text) = find_replacement(&find, &self.theme).filter(|_| row.contains(x, y)) {
             let at = input_press(row, &text, mouse.fine_x, measure);
-            let with = find.replace.as_deref().unwrap_or_default();
-            crate::field::set_caret(with, &mut find.replace_back, at);
+            if let Some(with) = &mut find.replace {
+                with.set_caret(at);
+            }
         }
         let toggle = Rect::new(area.x + 1, area.y, FIND_CHEVRON, 1);
         if chevron && toggle.contains(x, y) {
             find.replace = match find.replace {
                 Some(_) => None,
-                None => Some(String::new()),
+                None => Some(TextBox::default()),
             };
-            find.replace_back = 0;
             find.in_replace = find.replace.is_some() && !find.query.is_empty();
             self.overlay = Overlay::Find(find);
             return;
@@ -8730,11 +8807,16 @@ impl App {
     /// Follows what's typed in a palette. In Quick Open an `@` at the start lists the file's
     /// symbols, and taking it away lists files again.
     fn palette_typed(&mut self, palette: Palette) {
-        // The caret stays where it was in what's typed, whichever list that turns this to.
-        let after_caret = palette.after_caret();
+        // The box stays as it was, its caret, selection and undo, whichever list that turns
+        // this to; one given other words keeps its caret as far from their end.
+        let field = palette.query.clone();
         self.list_for_typed(palette);
         if let Overlay::Palette(now) = &mut self.overlay {
-            now.set_after_caret(after_caret);
+            if now.query == field {
+                now.query = field;
+            } else {
+                now.set_after_caret(field.back());
+            }
         }
     }
 
@@ -9273,7 +9355,7 @@ impl App {
                 self.open_find();
                 if let Overlay::Find(find) = &mut self.overlay {
                     find.in_replace = !find.query.is_empty();
-                    find.replace = Some(String::new());
+                    find.replace = Some(TextBox::default());
                 }
             }
             Command::Format(Format::Link) => self.ask("Link address", PromptAction::Link),
@@ -12608,14 +12690,17 @@ impl App {
             // Letters go in at the caret, and the arrows, Home, End, the moves by word and
             // the deletes do what they do in every box. Anything else is a shortcut.
             _ => {
-                let Some((text, back)) = self.search.field_mut() else {
+                let command = self.workflow.keys.command(key);
+                let Some(field) = self.search.field_mut() else {
                     return false;
                 };
-                let was = text.clone();
-                if !crate::field::line_key(text, back, key) {
+                let was = field.text().to_string();
+                if matches!(key.key, Key::Up | Key::Down | Key::PageUp | Key::PageDown)
+                    || !field.key_as(key, command)
+                {
                     return false;
                 }
-                if *text != was {
+                if *field != was {
                     self.search_edited();
                 }
             }
@@ -12631,7 +12716,8 @@ impl App {
     }
 
     fn replace_all(&mut self) {
-        let (query, with) = (self.search.query.clone(), self.search.replace.clone());
+        let query = self.search.query.text().to_string();
+        let with = self.search.replace.text().to_string();
         let dirty: Vec<PathBuf> = self
             .editors
             .iter()
@@ -13372,13 +13458,16 @@ impl App {
         let Some(draft) = &mut self.dock.draft else {
             return;
         };
-        let caret = draft.caret.min(draft.text.len());
+        let caret = draft
+            .text
+            .selection()
+            .map_or(draft.text.caret(), |(start, _)| start);
         let joined = draft.text[..caret]
             .chars()
             .next_back()
             .is_some_and(|before| !before.is_whitespace());
         let lead = if joined { " " } else { "" };
-        crate::field::insert(&mut draft.text, &mut draft.caret, &format!("{lead}{name} "));
+        draft.text.insert(&format!("{lead}{name} "));
         self.say(format!("Added {name} to the comment"));
     }
 
@@ -13475,13 +13564,12 @@ impl App {
         let Some(draft) = &mut self.dock.draft else {
             return;
         };
-        let caret = draft.caret.min(draft.text.len());
+        let caret = draft.text.caret();
         let open = crate::emoji::open_code(&draft.text, caret).map(|(colon, _)| colon);
-        if let Some(colon) = open.filter(|_| named) {
-            draft.text.replace_range(colon..caret, "");
-            draft.caret = colon;
+        match open.filter(|_| named) {
+            Some(colon) => draft.text.replace(colon, caret, emoji),
+            None => draft.text.insert(emoji),
         }
-        crate::field::insert(&mut draft.text, &mut draft.caret, emoji);
         self.used_emoji(emoji);
     }
 
@@ -13734,8 +13822,7 @@ impl App {
                     line: 0,
                     quote: String::new(),
                     selection: String::new(),
-                    text: String::new(),
-                    caret: 0,
+                    text: TextBox::default(),
                     ask: false,
                     code: false,
                     about: None,
@@ -13896,8 +13983,7 @@ impl App {
                     line: 0,
                     quote: String::new(),
                     selection: String::new(),
-                    caret: text.len(),
-                    text,
+                    text: TextBox::new(text),
                     ask: false,
                     code: false,
                     about: None,
@@ -13944,8 +14030,7 @@ impl App {
                     line: 0,
                     quote: String::new(),
                     selection: String::new(),
-                    caret: text.len(),
-                    text,
+                    text: TextBox::new(text),
                     ask: false,
                     code: false,
                     about: None,
@@ -14169,8 +14254,7 @@ impl App {
                     line,
                     quote,
                     selection,
-                    text: String::new(),
-                    caret: 0,
+                    text: TextBox::default(),
                     ask,
                     code,
                     about: None,
@@ -16672,7 +16756,7 @@ impl App {
                 if line.contains(mouse.x, mouse.y) {
                     let field = self.prompt_field(&prompt);
                     let at = input_press(line, &field, mouse.fine_x, &*self.measure);
-                    crate::field::set_caret(&prompt.input, &mut prompt.back, at);
+                    prompt.input.set_caret(at);
                 }
                 self.overlay = Overlay::Prompt(prompt);
             }
@@ -17403,7 +17487,6 @@ impl App {
                         Some(first) => page.found_top = first,
                         None => {
                             page.filter.clear();
-                            page.filter_back = 0;
                             page.found_top = 0;
                             // A page opens at its top, however far the last one was scrolled.
                             if page.section != section {
@@ -17418,7 +17501,6 @@ impl App {
             Control::ClearFilter => {
                 if let Some(page) = &mut self.settings_page {
                     page.filter.clear();
-                    page.filter_back = 0;
                     page.found_top = 0;
                     page.focus = None;
                 }
@@ -18300,7 +18382,8 @@ impl App {
                 let focused = pane == self.focus
                     && self.dock.draft.is_none()
                     && !self.side_field_open()
-                    && !self.pane_has_keyboard();
+                    && !self.pane_has_keyboard()
+                    && !self.sidebar_box_has_keyboard();
                 editor.scrollbar_clear.set(self.scrollbar_clear(area));
                 editor.draw(grid, area, theme, focused, &self.registry, &marks);
                 let look = (self.hover, &*self.measure);
@@ -19311,6 +19394,7 @@ impl App {
             behind: self.theme.popup,
             caret: prompt.caret(),
             kept: 0,
+            selection: prompt.input.selection(),
         }
     }
 
@@ -26817,6 +26901,7 @@ mod tests {
             behind: theme.popup,
             caret: 0,
             kept: 0,
+            selection: None,
         };
         input(&mut grid, Rect::new(1, 0, 22, 1), &field, &measure, &theme);
         let mut rasterizer =
@@ -33674,7 +33759,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     fn with_nothing_staged_commit_takes_everything() {
         let (_dir, mut app) = source_app();
         assert!(screen(&app).text().contains("Commit All"));
-        app.source.message = "All of it".to_string();
+        app.source.message = "All of it".into();
         let (x, y) = find(&screen(&app), "Commit All");
         app.handle(mouse(MouseKind::Left, x, y));
         assert!(screen(&app).text().contains("No changes"));
@@ -34601,6 +34686,7 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
             behind: theme.popup,
             caret: 0,
             kept: 0,
+            selection: None,
         };
         input(&mut grid, Rect::new(1, 0, 22, 1), &field, &measure, &theme);
         let rasterizer = SoftwareRasterizer::new(cell.0, cell.1).expect("fonts are in the binary");

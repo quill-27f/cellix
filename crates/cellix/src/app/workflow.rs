@@ -304,6 +304,7 @@ impl App {
     /// to those that fit. A space is for the control the keyboard is on while there is one,
     /// and Escape empties the filter before it closes Settings.
     pub(super) fn filter_settings(&mut self, key: KeyEvent) -> bool {
+        let command = self.workflow.keys.command(key);
         let Some(page) = &mut self.settings_page else {
             return false;
         };
@@ -313,7 +314,7 @@ impl App {
         // while it has words and no control has the keyboard, and step through the controls
         // otherwise. Ctrl+W closes Settings, as it closes any tab.
         let edits = matches!(
-            cellix_input::simple_keymap(key),
+            command,
             Some(
                 Command::DeleteBackward
                     | Command::DeleteForward
@@ -323,30 +324,29 @@ impl App {
                     | Command::DeleteToLineEnd
             )
         );
-        let moves = matches!(
-            cellix_input::simple_keymap(key),
-            Some(Command::Move(..) | Command::SelectAll)
-        ) && !matches!(key.key, Key::Up | Key::Down | Key::PageUp | Key::PageDown);
+        let moves = matches!(command, Some(Command::Move(..) | Command::SelectAll))
+            && !matches!(key.key, Key::Up | Key::Down | Key::PageUp | Key::PageDown);
+        // Undo and redo are the filter's, as Settings has nothing else to undo.
+        let undoes = matches!(command, Some(Command::Undo | Command::Redo));
         let has_words = !page.filter.is_empty();
         match key.key {
             Key::Char(' ') if page.focus.is_some() || page.filter.is_empty() => return false,
             Key::Esc if has_words => {
                 page.filter.clear();
-                page.filter_back = 0;
                 page.found_top = 0;
             }
             _ if crate::field::takes_word(key) => return false,
             Key::Char(_) if typed => {
-                crate::field::line_key(&mut page.filter, &mut page.filter_back, key);
+                page.filter.key_as(key, command);
                 page.found_top = 0;
                 page.focus = None;
             }
-            _ if edits && has_words => {
-                crate::field::line_key(&mut page.filter, &mut page.filter_back, key);
+            _ if (edits && has_words) || undoes => {
+                page.filter.key_as(key, command);
                 page.found_top = 0;
             }
             _ if moves && has_words && page.focus.is_none() => {
-                crate::field::line_key(&mut page.filter, &mut page.filter_back, key);
+                page.filter.key_as(key, command);
             }
             _ => return false,
         }

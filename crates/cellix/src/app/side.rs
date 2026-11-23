@@ -76,7 +76,7 @@ pub(super) struct Side {
     /// The words selected, on one line.
     pub quote: String,
     /// What's typed and the caret, while a field is open: the question, or a follow-up.
-    pub field: Option<(String, usize)>,
+    pub field: Option<TextBox>,
     /// The question asked, as the card's head says it.
     pub asked: String,
     /// What it was asked, whole, to try again with.
@@ -106,8 +106,9 @@ pub(super) struct Side {
 enum Row {
     /// The question, or what the card asks for, bold; at its end, quietly, who answers.
     Head(String, String),
-    /// A field: its words, or its hint while empty, and the caret's place in them.
-    Field(String, bool, Option<usize>),
+    /// A field: its words, or its hint while empty, the caret's place in them, and what's
+    /// selected of them.
+    Field(String, bool, Option<usize>, Option<(usize, usize)>),
     /// The choice of the agent's conversation, and whether it's chosen.
     Choice(bool),
     /// A row of the answer, or of what's wrong.
@@ -288,7 +289,7 @@ impl App {
         let main = cli
             .filter(|cli| cli.copies())
             .and_then(|_| self.copyable_session());
-        let field = (phase == Phase::Asking).then(|| (String::new(), 0));
+        let field = (phase == Phase::Asking).then(TextBox::default);
         self.side = Some(Side {
             about,
             quote,
@@ -585,7 +586,7 @@ impl App {
         if side.field.is_some() {
             match key.key {
                 Key::Enter => {
-                    let typed = side.field.as_ref().map(|(text, _)| text.clone());
+                    let typed = side.field.as_ref().map(|field| field.text().to_string());
                     self.side_ask(&typed.unwrap_or_default());
                 }
                 Key::Esc => {
@@ -596,12 +597,13 @@ impl App {
                     }
                 }
                 _ => {
-                    let Some((text, caret)) = side.field.as_mut() else {
+                    let command = self.workflow.keys.command(key);
+                    let Some(field) = self.side.as_mut().and_then(|s| s.field.as_mut()) else {
                         return false;
                     };
                     // The field has the keyboard: what isn't its own does nothing, so no
                     // letter lands in the file under it, but a command's keys still work.
-                    let taken = crate::field::key(text, caret, key);
+                    let taken = field.key_as(key, command);
                     let command = key.mods.ctrl || key.mods.alt;
                     return taken || !command;
                 }
@@ -679,7 +681,7 @@ impl App {
                     .side
                     .as_ref()
                     .and_then(|s| s.field.as_ref())
-                    .map(|(text, _)| text.clone())
+                    .map(|field| field.text().to_string())
                     .unwrap_or_default();
                 self.side_ask(&typed);
             }
@@ -691,7 +693,7 @@ impl App {
             }
             FOLLOW_UP => {
                 if let Some(side) = self.side.as_mut() {
-                    side.field = Some((String::new(), 0));
+                    side.field = Some(TextBox::default());
                 }
             }
             MAKE_COMMENT => self.side_make_comment(),
@@ -960,12 +962,18 @@ impl App {
         match &side.phase {
             Phase::Asking => {
                 rows.push(Row::Head(format!("Ask {who}"), String::new()));
-                let (text, caret) = side.field.clone().unwrap_or_default();
+                let field = side.field.clone().unwrap_or_default();
                 let hint = format!("Ask about ‘{shown_quote}’…");
-                if text.is_empty() {
-                    rows.push(Row::Field(hint, true, Some(0)));
+                if field.is_empty() {
+                    rows.push(Row::Field(hint, true, Some(0), None));
                 } else {
-                    rows.push(Row::Field(text, false, Some(caret)));
+                    let (caret, selected) = (field.caret(), field.selection());
+                    rows.push(Row::Field(
+                        field.text().to_string(),
+                        false,
+                        Some(caret),
+                        selected,
+                    ));
                 }
                 if side.main.is_some() {
                     rows.push(Row::Choice(side.copy));
@@ -1008,11 +1016,18 @@ impl App {
                         rows.push(Row::Words(line));
                     }
                 }
-                if let Some((text, caret)) = &side.field {
-                    if text.is_empty() {
-                        rows.push(Row::Field("Ask a follow-up…".to_string(), true, Some(0)));
+                if let Some(field) = &side.field {
+                    if field.is_empty() {
+                        let hint = "Ask a follow-up…".to_string();
+                        rows.push(Row::Field(hint, true, Some(0), None));
                     } else {
-                        rows.push(Row::Field(text.clone(), false, Some(*caret)));
+                        let (caret, selected) = (field.caret(), field.selection());
+                        rows.push(Row::Field(
+                            field.text().to_string(),
+                            false,
+                            Some(caret),
+                            selected,
+                        ));
                     }
                 }
             }
@@ -1085,7 +1100,7 @@ impl App {
                         }
                     }
                 }
-                Row::Field(text, hint, at) => {
+                Row::Field(text, hint, at, selected) => {
                     let boxed = Rect::new(x - 1, y, area.w.saturating_sub(INSET * 2 - 2), 1);
                     let well = Style {
                         fg: theme.text.fg,
@@ -1120,7 +1135,27 @@ impl App {
                         well
                     };
                     let cell = start.floor() as u16;
+                    // What's selected, as the file shows its selection.
+                    let mark = |grid: &mut Grid, drawn| {
+                        if let Some(range) = *selected {
+                            let pair = (&*self.measure, theme);
+                            let place = (start, cell, y);
+                            let ground = theme.popup_input();
+                            crate::palette::box_selection(
+                                grid,
+                                place,
+                                text,
+                                range,
+                                (100, right, crate::palette::BOX_SELECTION_INSET),
+                                ground,
+                                pair,
+                                drawn,
+                            );
+                        }
+                    };
+                    mark(grid, false);
                     grid.label_at(start, cell, y, text, style, right, 100);
+                    mark(grid, true);
                     if let Some(at) = at {
                         let before = if *hint {
                             ""

@@ -194,7 +194,7 @@ fn cursor_blinking_is_a_switch_in_settings() {
     }
     // The filter finds it by its name.
     app.run(Command::OpenSettings);
-    app.settings_page.as_mut().unwrap().filter = "blink".to_string();
+    app.settings_page.as_mut().unwrap().filter = "blink".into();
     // (Its page's name, after it, is set over the end of its cells.)
     let found = screen(&app).text();
     assert!(

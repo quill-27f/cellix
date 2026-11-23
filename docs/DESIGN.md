@@ -830,7 +830,7 @@ Inside Claude Code the mod starts the turn with that comment as its prompt, wher
 with Send's prompt for the hook to fill. A Cellix from before answers that it doesn't know the
 request, and the hook hands over everything as it did. Inside Claude Code it puts the file and the whole
 selection in Claude Code's prompt instead, a passage set out as a quote. A comment is typed as any
-text box is, with a caret that moves by letter and word and the Mac's word deletes. Resolving one
+text box is, and every box edits as the file does: Shift selects, the Mac's word deletes, undo. Resolving one
 stops marking its words at once; the pane can show resolved comments again, to reopen them. A picture's comment names its file, so the agent can open it. All of
 this works the same in code, Markdown, LaTeX, data and notebooks. A PDF or image in the side pane
 takes a comment too, from a button or a right click, and a paper's PDF lands it on the source line
@@ -1839,18 +1839,40 @@ and Page Down move a screen less a row, and the wheel moves it two rows a notch 
 pointer is, leaving the pick where it was. A thumb 4 px wide in the middle of the column between
 the band and the panel's edge, lighter than the edge's line, shows how much there is and how far
 down this is; in cells it's half blocks in the panel's last column. Rows that arrive while a big folder is still being walked don't move what's
-being looked at. The field is a text box like the others: `field::key`, which a comment's box
-uses, moves its caret and deletes by letter and by word, a press puts the caret at the nearer
-edge of the letter pressed, and a query longer than the box shows the part the caret is in. A
-press anywhere in the panel that isn't on a row to pick leaves it open.
+being looked at. The field is a text box like the others, a `field::TextBox`, which a comment's box
+is too, a press puts the caret at the nearer edge of the letter pressed, and a query longer than
+the box shows the part the caret is in. A press anywhere in the panel that isn't on a row to pick
+leaves it open.
 
-Every other box is edited the same way: a prompt's (Rename tab, Rename Symbol, Go to Line, a
-file's name, a stash's message, Save Review and the rest), the Find bar's two, the Search
-sidebar's two, Settings' filter, the New Worktree dialog's and the commit message. A box of one
-line keeps its caret as how much of its text stands after it (`field::line_key`), so one opened
-with words in it, Rename tab with the tab's name, has its caret at their end; Up and Down
-aren't its own, they step through matches or move what it's over. What's pasted goes in at the
-caret, and a press puts the caret at the nearer edge of the letter pressed
+Every box is one editing core, the file's own: a `field::TextBox` is a `cellix_core::Buffer` and
+its `Selections`, so a box and the file agree on what a letter, a word, a line and a selection
+are, and move through one table (`field::motion`, which `Editor::run` uses too). The comment
+composer and a reply, Ask's field, the commit message, the palette's field, the emoji picker's,
+a prompt's (Rename tab, Rename Symbol, Go to Line, a file's name, a stash's message, Save Review
+and the rest), the Find bar's two, the Search sidebar's two, Settings' filter and the New
+Worktree dialog's all are one. Until 23 November 2026 a box was a `String` and a caret, with no
+selection "by design" (the user: "I cannot do shift scan with arrows … We need the same writing
+capabilities everywhere in the app"). Now every key does in a box what it does in the file, in
+each form a terminal sends it: Shift with each move selects (a letter, a word with Option or Ctrl
+as `ESC b`/`ESC f` or `CSI 1;3D`, the line's ends with Home and End or Cmd+Left and Right as
+Ghostty sends them, the text's ends with Ctrl+Home and End, a line up or down in a box of
+several), Ctrl+A selects all the box's words (it went to the line's start, as a Mac field's
+does), what's typed or pasted replaces what's selected and Backspace and Delete take it, Ctrl+Z
+and Ctrl+Shift+Z or Ctrl+Y undo and redo as the file groups them, and Up and Down keep the
+column they set out from. Copy, Cut and Paste are the app's, which has the clipboard
+(`App::box_clipboard`): with something selected in the box that has the keyboard
+(`App::focused_box`), Ctrl+C and Ctrl+Shift+C copy it and Ctrl+X cuts it as Delete would, so the
+box does what it does after any edit; with nothing selected they do what they did. Enter, Esc
+and Tab are still each box's own. The selection is drawn as the file draws its own, the
+selection's colour behind the words (`palette::box_selection`), and the caret where it was made
+to. A table test sends the same keys to a one-line file and to each kind of box and compares
+words, caret and selection (`every_key_does_in_every_box_what_it_does_in_the_file`).
+
+A box of one line gives its words afresh with its caret as far from their end as it stood
+(`TextBox::set`), so one opened with words in it, Rename tab with the tab's name, has its caret
+at their end; Up and Down aren't its own (`TextBox::line_key`), they step through matches or
+move what it's over. What's pasted goes in at the caret, and a press puts the caret at the
+nearer edge of the letter pressed
 (`palette::input_press`). `palette::input` draws the caret where it stands, and a text longer
 than its box shows the part the caret is in (`hidden_before`, shared with the palette's field),
 its words cut a column short of the box's far edge. Painted, the caret keeps clear of the
@@ -1865,8 +1887,9 @@ November 2026 Ctrl+W closed that tab from the palette, a prompt, Find and the Se
 quits from anywhere. Settings' filter is the exception, since typing anywhere in Settings goes
 there without its having the keyboard: the deletes edit it whatever has the keyboard, the arrows
 and Home and End move along it only while no control has the keyboard, and Ctrl+W closes
-Settings as it closes any tab (the user's word). The emoji picker's arrows move among the emoji,
-so its field takes only the deletes, from its end. The commit message wraps in its box as a
+Settings as it closes any tab (the user's word). The emoji picker's plain arrows move among
+the emoji, so its field takes every other key a box takes (Shift and Option with the arrows,
+Home and End, the deletes, undo). The commit message wraps in its box as a
 comment does (`threads::wrap_spans`), spaces kept where they were typed, and shows the rows up to
 the caret's.
 

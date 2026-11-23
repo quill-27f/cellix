@@ -71,7 +71,7 @@ fn on_row(grid: &Grid, y: u16, words: &str) -> Option<u16> {
 /// What's typed in the prompt that's open.
 fn prompted(app: &App) -> String {
     match &app.overlay {
-        Overlay::Prompt(prompt) => prompt.input.clone(),
+        Overlay::Prompt(prompt) => prompt.input.to_string(),
         _ => panic!("no prompt open"),
     }
 }
@@ -346,7 +346,9 @@ fn the_other_boxes_edit_as_any_text_box_does() {
     press(&mut app, Key::Char('w'), CTRL);
     assert_eq!(searched(&app), "first ");
     assert!(app.active_text().is_some(), "the file is open");
-    press(&mut app, Key::Char('a'), CTRL);
+    // Home, as Ghostty sends Cmd+Left. Ctrl+A went to the line's start too until every box
+    // selected all of its words with it, as the file does.
+    plain(&mut app, Key::Home);
     app.handle(Event::Paste("the ".into()));
     assert_eq!(searched(&app), "the first ");
     assert_eq!(
@@ -396,4 +398,307 @@ fn the_other_boxes_edit_as_any_text_box_does() {
     press(&mut app, Key::Char('u'), CTRL);
     assert_eq!(query(&app), "");
     assert!(app.active_text().is_some(), "the file is open");
+}
+
+/// What the file's words are in the table below, on one line.
+const WORDS: &str = "fix the cache now";
+
+/// Every kind of box, each opened over the one-line file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    File,
+    Comment,
+    Reply,
+    Ask,
+    Commit,
+    NewWorktree,
+    Palette,
+    Emoji,
+    Prompt,
+    Find,
+    FindReplace,
+    Search,
+    SearchReplace,
+    Settings,
+}
+
+const KINDS: [Kind; 14] = [
+    Kind::File,
+    Kind::Comment,
+    Kind::Reply,
+    Kind::Ask,
+    Kind::Commit,
+    Kind::NewWorktree,
+    Kind::Palette,
+    Kind::Emoji,
+    Kind::Prompt,
+    Kind::Find,
+    Kind::FindReplace,
+    Kind::Search,
+    Kind::SearchReplace,
+    Kind::Settings,
+];
+
+/// A repository holding the one-line file, open, and no agent to be found for Ask.
+fn one_line() -> (TempDir, App) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("one");
+    fs::create_dir_all(root.join("bin")).unwrap();
+    fs::write(root.join("one.txt"), WORDS).unwrap();
+    let who = ["-c", "user.name=t", "-c", "user.email=t@example.com"];
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["add", "one.txt"],
+        &["commit", "-qm", "First"],
+    ] {
+        let done = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(who)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(done.status.success(), "git {args:?}");
+    }
+    let root = dunce::canonicalize(&root).unwrap();
+    let mut app = App::new(root.clone(), (130, 30));
+    app.open(&root.join("one.txt")).unwrap();
+    app.side_path = Some(root.join("bin").into_os_string());
+    (dir, app)
+}
+
+/// Opens a box of `kind`, its words emptied and the table's words pasted in, its caret after
+/// them; for the file, the same done to the file, so the undo behind each is alike.
+fn opened(kind: Kind) -> (TempDir, App) {
+    let (dir, mut app) = one_line();
+    match kind {
+        Kind::File => {}
+        Kind::Comment => app.run(Command::AddComment),
+        Kind::Reply => {
+            app.run(Command::AddComment);
+            typed(&mut app, "first");
+            plain(&mut app, Key::Enter);
+            let id = app.threads.last().expect("the comment").id;
+            app.thread_hit(super::ThreadHit::Reply(id));
+        }
+        Kind::Ask => {
+            app.run(Command::AskAgent);
+            let side = app.side.as_mut().expect("Ask's card");
+            side.phase = super::side::Phase::Asking;
+            side.field = Some(crate::field::TextBox::default());
+        }
+        Kind::Commit => {
+            app.run(Command::ShowSourceControl);
+            app.source.focused = true;
+        }
+        Kind::NewWorktree => app.run(Command::NewWorktree),
+        Kind::Palette => app.run(Command::QuickOpen),
+        Kind::Emoji => {
+            app.overlay = Overlay::Emoji(crate::emoji::Picker::new(
+                (10, 5),
+                cellix_render::Rect::new(0, 0, 130, 30),
+                &[],
+            ));
+        }
+        Kind::Prompt => app.ask("Save review as", super::PromptAction::SaveReview),
+        Kind::Find => app.run(Command::FindInFile),
+        Kind::FindReplace => {
+            app.run(Command::FindInFile);
+            typed(&mut app, "x");
+            app.run(Command::ReplaceInFile);
+        }
+        Kind::Search => app.run(Command::FindInProject),
+        Kind::SearchReplace => {
+            app.run(Command::FindInProject);
+            plain(&mut app, Key::Tab);
+        }
+        Kind::Settings => app.run(Command::OpenSettings),
+    }
+    let empty = match kind {
+        Kind::File => false,
+        _ => app
+            .focused_box()
+            .unwrap_or_else(|| panic!("{kind:?} has no box"))
+            .is_empty(),
+    };
+    if !empty {
+        press(&mut app, Key::Char('a'), CTRL);
+        plain(&mut app, Key::Backspace);
+    }
+    app.handle(Event::Paste(WORDS.into()));
+    (dir, app)
+}
+
+/// The words, the caret and what's selected, in bytes, of a box or of the file.
+fn state(app: &App, kind: Kind) -> (String, usize, Option<(usize, usize)>) {
+    if kind == Kind::File {
+        let editor = &app.editors[app.active()];
+        let rope = editor.buffer.rope();
+        let s = editor.selections.primary();
+        let byte = |at: usize| rope.char_to_byte(at);
+        let selected = (!s.is_empty()).then(|| (byte(s.start()), byte(s.end())));
+        return (editor.buffer.text(), byte(s.head), selected);
+    }
+    let field = app
+        .focused_box()
+        .unwrap_or_else(|| panic!("{kind:?} lost its box"));
+    (field.text().to_string(), field.caret(), field.selection())
+}
+
+/// Every key does in a box what it does in the file, in each form a terminal sends it: the
+/// same keys, sent to a one-line file and to each kind of box from the same words, leave the
+/// same words, caret and selection. Enter, Esc and Tab are each box's own, Ctrl+W takes a
+/// word in a box where it closes the file's tab, Up and Down step through a one-line box's
+/// list, and the emoji picker's plain arrows move among the emoji: those aren't in the table.
+#[test]
+fn every_key_does_in_every_box_what_it_does_in_the_file() {
+    let key = |key, ctrl, alt, shift| KeyEvent {
+        key,
+        mods: Mods { ctrl, alt, shift },
+    };
+    let k = |c| key(Key::Char(c), false, false, false);
+    let ctrl = |c| key(Key::Char(c), true, false, false);
+    let ctrl_shift = |c| key(Key::Char(c), true, false, true);
+    let alt = |c| key(Key::Char(c), false, true, false);
+    let bare = |k| key(k, false, false, false);
+    let shift = |k| key(k, false, false, true);
+    let alt_shift = |k| key(k, false, true, true);
+    let ctrl_key = |k| key(k, true, false, false);
+    let ctrl_shift_key = |k| key(k, true, false, true);
+    let alt_key = |k| key(k, false, true, false);
+    let queue: Vec<KeyEvent> = "queue".chars().map(k).collect();
+    let typed_over = |then: &[KeyEvent]| {
+        let mut keys = vec![alt_shift(Key::Left)];
+        keys.extend(queue.iter().copied());
+        keys.extend_from_slice(then);
+        keys
+    };
+    let rows: Vec<(&str, Vec<KeyEvent>)> = vec![
+        ("Shift+Left, three times", vec![shift(Key::Left); 3]),
+        ("Shift+Option+Left (CSI 1;4D)", vec![alt_shift(Key::Left)]),
+        (
+            "Shift+Option+Left twice, Shift+Option+Right",
+            vec![
+                alt_shift(Key::Left),
+                alt_shift(Key::Left),
+                alt_shift(Key::Right),
+            ],
+        ),
+        ("Option+Left as ESC b, a letter", vec![alt('b'), k('x')]),
+        (
+            "Option+Right as ESC f from Home",
+            vec![bare(Key::Home), alt('f'), k('x')],
+        ),
+        ("Option+Left (CSI 1;3D)", vec![alt_key(Key::Left), k('x')]),
+        (
+            "Ctrl+Left twice, Ctrl+Shift+Right",
+            vec![
+                ctrl_key(Key::Left),
+                ctrl_key(Key::Left),
+                ctrl_shift_key(Key::Right),
+            ],
+        ),
+        ("Home, Shift+End", vec![bare(Key::Home), shift(Key::End)]),
+        (
+            "Shift+Home, a letter over it",
+            vec![shift(Key::Home), k('y')],
+        ),
+        (
+            "Cmd+Right as Ghostty sends it (Ctrl+E), Shift with it",
+            vec![bare(Key::Home), ctrl('e'), bare(Key::Home), ctrl_shift('E')],
+        ),
+        (
+            "Ctrl+Home, Ctrl+Shift+End",
+            vec![ctrl_key(Key::Home), ctrl_shift_key(Key::End)],
+        ),
+        ("Ctrl+A, a letter over all of it", vec![ctrl('a'), k('z')]),
+        (
+            "Shift+Left twice, Backspace",
+            vec![shift(Key::Left), shift(Key::Left), bare(Key::Backspace)],
+        ),
+        (
+            "Shift+Right from Home, Delete",
+            vec![
+                bare(Key::Home),
+                shift(Key::Right),
+                shift(Key::Right),
+                bare(Key::Delete),
+            ],
+        ),
+        ("Option+Backspace", vec![alt_key(Key::Backspace)]),
+        ("Ctrl+Backspace", vec![ctrl_key(Key::Backspace)]),
+        ("Cmd+Backspace as Ctrl+U", vec![alt('b'), ctrl('u')]),
+        ("Ctrl+K", vec![alt('b'), alt('b'), ctrl('k')]),
+        (
+            "Option+Delete from Home",
+            vec![bare(Key::Home), alt_key(Key::Delete)],
+        ),
+        (
+            "Left takes a selection to its start",
+            vec![alt_shift(Key::Left), alt_shift(Key::Left), bare(Key::Left)],
+        ),
+        (
+            "Right takes a selection to its end",
+            vec![bare(Key::Home), alt_shift(Key::Right), bare(Key::Right)],
+        ),
+        ("Shift+Right at the end", vec![shift(Key::Right)]),
+        (
+            "A word typed over a selection, Ctrl+Z",
+            typed_over(&[ctrl('z')]),
+        ),
+        (
+            "Ctrl+Z, Ctrl+Shift+Z",
+            typed_over(&[ctrl('z'), ctrl_shift('Z')]),
+        ),
+        ("Ctrl+Z, Ctrl+Y", typed_over(&[ctrl('z'), ctrl('y')])),
+        (
+            "Ctrl+X, Home, Ctrl+V",
+            vec![alt_shift(Key::Left), ctrl('x'), bare(Key::Home), ctrl('v')],
+        ),
+        (
+            "Ctrl+C, a word selected, Ctrl+V over it",
+            vec![
+                alt_shift(Key::Left),
+                ctrl('c'),
+                bare(Key::Home),
+                alt_shift(Key::Right),
+                ctrl('v'),
+            ],
+        ),
+        (
+            "Ctrl+Shift+C, Ctrl+V",
+            vec![
+                alt_shift(Key::Left),
+                ctrl_shift('C'),
+                bare(Key::Home),
+                ctrl('v'),
+            ],
+        ),
+    ];
+    let plain_arrow = |keys: &[KeyEvent]| {
+        keys.iter()
+            .any(|k| matches!(k.key, Key::Left | Key::Right) && k.mods == Mods::default())
+    };
+    for (name, keys) in &rows {
+        let (_dir, mut file) = opened(Kind::File);
+        for key in keys {
+            file.handle(Event::Key(*key));
+        }
+        let want = state(&file, Kind::File);
+        for kind in KINDS.into_iter().skip(1) {
+            if kind == Kind::Emoji && plain_arrow(keys) {
+                continue;
+            }
+            let (_dir, mut app) = opened(kind);
+            assert_eq!(
+                state(&app, kind),
+                (WORDS.to_string(), WORDS.len(), None),
+                "{kind:?} before {name}"
+            );
+            for key in keys {
+                app.handle(Event::Key(*key));
+            }
+            assert_eq!(state(&app, kind), want, "{name}, in {kind:?}");
+        }
+    }
 }

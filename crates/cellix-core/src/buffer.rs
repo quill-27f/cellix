@@ -23,7 +23,7 @@ struct Txn {
 }
 
 /// A text document with undo history and an optional file behind it.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Buffer {
     rope: Rope,
     path: Option<PathBuf>,

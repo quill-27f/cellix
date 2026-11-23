@@ -103,6 +103,11 @@ EXPECT = {
     "13-source-diff": "Change 1",
     "13-source-hover": "SOURCE CONTROL",
     "13-source-message": "what changed and",
+    "13-source-message-select": "what changed and",
+    "11-find-select": "1 of",
+    "11-find-select-light": "1 of",
+    "136-settings-filter-select": " setting",
+    "08-open-file-select": "src/queue",
     "13-source-staged": "STAGED CHANGES",
     "13-stacked-pane": "WORKTREES",
     "130-run-task": "Select the task",
@@ -1714,6 +1719,9 @@ with tempfile.TemporaryDirectory() as made:
     shoot("08-open-file", [["keys", CTRL("p")]], CODE_FILE)
     # A path as a chat or a compiler writes it: the file, and the line it will open at.
     shoot("08-open-file-path", [["keys", CTRL("p")], ["until", "Search files"], ["keys", "src/queue.rs:12"]], PAGE_FILE)
+    # Shift+Option+Left in the palette's own field: what's selected is drawn as in the file.
+    shoot("08-open-file-select", [["keys", CTRL("p")], ["until", "Search files"], ["keys", "src/queue"],
+                                  ["keys", "\\e[1;4D"], ["wait", 0.4]], PAGE_FILE)
     # After another file has been in front, the ones last looked at lead the list.
     again = [["keys", CTRL("p")], ["until", "Search files"], ["keys", "readme"], ["until", "README.md"],
              ["keys", "\r"], ["wait", 0.6], ["keys", CTRL("p")], ["wait", 0.4]]
@@ -1730,6 +1738,12 @@ with tempfile.TemporaryDirectory() as made:
     # Once the file is read: a Ctrl+F while it said "Reading…" opened no bar.
     shoot("11-find", [["until", "VecDeque"], ["wait", 0.3], ["keys", CTRL("f")], ["keys", "item"],
                       ["until", "1 of"]], CODE_FILE)
+    # Shift+Home in Find's box selects what's typed, as in the file.
+    shoot("11-find-select", [["until", "VecDeque"], ["wait", 0.3], ["keys", CTRL("f")], ["keys", "item"],
+                             ["until", "1 of"], ["keys", "\\e[1;2H"], ["wait", 0.4]], CODE_FILE)
+    shoot("11-find-select-light", [["until", "VecDeque"], ["wait", 0.3], ["keys", CTRL("f")], ["keys", "item"],
+                                   ["until", "1 of"], ["keys", "\\e[1;2H"], ["wait", 0.4]], CODE_FILE,
+          background="eff1f5")
     shoot("12-search", [["click", *SEARCH]], CODE_FILE)
     replacing = [["keys", CTRL("r")], ["keys", "item"], ["keys", "\t"], ["keys", "entry"]]
     shoot("11-replace", replacing, CODE_FILE)
@@ -1750,6 +1764,10 @@ with tempfile.TemporaryDirectory() as made:
     shoot("13-source-control", [["click", *REVIEW], ["wait", 0.8]], CODE_FILE)
     shoot("13-source-message", [["click", *REVIEW], ["wait", 0.8], ["click", *ON("Message")],
                                 ["keys", "Say what changed and why"], ["move", *ON("Commit")], ["wait", 0.3]], CODE_FILE)
+    # Shift+Option+Left twice in the commit message.
+    shoot("13-source-message-select", [["click", *REVIEW], ["wait", 0.8], ["click", *ON("Message")],
+                                       ["keys", "Say what changed and why"], ["keys", "\\e[1;4D"],
+                                       ["keys", "\\e[1;4D"], ["wait", 0.4]], CODE_FILE)
     # The Agents list with an agent in it: one in a tab of its own, as the list has only those.
     # A stand-in for Claude Code that names itself and gives its hook its session from inside
     # its tab as it starts, as the plugin does, and waits.
@@ -1830,6 +1848,9 @@ with tempfile.TemporaryDirectory() as made:
     shoot("134-settings-editor", to_section(2), CODE_FILE)
     shoot("135-settings-keyboard", to_section(4), CODE_FILE)
     shoot("136-settings-keys-search", [*to_section(4), ["keys", "task"], ["wait", 0.4]], CODE_FILE)
+    # Shift+Left twice in Settings' filter.
+    shoot("136-settings-filter-select", [*to_section(4), ["keys", "task"], ["keys", "\\e[1;2D"],
+                                         ["keys", "\\e[1;2D"], ["wait", 0.4]], CODE_FILE)
     shoot("137-settings-keys-record", [*to_section(4), ["keys", "rerun"], ["wait", 0.4],
                                        *[["keys", "\t"]] * 6, ["keys", "\r"], ["keys", "\x1b\x12"],
                                        ["wait", 0.4]], CODE_FILE)
@@ -1923,6 +1944,14 @@ with tempfile.TemporaryDirectory() as made:
     typing = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], *command("add comment", F1),
               ["until", "Enter sends"], ["keys", "Is this true for "], ["wait", 1.5]]
     shoot("50-comment-typing", typing, NOTE_FILE, size="150x44", background="eff1f5")
+    # Shift+Option+Left twice, as a terminal sends it (CSI 1;4D): the last two words selected,
+    # drawn as the file draws its selection, the caret where the selection was made to.
+    select = [["wait", 3.0], ["click", 90, 5], ["wait", 1.5], *command("add comment", F1),
+              ["until", "Enter sends"], ["keys", "Is this true for multi-head attention"],
+              ["keys", "\\e[1;4D"], ["keys", "\\e[1;4D"], ["wait", 1.0]]
+    shoot("50-comment-shift-select", select, NOTE_FILE, size="150x44", expect="Enter sends")
+    shoot("50-comment-shift-select-light", select, NOTE_FILE, size="150x44", background="eff1f5",
+          expect="Enter sends")
     # A name between colons is its emoji once its second colon is typed, and one half typed
     # is offered under the words, in place of the hint. A name's cells are cut short by the
     # next emoji's, since small text takes less room than its cells, so less of it is waited for.

@@ -11,8 +11,10 @@ use cellix_review::{Commit, Entry, Stash, ahead_behind, stashes, status_entries}
 use crate::graph::Graph;
 
 use crate::explorer::file_color;
+use crate::field::TextBox;
 use crate::theme::Theme;
 use crate::threads::wrap_spans;
+use cellix_input::Command;
 
 const SIDE: u16 = 2;
 /// Rows of the message box.
@@ -135,9 +137,8 @@ const SPIN_ROOM: f32 = 1.6;
 #[derive(Default)]
 pub struct Source {
     pub entries: Vec<Entry>,
-    pub message: String,
-    /// How much of the message stands after its caret (`field::caret_of`).
-    pub message_back: usize,
+    /// The commit's message, with its caret or selection.
+    pub message: TextBox,
     pub focused: bool,
     pub remote: Remote,
     /// Pushing or pulling, as what to say while it does.
@@ -678,23 +679,49 @@ impl Source {
         }
         let (rows, on, shown) = self.message_rows(area, measure);
         let visible = rows.iter().skip(shown).take(MESSAGE_ROWS as usize);
+        let selected = self.message.selection().filter(|_| self.focused);
         for (offset, (start, end)) in visible.enumerate() {
             let row = &self.message[*start..*end];
-            grid.label(left + 1, y + offset as u16, row, writing, frame.right());
+            let y = y + offset as u16;
+            // What's selected on the row, as the file shows its selection.
+            let on_row = selected
+                .map(|(a, b)| (a.clamp(*start, *end) - start, b.clamp(*start, *end) - start));
+            let mark = |grid: &mut Grid, drawn| {
+                if let Some(range) = on_row {
+                    let place = (f32::from(left + 1), left + 1, y);
+                    let size = (100, frame.right(), crate::palette::ROWS_SELECTION_INSET);
+                    let pair = (measure, theme);
+                    crate::palette::box_selection(
+                        grid, place, row, range, size, writing.bg, pair, drawn,
+                    );
+                }
+            };
+            mark(grid, false);
+            grid.label(left + 1, y, row, writing, frame.right());
+            mark(grid, true);
         }
         if self.focused {
             // After the letters before it on its row, spaces too, so a space moves it.
             let caret = self.message_caret();
             let start = rows.get(on).map_or(0, |(start, _)| *start);
+            let text = &self.message[start..rows.get(on).map_or(start, |(_, end)| *end)];
             let across = measure.width(&self.message[start..caret], Font::default());
+            let edge = left as f32 + 1.0 + across;
+            // Clear of the letters either side of it, as in every box.
+            let advances = measure.advances(text, Font::default());
+            let before = self.message[start..caret].chars().count();
+            let x = match crate::palette::caret_nudge(text, &advances, before) {
+                Some(nudge) if !measure.in_cells() => (edge + nudge).max(left as f32 + 1.0),
+                _ => edge,
+            };
             let row = (on - shown) as u16;
-            grid.set_caret(left as f32 + 1.0 + across, y + row, 0.62);
+            grid.set_caret(x, y + row, 0.62);
         }
     }
 
     /// Where the caret is in the message, in bytes.
     pub fn message_caret(&self) -> usize {
-        crate::field::caret_of(&self.message, self.message_back)
+        self.message.caret()
     }
 
     /// The message's rows as it wraps in its box, as byte ranges, with spaces kept where they
@@ -720,16 +747,13 @@ impl Source {
 
     /// A key for the message, which is written as any text box is: by letter, word and line,
     /// with the deletes a Mac or a shell has taught. Returns whether it meant anything here.
-    pub fn message_key(&mut self, key: cellix_input::KeyEvent) -> bool {
-        let mut caret = self.message_caret();
-        let taken = crate::field::key(&mut self.message, &mut caret, key);
-        self.message_back = self.message.len() - caret;
-        taken
+    pub fn message_key(&mut self, key: cellix_input::KeyEvent, command: Option<Command>) -> bool {
+        self.message.key_as(key, command)
     }
 
-    /// Puts what's pasted, or a line's end, in at the message's caret.
+    /// Puts what's pasted, or a line's end, in place of what's selected or at the caret.
     pub fn message_insert(&mut self, text: &str) {
-        crate::field::line_insert(&mut self.message, &mut self.message_back, text);
+        self.message.insert(text);
     }
 
     /// A press on the message's box at `x`, with its fraction of a column, on row `y`: the
@@ -745,7 +769,7 @@ impl Source {
         };
         let (rows, _, shown) = self.message_rows(area, measure);
         let Some(&(start, end)) = rows.get(shown + row as usize) else {
-            self.message_back = 0;
+            self.message.set_back(0);
             return;
         };
         let text = &self.message[start..end];
@@ -763,7 +787,7 @@ impl Source {
         if at == end && end < self.message.len() && !self.message[end..].starts_with('\n') {
             at = self.message[..end].trim_end_matches(' ').len().max(start);
         }
-        crate::field::set_caret(&self.message, &mut self.message_back, at);
+        self.message.set_caret(at);
     }
 
     /// Commit and Push or Pull. Painted, each is a chip inside its row on the sidebar's

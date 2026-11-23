@@ -21,9 +21,8 @@ const BUTTONS: [&str; 2] = ["Cancel", "Create"];
 
 /// New Worktree, as it's being filled in.
 pub(super) struct NewWorktree {
-    /// The branch's name, and the caret in it.
-    pub branch: String,
-    pub caret: usize,
+    /// The branch's name, with its caret.
+    pub branch: TextBox,
     /// Where it starts from: the branch in view, and its commit, short.
     from: (String, String),
     /// The project's own checkout, beside which the folder goes.
@@ -105,8 +104,7 @@ impl App {
         let commit = cellix_review::head(&root).unwrap_or_default();
         let short = commit.chars().take(7).collect();
         self.overlay = Overlay::NewWorktree(NewWorktree {
-            branch: String::new(),
-            caret: 0,
+            branch: TextBox::default(),
             from: (branch, short),
             main,
             agents,
@@ -164,7 +162,9 @@ impl App {
                 self.overlay = Overlay::NewWorktree(form);
             }
             _ => {
-                if crate::field::key(&mut form.branch, &mut form.caret, key) {
+                let was = form.branch.text().to_string();
+                form.branch.key_as(key, self.workflow.keys.command(key));
+                if form.branch != was {
                     form.error = None;
                 }
                 self.overlay = Overlay::NewWorktree(form);
@@ -175,7 +175,7 @@ impl App {
     pub(super) fn new_worktree_paste(&mut self, text: &str) {
         if let Overlay::NewWorktree(form) = &mut self.overlay {
             let line = text.lines().next().unwrap_or_default().trim();
-            crate::field::insert(&mut form.branch, &mut form.caret, line);
+            form.branch.insert(line);
             form.error = None;
         }
     }
@@ -252,7 +252,8 @@ impl App {
         // A press in the box puts the caret at the letter pressed.
         let (line, field) = self.worktree_field(&form);
         if line.contains(at.0, at.1) {
-            form.caret = input_press(line, &field, fine.0, &*self.measure);
+            let at = input_press(line, &field, fine.0, &*self.measure);
+            form.branch.set_caret(at);
         }
         match (pressed, segment) {
             (Some(0), _) => {}
@@ -274,14 +275,7 @@ impl App {
         let area = self.new_worktree_area();
         let (left, right) = (area.x + 2, area.right().saturating_sub(2));
         let line = Rect::new(left, area.y + FIELD_ROW, right - left, 1);
-        let field = Input {
-            text: &form.branch,
-            hint: "Branch name",
-            focused: true,
-            behind: self.theme.popup,
-            caret: form.caret,
-            kept: 0,
-        };
+        let field = Input::of(&form.branch, "Branch name", true, self.theme.popup);
         (line, field)
     }
 

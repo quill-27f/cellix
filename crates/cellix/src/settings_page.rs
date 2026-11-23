@@ -2,6 +2,7 @@ use std::sync::mpsc::Receiver;
 
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Rgb, Style};
 
+use crate::field::TextBox;
 use crate::install::{Machine, Plan};
 use crate::integrations;
 use crate::keys::{self, Shortcut};
@@ -504,9 +505,7 @@ pub struct SettingsPage {
     /// Every command and its keys, as the Keyboard section lists them.
     pub shortcuts: Vec<Shortcut>,
     /// What's typed in the filter, which narrows the rows of every page to those that fit.
-    pub filter: String,
-    /// How much of the filter stands after its caret (`field::caret_of`).
-    pub filter_back: usize,
+    pub filter: TextBox,
     /// The first of what it found that's in view.
     pub found_top: usize,
     /// The first command in view in the Keyboard section.
@@ -539,8 +538,7 @@ impl SettingsPage {
             installing_what: None,
             failed: None,
             shortcuts: Vec::new(),
-            filter: String::new(),
-            filter_back: 0,
+            filter: TextBox::default(),
             found_top: 0,
             keys_top: 0,
             recording: None,
@@ -1339,8 +1337,31 @@ impl SettingsPage {
             grid.label_at(x + 0.4, cell, y, FILTER_HINT, quiet, end, 100);
         } else {
             let from = self.filter.char_indices().nth(shown.hidden);
-            let words = &self.filter[from.map_or(self.filter.len(), |(from, _)| from)..];
+            let from = from.map_or(self.filter.len(), |(from, _)| from);
+            let words = &self.filter[from..];
+            // What's selected of what shows, as the file shows its selection.
+            let selected = self.filter.selection().filter(|_| self.recording.is_none());
+            let selected = selected.map(|(a, b)| (a.max(from) - from, b.max(from) - from));
+            let mark = |grid: &mut Grid, drawn| {
+                if let Some(range) = selected {
+                    let place = (x, cell, y);
+                    let pair = (measure, theme);
+                    let size = (100, end, crate::palette::BOX_SELECTION_INSET);
+                    crate::palette::box_selection(
+                        grid,
+                        place,
+                        words,
+                        range,
+                        size,
+                        theme.input,
+                        pair,
+                        drawn,
+                    );
+                }
+            };
+            mark(grid, false);
             grid.label_at(x, cell, y, words, theme.text, end, 100);
+            mark(grid, true);
         }
         // Raised in the box, as every text box's words are.
         grid.lift_since(words, crate::measures::field_lift(measure));
@@ -1382,7 +1403,7 @@ impl SettingsPage {
             None => field.right().saturating_sub(1),
         };
         let advances = measure.advances(&self.filter, Font::default());
-        let caret = crate::field::caret_of(&self.filter, self.filter_back);
+        let caret = self.filter.caret();
         let before = self.filter[..caret].chars().count().min(advances.len());
         let start = if measure.in_cells() {
             f32::from(cell)
@@ -1424,7 +1445,7 @@ impl SettingsPage {
         }
         let at = self.filter.char_indices().nth(letters);
         let at = at.map_or(self.filter.len(), |(at, _)| at);
-        crate::field::set_caret(&self.filter, &mut self.filter_back, at);
+        self.filter.set_caret(at);
         self.focus = None;
         true
     }

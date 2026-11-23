@@ -7,6 +7,7 @@ use cellix_core::pattern::{Options, SWITCHES};
 use cellix_core::{Match, Workspace};
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 
+use crate::field::TextBox;
 use crate::palette::{Input, input};
 use crate::theme::Theme;
 
@@ -43,11 +44,8 @@ enum Row<'a> {
 /// The Search panel, which takes the sidebar's place as it does in VS Code.
 pub struct Search {
     root: PathBuf,
-    pub query: String,
-    pub replace: String,
-    /// How much of each box's words stands after its caret (`field::caret_of`).
-    pub back: usize,
-    pub replace_back: usize,
+    pub query: TextBox,
+    pub replace: TextBox,
     pub options: Options,
     /// Which box has the keyboard, if any.
     pub focus: Option<Field>,
@@ -116,10 +114,8 @@ impl Search {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
-            query: String::new(),
-            replace: String::new(),
-            back: 0,
-            replace_back: 0,
+            query: TextBox::default(),
+            replace: TextBox::default(),
             options: Options::default(),
             focus: None,
             results: Vec::new(),
@@ -130,11 +126,19 @@ impl Search {
         }
     }
 
-    /// The box with the keyboard, and its caret.
-    pub fn field_mut(&mut self) -> Option<(&mut String, &mut usize)> {
+    /// The box with the keyboard.
+    pub fn field_mut(&mut self) -> Option<&mut TextBox> {
         match self.focus? {
-            Field::Query => Some((&mut self.query, &mut self.back)),
-            Field::Replace => Some((&mut self.replace, &mut self.replace_back)),
+            Field::Query => Some(&mut self.query),
+            Field::Replace => Some(&mut self.replace),
+        }
+    }
+
+    /// The box with the keyboard, to read.
+    pub fn field(&self) -> Option<&TextBox> {
+        match self.focus? {
+            Field::Query => Some(&self.query),
+            Field::Replace => Some(&self.replace),
         }
     }
 
@@ -150,8 +154,8 @@ impl Search {
         let (line, shown) = self.field_box(area, field, theme);
         let at = crate::palette::input_press(line, &shown, x, measure);
         match field {
-            Field::Query => crate::field::set_caret(&self.query, &mut self.back, at),
-            Field::Replace => crate::field::set_caret(&self.replace, &mut self.replace_back, at),
+            Field::Query => self.query.set_caret(at),
+            Field::Replace => self.replace.set_caret(at),
         }
         self.focus = Some(field);
     }
@@ -166,7 +170,8 @@ impl Search {
             return;
         }
         let (sender, receiver) = crate::wake::channel();
-        let (generation, query, options) = (self.generation, self.query.clone(), self.options);
+        let query = self.query.text().to_string();
+        let (generation, options) = (self.generation, self.options);
         let workspace = Workspace::new(self.root.clone());
         thread::spawn(move || {
             let _ = sender.send((generation, workspace.search(&query, options)));
@@ -180,7 +185,7 @@ impl Search {
         self.incoming = None;
         self.top = 0;
         self.collapsed.clear();
-        self.query = query;
+        self.query.set(query);
         self.results = results;
     }
 
@@ -258,14 +263,9 @@ impl Search {
     /// is, and what it shows. The switches stand inside the query's end, and its words stop
     /// short of them.
     fn field_box(&self, area: Rect, field: Field, theme: &Theme) -> (Rect, Input<'_>) {
-        let (text, hint, back, row) = match field {
-            Field::Query => (self.query.as_str(), "Search", self.back, 1),
-            Field::Replace => (
-                self.replace.as_str(),
-                "Replace",
-                self.replace_back,
-                REPLACE_ROW,
-            ),
+        let (text, hint, row) = match field {
+            Field::Query => (&self.query, "Search", 1),
+            Field::Replace => (&self.replace, "Replace", REPLACE_ROW),
         };
         let end = area.right().saturating_sub(2);
         let width = if field == Field::Replace {
@@ -279,12 +279,8 @@ impl Search {
             Field::Replace => 0,
         };
         let shown = Input {
-            text,
-            hint,
-            focused: self.focus == Some(field),
-            behind: theme.sidebar.bg,
-            caret: crate::field::caret_of(text, back),
             kept,
+            ..Input::of(text, hint, self.focus == Some(field), theme.sidebar.bg)
         };
         (line, shown)
     }

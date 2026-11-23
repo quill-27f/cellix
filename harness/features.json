@@ -7656,5 +7656,12 @@
     "title": "The Cellix opened last on a folder serves its agents, so one left in tmux or behind a dropped SSH link no longer answers for the one in front; the older says so, removes nothing of the newer's, and takes the agents back once the newer closes",
     "test": "a_workspace_gives_its_agents_to_a_cellix_opened_later_and_takes_them_back",
     "passes": true
+  },
+  {
+    "id": "every-box-edits-as-the-file-does",
+    "milestone": 15,
+    "title": "Every text box is the file's own editing core: Shift with each move selects, Ctrl+A selects all, typing and pasting replace the selection, undo and redo group as the file's, Copy and Cut take what's selected, in every form a terminal sends the keys",
+    "test": "every_key_does_in_every_box_what_it_does_in_the_file",
+    "passes": true
   }
 ]

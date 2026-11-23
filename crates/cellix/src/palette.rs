@@ -5,6 +5,7 @@ use std::rc::Rc;
 use cellix_input::{Command, Format, KeyEvent};
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Rgb, Style};
 
+use crate::field::TextBox;
 use crate::measures::field_lift;
 use crate::theme::Theme;
 
@@ -475,10 +476,9 @@ pub const COMMANDS: [(&str, Command); 129] = [
 
 /// Quick open and the command palette: a filtered list with a text box.
 pub struct Palette {
-    pub query: String,
-    /// How much of what's typed stands after the caret, in bytes. It's counted from the end,
+    /// What's typed. Words given afresh keep the caret as far from their end as it stood,
     /// so whatever sets or adds to the words leaves the caret after them.
-    back: usize,
+    pub query: TextBox,
     /// What the empty field says.
     hint: &'static str,
     items: Vec<Item>,
@@ -830,8 +830,7 @@ fn same_letter(c: char, lower: char) -> bool {
 impl Palette {
     pub fn new(items: Vec<Item>) -> Self {
         let mut palette = Self {
-            query: String::new(),
-            back: 0,
+            query: TextBox::default(),
             hint: "Type to search",
             items,
             matches: Vec::new(),
@@ -856,39 +855,31 @@ impl Palette {
 
     /// Where the caret is in what's typed, in bytes.
     pub fn caret(&self) -> usize {
-        let mut at = self.query.len().saturating_sub(self.back);
-        while !self.query.is_char_boundary(at) {
-            at -= 1;
-        }
-        at
-    }
-
-    /// How much of what's typed stands after the caret, to hand to the list that takes
-    /// this one's place when what's typed turns Quick Open to symbols, commands or files.
-    pub fn after_caret(&self) -> usize {
-        self.back
+        self.query.caret()
     }
 
     /// Puts the caret that far from the end of what's typed.
     pub fn set_after_caret(&mut self, back: usize) {
-        self.back = back.min(self.query.len());
+        self.query.set_back(back);
     }
 
     /// Takes a key that edits what's typed or moves the caret in it, as any text box does:
     /// the arrows, Home and End, by word with Alt or Ctrl, Delete, and the deletes a Mac or
     /// a shell has taught. Returns whether the words changed.
     pub fn key(&mut self, key: KeyEvent) -> bool {
-        let was = self.query.clone();
-        let mut caret = self.caret();
-        crate::field::key(&mut self.query, &mut caret, key);
-        self.back = self.query.len().saturating_sub(caret);
+        self.key_as(key, cellix_input::simple_keymap(key))
+    }
+
+    /// `key`, with the command the app's keymap makes of it.
+    pub fn key_as(&mut self, key: KeyEvent, command: Option<Command>) -> bool {
+        let was = self.query.text().to_string();
+        self.query.key_as(key, command);
         self.query != was
     }
 
-    /// Puts text in at the caret, which ends up after it.
+    /// Puts text in place of what's selected, or at the caret, which ends up after it.
     pub fn insert(&mut self, text: &str) {
-        let at = self.caret();
-        self.query.insert_str(at, text);
+        self.query.insert(text);
     }
 
     /// Where what's typed starts in the field, how wide each of its letters is, and how
@@ -956,7 +947,7 @@ impl Palette {
         }
         let at = self.query.char_indices().nth(letters);
         let at = at.map_or(self.query.len(), |(at, _)| at);
-        self.back = self.query.len() - at;
+        self.query.set_caret(at);
     }
 
     /// Takes what Quick Open is asked for, to list by at the next `filter`.
@@ -1048,7 +1039,7 @@ impl Palette {
         palette.prefix = Some(prefix);
         palette.grouped = prefix == '@';
         palette.quick = true;
-        palette.query = format!("{prefix}{typed}");
+        palette.query.set(format!("{prefix}{typed}"));
         palette.set_items(items);
         palette
     }
@@ -1566,7 +1557,30 @@ impl Palette {
         if self.query.is_empty() {
             grid.label_at(x, cell, y, self.hint, dim, end, 100);
         } else {
+            // What's selected of what shows, as the file shows its selection.
+            let from = from.map_or(self.query.len(), |(from, _)| from);
+            let selected = self
+                .query
+                .selection()
+                .map(|(a, b)| (a.max(from) - from, b.max(from) - from));
+            let mark = |grid: &mut Grid, drawn| {
+                if let Some(range) = selected {
+                    let pair = (measure, theme);
+                    box_selection(
+                        grid,
+                        (x, cell, y),
+                        shown,
+                        range,
+                        (100, end, BOX_SELECTION_INSET),
+                        base.bg,
+                        pair,
+                        drawn,
+                    );
+                }
+            };
+            mark(grid, false);
             grid.label_at(x, cell, y, shown, base, end, 100);
+            mark(grid, true);
         }
         if let Some((text, _)) = status {
             grid.label_right(right, y, text, dim, 85);
@@ -1943,6 +1957,87 @@ pub struct Input<'a> {
     /// Columns at the box's end that something inside it takes, as Find's switches do: the
     /// words and the caret stop short of them.
     pub kept: u16,
+    /// What's selected in `text`, in bytes, when anything is.
+    pub selection: Option<(usize, usize)>,
+}
+
+impl<'a> Input<'a> {
+    /// A box showing what `field` holds, its caret and its selection.
+    pub fn of(field: &'a crate::field::TextBox, hint: &'a str, focused: bool, behind: Rgb) -> Self {
+        Self {
+            text: field.text(),
+            hint,
+            focused,
+            behind,
+            caret: field.caret(),
+            kept: 0,
+            selection: field.selection(),
+        }
+    }
+}
+
+/// How far inside its row a one-row box's selection stands, at its top and its foot, in rows:
+/// it takes 0.69 of the terminal's line, round the words' ascenders and descenders and clear of
+/// the box's line. Paint of 0.7 of the line or more is a control that grows with a taller row
+/// (`cellix_render::raster::stood`), and at 0.78 and over it covered the box's focus ring;
+/// at 0.64 a "q" hung out of it (the ui-expert's reviews of 08-open-file-select and
+/// 11-find-select).
+pub const BOX_SELECTION_INSET: (f32, f32) = (0.16, 0.15);
+/// The same in a box of several rows, the comment's and the commit message's, where it has
+/// the row to itself: from 2 px over the ascenders to 2 px under the descenders. At 0.18 a "y"
+/// hung 2 px out of it (13-source-message-select).
+pub const ROWS_SELECTION_INSET: (f32, f32) = (0.11, 0.11);
+
+/// What's selected in a box's words, as the file shows its own: the selection's colour
+/// behind bytes `a..b` of `text`, whose words start at `x` (`cell` in cells) on row `y`, and
+/// the words on it kept readable. Paint goes under the words, so it's called before they're
+/// drawn; cells are coloured after, so it's called again once they are (`drawn`).
+#[allow(clippy::too_many_arguments)]
+pub fn box_selection(
+    grid: &mut Grid,
+    (x, cell, y): (f32, u16, u16),
+    text: &str,
+    (a, b): (usize, usize),
+    (size, right, (top, foot)): (u8, u16, (f32, f32)),
+    ground: Rgb,
+    (measure, theme): (&dyn Measure, &Theme),
+    drawn: bool,
+) {
+    let (a, b) = (a.min(text.len()), b.min(text.len()));
+    if a >= b || drawn != measure.in_cells() {
+        return;
+    }
+    let font = Font {
+        size,
+        ..Font::default()
+    };
+    let advances = measure.advances(text, font);
+    let letters = |bytes: usize| text[..bytes].chars().count().min(advances.len());
+    let (first, last) = (letters(a), letters(b));
+    let before: f32 = advances[..first].iter().sum();
+    let wide: f32 = advances[first..last].iter().sum();
+    // The file's own selection colour, as VS Code has one for every box: walked toward the
+    // accent only where it wouldn't show on the box's ground.
+    let band = if measure.in_cells() {
+        theme.selection_on(ground)
+    } else {
+        theme.selection
+    };
+    if measure.in_cells() {
+        let left = cell + before.round() as u16;
+        let wide = (wide.round() as u16).min(right.saturating_sub(left));
+        grid.set_style(Rect::new(left, y, wide, 1), |style| Style {
+            fg: theme.on_selection(style.fg, band),
+            bg: band,
+            ..style
+        });
+        return;
+    }
+    let from = x + before;
+    let wide = wide.min(f32::from(right) - from).max(0.0);
+    let tall = 1.0 - top - foot;
+    let shape = Bounds::cells(from, f32::from(y) + top, wide, tall);
+    grid.panel(shape, 0, Some(band), None);
 }
 
 /// Space between a text box's edge and its text: a column.
@@ -2091,7 +2186,32 @@ pub fn input(grid: &mut Grid, line: Rect, field: &Input, measure: &dyn Measure, 
         let at = |letter: usize| field.text.char_indices().nth(letter).map(|(at, _)| at);
         let from = at(shown.hidden).unwrap_or(field.text.len());
         let to = at(shown.hidden + fit).unwrap_or(field.text.len());
-        grid.label_at(x, first, y, &field.text[from..to], style, end, 95);
+        let shown_text = &field.text[from..to];
+        // What's selected of the part that shows, as the file shows its selection.
+        let selected = field.selection.filter(|_| field.focused).map(|(a, b)| {
+            let clip = |at: usize| at.clamp(from, to) - from;
+            (clip(a), clip(b))
+        });
+        let mark = |grid: &mut Grid, drawn| {
+            if let Some(range) = selected {
+                let place = (x, first, y);
+                let ground = theme.input;
+                let pair = (measure, theme);
+                box_selection(
+                    grid,
+                    place,
+                    shown_text,
+                    range,
+                    (95, end, BOX_SELECTION_INSET),
+                    ground,
+                    pair,
+                    drawn,
+                );
+            }
+        };
+        mark(grid, false);
+        grid.label_at(x, first, y, shown_text, style, end, 95);
+        mark(grid, true);
     }
     grid.lift_since(words, field_lift(measure));
     if field.focused {
@@ -2251,7 +2371,7 @@ mod tests {
     fn a_long_query_keeps_clear_of_the_status() {
         let field = |query: &str| {
             let mut palette = Palette::new(Vec::new());
-            palette.query = query.to_string();
+            palette.query = query.into();
             palette.status = Some("8,310 files…".to_string());
             let mut grid = Grid::new(100, 20, Style::default());
             palette.draw(
@@ -2372,7 +2492,7 @@ mod tests {
     fn the_file_a_query_names_is_listed_first_and_once() {
         let file = |path: &str| Item::File(PathBuf::from("/w").join(path), path.to_string());
         let mut palette = Palette::new(vec![file("src/app.rs"), file("vendor/src/app.rs")]);
-        palette.query = "src/app.rs:12".to_string();
+        palette.query = "src/app.rs:12".into();
         palette.seek(Sought {
             needle: "src/app.rs".to_string(),
             place: Some(Place {
@@ -2397,7 +2517,7 @@ mod tests {
             ["src/app.rs", "src/app.rs.orig", "vendor/src/app.rs"]
         );
         // Something else typed, and the row kept for it is out of the list.
-        palette.query = "vendor".to_string();
+        palette.query = "vendor".into();
         palette.seek(Sought {
             needle: "vendor".to_string(),
             ..Sought::default()
@@ -2467,7 +2587,7 @@ mod tests {
         palette.move_by(1);
         assert_eq!(palette.current().map(Item::label), Some("impl Queue"));
         // "push" matches "pu" better than "impl Queue" does, so its kind comes first.
-        palette.query = "@pu".to_string();
+        palette.query = "@pu".into();
         palette.filter();
         assert_eq!(palette.current().map(Item::label), Some("push"));
         assert_eq!(palette.status.as_deref(), Some("2 of 3"));
@@ -2483,7 +2603,7 @@ mod tests {
         let mut palette = Palette::asking(items, "Switch branch");
         palette.move_by(1);
         assert_eq!(palette.current(), Some(&Item::NewBranch));
-        palette.query = "new".to_string();
+        palette.query = "new".into();
         palette.filter();
         assert_eq!(
             palette.current(),
@@ -2499,7 +2619,7 @@ mod tests {
             .map(|(label, command)| Item::Command(label, *command))
             .collect();
         let mut palette = Palette::new(items);
-        palette.query = "op".to_string();
+        palette.query = "op".into();
         palette.filter();
         let labels: Vec<&str> = palette
             .matches
@@ -2534,7 +2654,7 @@ mod tests {
             ("stash", "Stash", 3),
             ("go to", "Go to", 5),
         ] {
-            palette.query = query.to_string();
+            palette.query = query.into();
             palette.filter();
             let titles: Vec<&str> = palette
                 .matches

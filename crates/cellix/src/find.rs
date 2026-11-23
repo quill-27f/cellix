@@ -3,6 +3,8 @@ const MAX_MATCHES: usize = 10_000;
 
 use cellix_core::pattern::{Options, char_ranges};
 
+use crate::field::TextBox;
+
 /// A screen Find looks through that isn't a file or a terminal: everything it lists.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Looked {
@@ -18,16 +20,13 @@ pub enum Looked {
 /// Find in the current file, and replace when that row is open. Matches are char ranges.
 #[derive(Default)]
 pub struct Find {
-    pub query: String,
+    /// What's looked for: its caret stands at its end as it opens.
+    pub query: TextBox,
     pub matches: Vec<(usize, usize)>,
     pub current: usize,
     pub options: Options,
-    /// How much of the query stands after its caret: none, as it opens.
-    pub back: usize,
     /// What matches become, while the replace row shows.
-    pub replace: Option<String>,
-    /// How much of that stands after its caret.
-    pub replace_back: usize,
+    pub replace: Option<TextBox>,
     /// The replace field has the keyboard.
     pub in_replace: bool,
     /// Why the query can't be searched for, as a regular expression that doesn't parse.
@@ -66,39 +65,43 @@ impl Find {
         self.current = self.matches.iter().position(|m| m.0 >= from).unwrap_or(0);
     }
 
-    /// The field that has the keyboard, and its caret, kept as how much of it stands after
-    /// the caret (`field::caret_of`).
-    pub fn field_mut(&mut self) -> (&mut String, &mut usize) {
+    /// The field that has the keyboard.
+    pub fn field_mut(&mut self) -> &mut TextBox {
         match &mut self.replace {
-            Some(with) if self.in_replace => (with, &mut self.replace_back),
-            _ => (&mut self.query, &mut self.back),
+            Some(with) if self.in_replace => with,
+            _ => &mut self.query,
+        }
+    }
+
+    /// The field that has the keyboard, to read.
+    pub fn field(&self) -> &TextBox {
+        match &self.replace {
+            Some(with) if self.in_replace => with,
+            _ => &self.query,
         }
     }
 
     /// Where the caret is in the query, in bytes.
     pub fn caret(&self) -> usize {
-        crate::field::caret_of(&self.query, self.back)
+        self.query.caret()
     }
 
     /// Where the caret is in what matches become.
     pub fn replace_caret(&self) -> usize {
-        let with = self.replace.as_deref().unwrap_or_default();
-        crate::field::caret_of(with, self.replace_back)
+        self.replace.as_ref().map_or(0, TextBox::caret)
     }
 
     /// A key for the field that has the keyboard, which edits it as any text box is edited.
     /// Returns whether the query changed, and so is to be looked for again.
     pub fn key(&mut self, key: cellix_input::KeyEvent) -> bool {
-        let was = self.query.clone();
-        let (text, back) = self.field_mut();
-        crate::field::line_key(text, back, key);
+        let was = self.query.text().to_string();
+        self.field_mut().line_key(key);
         self.query != was
     }
 
     /// Puts what's pasted in at the caret of the field that has the keyboard.
     pub fn paste(&mut self, pasted: &str) {
-        let (text, back) = self.field_mut();
-        crate::field::line_insert(text, back, pasted);
+        self.field_mut().insert(pasted);
     }
 
     pub fn step(&mut self, delta: isize) {
@@ -182,7 +185,7 @@ mod tests {
 
     fn find(query: &str, text: &str, from: usize) -> Find {
         let mut find = Find {
-            query: query.to_string(),
+            query: query.into(),
             ..Find::default()
         };
         find.search(text, from);

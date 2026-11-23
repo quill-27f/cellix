@@ -3,10 +3,11 @@
 
 use std::borrow::Cow;
 
-use cellix_input::{Command, Key, KeyEvent, simple_keymap};
+use cellix_input::{Command, Key, KeyEvent};
 use cellix_render::{Bounds, Font, Grid, Icon, Measure, Rect, Style};
 use emojis::{Emoji, EmojiVersion, Group};
 
+use crate::field::TextBox;
 use crate::measures::{emoji_start, glyph_chip};
 use crate::theme::Theme;
 
@@ -57,12 +58,24 @@ pub fn open_code(text: &str, caret: usize) -> Option<(usize, &str)> {
 
 /// Turns the `:name:` that ends at the caret into its emoji, as its second colon is typed.
 /// Returns the emoji when it did.
+#[cfg(test)]
 pub fn close_code(text: &mut String, caret: &mut usize) -> Option<&'static str> {
     let inner = text.get(..*caret)?.strip_suffix(':')?;
     let (colon, name) = open_code(inner, inner.len())?;
     let emoji = named(name)?.as_str();
     text.replace_range(colon..*caret, emoji);
     *caret = colon + emoji.len();
+    Some(emoji)
+}
+
+/// `close_code` for a box being written in: the `:name:` before its caret becomes its emoji,
+/// as one step of undo.
+pub fn close_code_in(field: &mut TextBox) -> Option<&'static str> {
+    let caret = field.caret();
+    let inner = field.text().get(..caret)?.strip_suffix(':')?;
+    let (colon, name) = open_code(inner, inner.len())?;
+    let emoji = named(name)?.as_str();
+    field.replace(colon, caret, emoji);
     Some(emoji)
 }
 
@@ -221,7 +234,7 @@ enum Row {
 /// Every emoji in a grid, under a field that searches them by name.
 pub struct Picker {
     origin: (u16, u16),
-    pub query: String,
+    pub query: TextBox,
     /// The ones listed first while nothing is typed.
     first: Vec<&'static str>,
     shown: Vec<&'static Emoji>,
@@ -249,7 +262,7 @@ impl Picker {
         };
         let mut picker = Self {
             origin: (x, y),
-            query: String::new(),
+            query: TextBox::default(),
             first: first.to_vec(),
             shown: Vec::new(),
             rows: Vec::new(),
@@ -376,11 +389,11 @@ impl Picker {
             Key::Up => self.selected = self.beside(false),
             Key::Down => self.selected = self.beside(true),
             Key::Backspace => {
-                self.query.pop();
+                self.query.run(Command::DeleteBackward);
                 self.list();
             }
             Key::Char(c) => {
-                self.query.push(c);
+                self.query.type_char(c);
                 self.list();
             }
             _ => {}
@@ -388,27 +401,29 @@ impl Picker {
         self.keep_in_view();
     }
 
-    /// The deletes a Mac or a shell has taught, by word and to the start, from the field's
-    /// end, where its caret stays: the arrows are for moving among the emoji. Returns whether
-    /// it was one.
-    pub fn delete(&mut self, key: KeyEvent) -> bool {
-        let deletes = matches!(
-            simple_keymap(key),
-            Some(Command::DeleteWordLeft | Command::DeleteToLineStart)
-        );
-        if !deletes && !crate::field::takes_word(key) {
+    /// A key for the field, which edits as every box does, but for the plain arrows, which
+    /// move among the emoji: Shift with them selects, Alt moves by word, Home and End, the
+    /// deletes, undo. Returns whether it was the field's.
+    pub fn edit(&mut self, key: KeyEvent) -> bool {
+        let arrow = matches!(key.key, Key::Left | Key::Right | Key::Up | Key::Down);
+        let plain = !key.mods.shift && !key.mods.alt && !key.mods.ctrl;
+        if (arrow && plain) || matches!(key.key, Key::Up | Key::Down) {
             return false;
         }
-        let mut caret = self.query.len();
-        crate::field::key(&mut self.query, &mut caret, key);
-        self.list();
-        self.keep_in_view();
+        let was = self.query.text().to_string();
+        if !self.query.key(key) {
+            return false;
+        }
+        if self.query != was {
+            self.list();
+            self.keep_in_view();
+        }
         true
     }
 
     /// Takes pasted words into the field.
     pub fn paste(&mut self, text: &str) {
-        self.query.push_str(text.trim());
+        self.query.insert(text.trim());
         self.list();
     }
 
@@ -488,9 +503,24 @@ impl Picker {
         if self.query.is_empty() {
             grid.label_at(x + 0.45, cell, area.y, "Search emoji", dim, right, 100);
         } else {
+            // What's selected, as the file shows its selection.
+            let mark = |grid: &mut Grid, drawn| {
+                if let Some(range) = self.query.selection() {
+                    let place = (x, cell, area.y);
+                    let pair = (measure, theme);
+                    let text = self.query.text();
+                    let size = (100, right, crate::palette::BOX_SELECTION_INSET);
+                    crate::palette::box_selection(
+                        grid, place, text, range, size, base.bg, pair, drawn,
+                    );
+                }
+            };
+            mark(grid, false);
             grid.label_at(x, cell, area.y, &self.query, base, right, 100);
+            mark(grid, true);
         }
-        let caret = x - 0.1 + measure.width(&self.query, Font::default());
+        let before = &self.query[..self.query.caret()];
+        let caret = x - 0.1 + measure.width(before, Font::default());
         grid.set_caret(caret, area.y, 0.56);
         let across = f32::from(area.w);
         let line = Bounds::cells(
@@ -671,7 +701,7 @@ mod tests {
         picker.query.clear();
         picker.paste("party");
         assert!(picker.shown.iter().any(|e| e.as_str() == "🎉"));
-        picker.query = "zzzz".to_string();
+        picker.query = "zzzz".into();
         picker.list();
         assert_eq!(picker.current(), None);
     }

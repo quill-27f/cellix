@@ -2719,23 +2719,8 @@ impl Editor {
         }
         match command {
             Command::Move(direction, extend) => {
-                let motion = match direction {
-                    Direction::Left => Motion::Left,
-                    Direction::Right => Motion::Right,
-                    Direction::Up => Motion::Up,
-                    Direction::Down => Motion::Down,
-                    Direction::WordLeft => Motion::WordLeft,
-                    Direction::WordRight => Motion::WordRight,
-                    Direction::LineStart => Motion::LineStart,
-                    Direction::LineColumnZero => Motion::LineColumnZero,
-                    Direction::LineEnd => Motion::LineEnd,
-                    Direction::Top => Motion::Top,
-                    Direction::Bottom => Motion::Bottom,
-                    Direction::PageUp => Motion::PageUp(page),
-                    Direction::PageDown => Motion::PageDown(page),
-                    Direction::NextWordStart => Motion::NextWordStart,
-                    Direction::FindChar(c, forward, till) => Motion::FindChar(c, forward, till),
-                };
+                // The same table every text box moves through.
+                let motion = crate::field::motion(direction, page);
                 self.selections
                     .apply_motion(self.buffer.rope(), motion, extend);
             }
