@@ -2,6 +2,19 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.15.0] - 2026-11-25
+
+Review a doc that lives in another tool, commenting one paragraph at a time.
+
+### Added
+- **Review Remote Doc…** (the palette, or `cellix review <link>`): Claude Code reads a document and its comments in the background, through the MCP server of the tool it lives in, and Cellix opens it as a page under a cloud tab, with where it came from, when it was synced, **Sync**, **Open in Browser** and **End Review**. The first review asks which MCP server is the doc tool's (`remote_docs_mcp`, also in Settings › Integrations), and the agent is allowed that server's tools only. The copy is kept under `.cellix/remote`, which git ignores, until you end the review.
+- Others' comments show under their names, with their replies. Yours are drafts until you press **Post to Doc** on one: that posts that comment, once, and its card then says when it was posted. Nothing else posts, not Sync and not Enter. A post that fails keeps the draft and says why, a sign-in that ran out included, with **Retry** and **Copy**.
+- **Polish** has the agent make a draft short and clear; its version shows under yours with **Use This** and **Keep Mine**.
+- Replies to any comment are drafts posted one by one the same way.
+
+### Fixed
+- Cellix's tests started your own login shell for their terminals, running its startup files; a slow one held a test run up for half an hour. Tests now always use `/bin/sh`, and you still get your own shell.
+
 ## [0.14.2] - 2026-11-24
 
 A long question in Ask wraps, and all of it stays in view.

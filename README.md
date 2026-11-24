@@ -392,6 +392,17 @@ Code is working here, **With the agent's conversation** asks in a copy of what i
 leaving its own conversation as it was. Claude Code, Codex and Gemini CLI can answer, and
 `ask_agent` in the settings picks one.
 
+**Reviewing a doc that lives elsewhere.** When a document is kept in a tool your agent reaches through
+an MCP server (a team's docs behind a sign-in, say), **Review Remote Doc…** in the palette, or
+`cellix review <link>`, has Claude Code read it in the background and opens it as a page here, with
+everyone's comments under their names. The first time, Cellix asks which of the MCP servers Claude
+Code knows is the doc tool's (`remote_docs_mcp`, or Settings › Integrations), and the agent is allowed
+that server's tools and nothing else. You read, Ask, and write your comments as drafts; **Polish** has
+the agent make one short and clear, to use or not. A comment goes to the doc only when you press **Post
+to Doc** on it, one at a time as you read, never in a batch; **Copy** is there to paste it yourself.
+Replies work the same way, **Sync** brings in what others have added, and **End Review** removes the
+copy kept under `.cellix/remote`. Codex and Gemini CLI can't read remote docs yet.
+
 The icons at the top right start a real agent, a terminal or a browser in the side pane, beside your file. Press Ctrl+` to
 move the keyboard between the two (Ctrl+P and Ctrl+Shift+P open their lists from either, and a
 file picked there takes the keyboard), and the hide-pane icon at the top right, or Ctrl+Shift+`, to hide
