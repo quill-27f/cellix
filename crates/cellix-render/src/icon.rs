@@ -121,6 +121,10 @@ pub enum Icon {
     ChevronLeft = 93,
     /// Lucide's cloud: a doc that lives elsewhere, read through an agent.
     Cloud = 94,
+    /// Lucide's send, a paper plane: what posts to a remote doc.
+    Send = 95,
+    /// Lucide's copy: two sheets, one over the other.
+    Copy = 96,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -1007,6 +1011,33 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             let foot = outside + qx.max(qy).min(0.0);
             big.min(small).min(foot).abs()
         }
+        // A plane from the bottom left to the top right corner, its fold down the middle.
+        Icon::Send => path(
+            p,
+            &[
+                (22.0, 2.0),
+                (15.0, 22.0),
+                (11.0, 13.0),
+                (2.0, 9.0),
+                (22.0, 2.0),
+            ],
+        )
+        .min(segment(p, (22.0, 2.0), (11.0, 13.0))),
+        // A sheet at the bottom right, and the corner of one behind it at the top left.
+        Icon::Copy => rounded(p, (8.0, 8.0), (22.0, 22.0), 2.0).min(path(
+            p,
+            &[
+                (4.0, 16.0),
+                (2.9, 15.6),
+                (2.0, 14.0),
+                (2.0, 4.0),
+                (2.6, 2.6),
+                (4.0, 2.0),
+                (14.0, 2.0),
+                (15.4, 2.6),
+                (16.0, 4.0),
+            ],
+        )),
     };
     distance < half_stroke(icon)
 }
@@ -1084,6 +1115,8 @@ mod tests {
             Icon::AgentCursor,
             Icon::AgentKiro,
             Icon::Cloud,
+            Icon::Send,
+            Icon::Copy,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

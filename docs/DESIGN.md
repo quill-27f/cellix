@@ -1008,7 +1008,10 @@ answers with data that Cellix checks and writes itself (`remote.rs`, `app/remote
   quietly the version, "synced N ago" and how many comments are others', and at its end Sync,
   Open in Browser (the system's browser, where the doc tool's sign-in is, never the pane's)
   and a menu with End Review. A workspace's remote docs reopen next run from `.cellix/remote`.
-- Cards: someone's says "Priya · in the doc", with Reply, Ask Agent and Open in Doc. The
+- Cards: someone's says "Priya · in the doc", the name bold in the words' colour as a reply's
+  author's is (the reviewer's "You" stays plain), with Reply, Ask Agent and Open in Doc. Post
+  to Doc, Post Reply and Retry carry a paper plane before their words and Copy two sheets, as
+  the board draws them. The server menu opens with a row lit for Enter. The
   reviewer's is a draft until its own Post to Doc (filled), with Copy, Polish, Edit and
   Delete; its pill says "Draft, not posted yet", "Posting…", "Posted N ago" in green, or "Not
   posted" in red with why under the words and Retry and Copy. A sign-in the doc tool wants

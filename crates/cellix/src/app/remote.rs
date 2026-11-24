@@ -208,14 +208,21 @@ impl App {
         }
         let picked = self.settings.remote_docs_mcp.clone();
         let mut items = vec![MenuItem::heading("Read remote docs through")];
+        // The keys are on the one in use, else the first, so Enter has a row to take, as
+        // a menu asked for from the keyboard has.
+        let mut lit = 1;
         for server in servers {
             let mut item = MenuItem::new(server.clone(), MenuAction::RemoteServer(server.clone()));
             if picked.as_deref() == Some(server.as_str()) {
                 item.detail = Some("in use".into());
+                lit = items.len();
             }
             items.push(item);
         }
         self.show_menu(at, items);
+        if let Overlay::Menu(menu) = &mut self.overlay {
+            menu.selected = Some(lit);
+        }
     }
 
     /// Keeps the server picked for every review on this machine, and reads the doc waiting.

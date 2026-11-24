@@ -232,6 +232,76 @@ fn reply_post_labels(posting: PostState) -> &'static [&'static str] {
     }
 }
 
+/// The mark a remote card's button has before its words, as the board draws them: a plane
+/// on what posts, two sheets on Copy.
+fn button_icon(label: &str) -> Option<Icon> {
+    match label {
+        POST | POST_REPLY | RETRY => Some(Icon::Send),
+        COPY => Some(Icon::Copy),
+        _ => None,
+    }
+}
+
+/// Columns a button's mark takes, with the air between it and the words.
+const BUTTON_ICON: u16 = 2;
+/// How tall the square a button's mark is drawn in is, in rows, and the air between its ink
+/// and the words, in columns.
+const BUTTON_MARK: f32 = 0.62;
+const BUTTON_MARK_GAP: f32 = 0.7;
+
+/// A button with its mark and its words in its middle, as one, where marks are painted; its
+/// words alone where they aren't.
+fn icon_button(
+    grid: &mut Grid,
+    (x, y): (u16, u16),
+    (cells, label, icon): (&str, &str, Icon),
+    (fill, style): (cellix_render::Rgb, Style),
+    measure: &dyn Measure,
+) {
+    if measure.in_cells() {
+        grid.button(x, y, cells, label, fill, style);
+        return;
+    }
+    grid.button(x, y, cells, "", fill, style);
+    let font = Font {
+        size: BUTTON_TEXT,
+        ..Font::default()
+    };
+    let words = measure.width(label, font);
+    let whole = cells.chars().count() as f32;
+    // The mark at the board's share of the words' capitals, its ink (2 to 22 of its 24) then
+    // the same air before the words on every button: as the glyph's own size it stood 29 px
+    // tall over 17 px capitals, and Copy's words were nearer it than Post to Doc's.
+    let side = icon_columns(BUTTON_MARK, measure);
+    let ink = side * 20.0 / 24.0;
+    let lead = side * 2.0 / 24.0;
+    let start = x as f32 + (whole - words - ink - BUTTON_MARK_GAP) / 2.0;
+    let painted = grid.painted_so_far();
+    grid.paint.push(Paint::Icon {
+        bounds: Bounds::cells(
+            start - lead,
+            f32::from(y) + (1.0 - BUTTON_MARK) / 2.0,
+            side,
+            BUTTON_MARK,
+        ),
+        icon,
+        color: style.fg,
+    });
+    let at = start + ink + BUTTON_MARK_GAP;
+    let text = Style {
+        painted: true,
+        ..style
+    };
+    // Its letters a cell in from the button's start, a cell each, so the screen's text has
+    // them whole: from where they're painted they ran past its end ("Post to Do").
+    let end = x + whole as u16;
+    let cell = (x + 1)
+        .min(end.saturating_sub(label.chars().count() as u16))
+        .max(x);
+    grid.label_at(at, cell, y, label, text, end, BUTTON_TEXT);
+    grid.centre_span_since(painted);
+}
+
 /// The labels of a remote comment's row of buttons, those before the plain ones at its end.
 fn posting_labels(posting: PostState) -> &'static [&'static str] {
     match posting {
@@ -660,6 +730,14 @@ fn small() -> Font {
     Font {
         size: SMALL,
         ..Font::default()
+    }
+}
+
+/// The same, bold: someone's name on a remote doc's card.
+fn small_bold() -> Font {
+    Font {
+        bold: true,
+        ..small()
     }
 }
 
@@ -3284,7 +3362,11 @@ fn row_of(
     labels
         .iter()
         .map(|label| {
-            let cells = button_cells(label, measure);
+            let mut cells = button_cells(label, measure);
+            // Room for its mark before its words, where it has one and marks are painted.
+            if button_icon(label).is_some() && !measure.in_cells() {
+                cells.push_str(&" ".repeat(BUTTON_ICON as usize));
+            }
             let at = x;
             x += cells.chars().count() as u16 + BUTTON_GAP;
             (*label, cells, at)
@@ -4134,7 +4216,7 @@ pub fn draw(
             Line::EmptyHint(hint) => {
                 grid.label_at(side as f32, side, y, hint, dim, right, SMALL);
             }
-            Line::Header(_, label, suggested, pill) => {
+            Line::Header(id, label, suggested, pill) => {
                 let style = Style {
                     fg: if *suggested {
                         theme.accent
@@ -4156,10 +4238,29 @@ pub fn draw(
                 // Its number, last and muted, as VS Code's comment says when it was made: a
                 // suggestion's who is in the accent, and its number isn't.
                 let (who, number) = label.rsplit_once(NUMBER_GAP).unwrap_or((label, ""));
-                grid.label_at(a.text, text_x, y, who, style, end, SMALL);
+                // Someone's on a remote doc: their name bold in the words' colour, as the
+                // board has it, and what follows it as the rest of the header is.
+                let named = threads
+                    .iter()
+                    .find(|t| t.id == *id)
+                    .filter(|t| !t.author.is_empty())
+                    .and_then(|_| who.split_once(" \u{b7} "));
+                let (mut at, mut cell) = (a.text, text_x);
+                if let Some((name, _)) = named {
+                    let bold = Style {
+                        fg: theme.text.fg,
+                        bold: true,
+                        ..inner
+                    };
+                    grid.label_at(at, cell, y, name, bold, end, SMALL);
+                    at += measure.width(name, small_bold());
+                    cell += name.chars().count() as u16;
+                }
+                let rest = named.map_or(who, |(name, _)| &who[name.len()..]);
+                grid.label_at(at, cell, y, rest, style, end, SMALL);
                 if !number.is_empty() {
-                    let at = a.text + measure.width(who, small());
-                    let cell = text_x + who.chars().count() as u16;
+                    let at = at + measure.width(rest, small());
+                    let cell = cell + rest.chars().count() as u16;
                     let muted = Style {
                         fg: theme.gutter.fg,
                         ..inner
@@ -4272,7 +4373,31 @@ pub fn draw(
                     x += chip + 0.4;
                 }
                 let at = (x.ceil() as u16).max(text_x);
-                grid.label_at(x, at, y, author, muted, right, SMALL);
+                // Someone's reply on a remote doc: their name bold in the words' colour.
+                let someone = threads
+                    .iter()
+                    .find(|t| t.id == *id)
+                    .and_then(|t| t.replies.get(*n))
+                    .is_some_and(|r| r.remote.is_some() && r.author != YOU);
+                let named = someone.then(|| {
+                    author
+                        .split_once(" \u{b7} ")
+                        .unwrap_or((author.as_str(), ""))
+                });
+                let (mut x, mut at) = (x, at);
+                if let Some((name, _)) = named {
+                    let bold = Style {
+                        fg: theme.text.fg,
+                        bold: true,
+                        ..muted
+                    };
+                    grid.label_at(x, at, y, name, bold, right, SMALL);
+                    grid.drop_last(VERDICT_DROP);
+                    x += measure.width(name, small_bold());
+                    at += name.chars().count() as u16;
+                }
+                let rest = named.map_or(author.as_str(), |(name, _)| &author[name.len()..]);
+                grid.label_at(x, at, y, rest, muted, right, SMALL);
                 grid.drop_last(VERDICT_DROP);
                 // Edit and Delete for the reply the pointer is on, plain words at the row's
                 // end as the comment's own are: only Delete for an agent's, whose words aren't
@@ -4807,6 +4932,8 @@ pub fn draw(
                     let drawn = grid.painted_so_far();
                     if label == MORE {
                         draw_more(grid, (x, y), &cells, (fill, style), measure);
+                    } else if let Some(icon) = button_icon(label) {
+                        icon_button(grid, (x, y), (&cells, label, icon), (fill, style), measure);
                     } else {
                         grid.button(x, y, &cells, label, fill, style);
                     }
@@ -4831,7 +4958,13 @@ pub fn draw(
                         fg: if main { theme.button_text } else { inner.fg },
                         ..inner
                     };
-                    grid.button(x, y, &cells, label, fill, style);
+                    match button_icon(label) {
+                        Some(icon) => {
+                            let what = (cells.as_str(), label, icon);
+                            icon_button(grid, (x, y), what, (fill, style), measure);
+                        }
+                        None => grid.button(x, y, &cells, label, fill, style),
+                    }
                 }
             }
             Line::Polished(_, what) => {

@@ -711,3 +711,66 @@ fn replies_post_one_by_one_and_end_review_takes_the_doc_away() {
     assert!(!screen(&app).row_text(0).contains("Queue service launch"));
     assert_eq!(runs(dir.path()), 2);
 }
+
+/// As the board has them: someone's name on a remote card stands bold in the words' colour,
+/// theirs and their reply's, while the reviewer's "You" doesn't; the menu that picks the MCP
+/// server has a row lit for Enter, the one in use or the first; and Post to Doc and Copy carry
+/// their marks, a plane and two sheets, before their words, which still press the same.
+#[test]
+fn a_remote_cards_names_menu_and_marks_stand_as_the_board_has_them() {
+    use cellix_render::{Icon, Paint};
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    // The menu, before anything is picked: its first server lit.
+    answers(dir.path(), 1, &printed(&read_answer(json!([]))));
+    app.run(Command::ReviewRemoteDoc);
+    typed(&mut app, LINK);
+    key(&mut app, Key::Enter);
+    let lit = match &app.overlay {
+        super::Overlay::Menu(menu) => menu.selected,
+        _ => None,
+    };
+    assert_eq!(lit, Some(1), "the first server, under the heading");
+    // Enter takes it: the row is lit for the keys as well as shown.
+    key(&mut app, Key::Enter);
+    assert_eq!(app.settings.remote_docs_mcp.as_deref(), Some(SERVER));
+    shows(&mut app, "From team-docs, read by Claude Code");
+    comment(
+        &mut app,
+        "slow consumer",
+        "What happens when one consumer is slow?",
+    );
+
+    app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
+    let grid = screen(&app);
+    let texts: Vec<(&str, bool)> = grid
+        .paint
+        .iter()
+        .filter_map(|p| match p {
+            Paint::Text { text, font, .. } => Some((text.as_str(), font.bold)),
+            _ => None,
+        })
+        .collect();
+    assert!(texts.contains(&("Priya", true)), "{texts:?}");
+    assert!(texts.contains(&("Sam", true)), "{texts:?}");
+    assert!(
+        !texts.iter().any(|(t, bold)| t.starts_with("You") && *bold),
+        "{texts:?}"
+    );
+    let icons: Vec<Icon> = grid
+        .paint
+        .iter()
+        .filter_map(|p| match p {
+            Paint::Icon { icon, .. } => Some(*icon),
+            _ => None,
+        })
+        .collect();
+    assert!(icons.contains(&Icon::Send), "{icons:?}");
+    assert!(icons.contains(&Icon::Copy), "{icons:?}");
+    assert!(texts.contains(&("Post to Doc", false)), "{texts:?}");
+
+    // On cells, no marks and the same words, and a press on Copy still copies.
+    app.set_measure(std::rc::Rc::new(cellix_render::CellMeasure));
+    press_on_card(&mut app, "What happens when one consumer is slow?", "Copy");
+    assert_eq!(app.clipboard, "What happens when one consumer is slow?");
+}
