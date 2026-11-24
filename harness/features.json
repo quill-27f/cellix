@@ -7733,5 +7733,12 @@
     "title": "Replies on a remote doc are drafts posted one by one under their comment's id, and End Review asks, then takes the doc, its tab and its comments off the machine",
     "test": "replies_post_one_by_one_and_end_review_takes_the_doc_away",
     "passes": true
+  },
+  {
+    "id": "tests-never-run-own-shell",
+    "milestone": 15,
+    "title": "A test's Terminal is /bin/sh whatever SHELL says, and the PTY and tmux tests start Cellix with SHELL=/bin/sh, so no test reads the person's own shell or its startup files; a person's Terminal is still their SHELL",
+    "test": "a_tests_terminal_is_bin_sh_whatever_shell_says",
+    "passes": true
   }
 ]

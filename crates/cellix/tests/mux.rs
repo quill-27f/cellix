@@ -51,6 +51,9 @@ impl Tmux {
         let output = Command::new("tmux")
             // Your own tmux.conf can renumber windows and panes.
             .args(["-f", "/dev/null", "-L", &self.socket])
+            // A server's panes run its `SHELL`: never the person's own, with their startup
+            // files, and Cellix's Terminal inside takes it from there too.
+            .env("SHELL", "/bin/sh")
             .args(args)
             .output()
             .expect("tmux must be installed");

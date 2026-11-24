@@ -102,10 +102,19 @@ pub const SHELL: (&str, &str) = ("Terminal", "shell");
 /// The program a Terminal tab runs: the user's shell, or on Windows PowerShell, which every
 /// Windows has. There `SHELL` is unset, or a Unix path Git Bash left behind.
 pub fn shell() -> String {
+    shell_for(|name| std::env::var(name).ok(), cfg!(test))
+}
+
+/// The same, from `var`. A test's Terminal is always `/bin/sh`, never the person's own shell:
+/// a test's zsh read its owner's startup files, one of which ran `gh completion`, which never
+/// returned, and the whole gate hung on it.
+pub fn shell_for(var: impl Fn(&str) -> Option<String>, testing: bool) -> String {
     if cfg!(windows) {
         "powershell.exe".to_string()
+    } else if testing {
+        "/bin/sh".to_string()
     } else {
-        std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string())
+        var("SHELL").unwrap_or_else(|| "sh".to_string())
     }
 }
 

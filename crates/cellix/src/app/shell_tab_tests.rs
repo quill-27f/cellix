@@ -109,3 +109,32 @@ fn a_shells_tab_names_what_runs_in_it_and_turns_while_it_does() {
     let (grid, _, row) = tabs(&app);
     assert!(!row.contains("sleep") && !grid.spinning, "{row}");
 }
+
+/// A test's Terminal is `/bin/sh`, whatever `SHELL` says, so no test reads its owner's own
+/// shell and its startup files: a test's zsh ran `gh completion` from them, which never
+/// returned, and the gate hung. A person's Terminal is still their `SHELL`. Driven through
+/// the palette's Terminal, and read off what the shell itself says it is.
+#[test]
+#[cfg(unix)]
+fn a_tests_terminal_is_bin_sh_whatever_shell_says() {
+    let zsh = |name: &str| (name == "SHELL").then(|| "/bin/zsh".to_string());
+    assert_eq!(crate::agents::shell_for(zsh, true), "/bin/sh");
+    assert_eq!(
+        crate::agents::shell_for(zsh, false),
+        "/bin/zsh",
+        "a person's own"
+    );
+    assert_eq!(crate::agents::shell_for(|_| None, false), "sh");
+    let (_dir, mut app) = project();
+    app.run(cellix_input::Command::NewTerminal);
+    app.dock.sessions[0].send_line("echo \"running=$0\"");
+    until(&mut app, "said which shell it is", |app| {
+        printed(app, "running=/bin/sh") || printed(app, "running=sh")
+    });
+    assert!(
+        !app.dock
+            .sessions
+            .iter()
+            .any(|s| s.lines().iter().any(|l| l.contains("zsh")))
+    );
+}

@@ -4643,3 +4643,10 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - End Review, in the strip's menu, asks ("End this review?", saying drafts not posted go too), then deletes `.cellix/remote/<slug>`, closes its tab and takes its comments away: the user's company's content doesn't linger.
 - Test: `replies_post_one_by_one_and_end_review_takes_the_doc_away` (two reply drafts, nothing run by writing them; one press posts that one under `c1` and not the other; End Review asks before anything goes, then the folder, the comments and the tab are gone). Sync's merging is proven in `a_draft_is_posted_only_by_its_own_press_and_only_once` and `remote::tests::a_read_merges_by_id_and_keeps_drafts`.
 - Unverified: a real doc tool's reply tool. Next: what the ui-expert left (authors not bold, the server menu with no row lit, icons on Post to Doc and Copy), and Codex and Gemini CLI as readers.
+
+## Tests never start the person's own shell (2026-11-24)
+
+- Track D's last gate hung for its whole half hour: terminal tests (`select_tests::terminal`) opened a Terminal tab, which runs `SHELL`, the person's zsh; its startup files ran `gh completion`, which never returned. Tests must have no side effects, and running someone's startup files is one.
+- Now `agents::shell()` goes through `shell_for(var, testing)`: in a test build it's `/bin/sh` whatever `SHELL` says; a person's Terminal is their `SHELL` as before. The PTY tests start Cellix with `SHELL=/bin/sh` unless a test names its own (the shared `start_full` and the three that build their command by hand), and the tmux tests start their server with it. The tour and perf already did.
+- Test: `a_tests_terminal_is_bin_sh_whatever_shell_says` (`shell_for` with `SHELL=/bin/zsh`: `/bin/sh` testing, `/bin/zsh` for a person; then the palette's New Terminal in a test App, the shell itself saying it's `sh`). Gated with the environment as it is, `SHELL` the person's zsh.
+- Left: `harness/visual.sh` opens real windows in the person's own terminal, as it's meant to.

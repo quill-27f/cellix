@@ -153,6 +153,11 @@ impl Screen {
                 command.env(name, value);
             }
         }
+        // Never the person's own shell: a Terminal tab runs `SHELL`, and theirs reads their
+        // startup files, one of which hung a gate. A test that names one keeps it.
+        if !env.iter().any(|(name, _)| *name == "SHELL") {
+            command.env("SHELL", "/bin/sh");
+        }
         // Never the real cache: what one Cellix leaves there, such as the workspaces it had
         // open, would reach every other test's Cellix and the person's own. One cache per
         // project, so a Cellix started again in it finds what the last one left. Short, since a
@@ -740,6 +745,7 @@ fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
         })
         .unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
+    command.env("SHELL", "/bin/sh");
     command.cwd(dir.path());
     command.arg("hello.txt");
     let mut child = pty.slave.spawn_command(command).unwrap();
@@ -820,6 +826,7 @@ fn pty_a_press_in_pixels_lands_on_its_line_after_a_resize() {
     };
     let pty = native_pty_system().openpty(size(30)).unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
+    command.env("SHELL", "/bin/sh");
     command.cwd(dir.path());
     command.arg("lines.txt");
     let mut child = pty.slave.spawn_command(command).unwrap();
@@ -935,6 +942,7 @@ fn pty_follows_a_resize() {
         })
         .unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
+    command.env("SHELL", "/bin/sh");
     command.cwd(dir.path());
     let mut child = pty.slave.spawn_command(command).unwrap();
     let reader = pty.master.try_clone_reader().unwrap();
