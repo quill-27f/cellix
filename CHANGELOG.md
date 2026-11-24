@@ -2,6 +2,13 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.14.2] - 2026-11-24
+
+A long question in Ask wraps, and all of it stays in view.
+
+### Fixed
+- Ask's field put a long question on one line, running past the box's edge where it couldn't be seen. It now wraps as the comment box does, a line at a time under one box, up to five lines and then keeping the line you're typing on in view; a click on any line puts the caret there. The follow-up field does the same.
+
 ## [0.14.1] - 2026-11-23
 
 Settings' switches are round.

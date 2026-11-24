@@ -4606,3 +4606,8 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - Test: `a_long_question_wraps_in_asks_field_and_stays_in_view` (24 words in a 70-column window: 2 to 5 rows, the last words in view, nothing past the card's edge; 12 words all shown; a press on the second line's first word puts the caret before it).
 - Tour: new scene `q1-ask-field-long`; looked at it beside `q1-ask-field` and `q4-ask-follow-up`. The ui-expert's review found the wrapped box 2 px higher than one line's and 15 px from the buttons where one line's is 19: a box shorter than its row is placed by `raster::stood` on the line's scale (grown to 0.78 of an airy row), a taller one on the row's. Its edges now stand where `stood` puts one line's box, and both measure the same (top and the 19 px gap). Its other point, the last line's descenders 7 px from the box's foot, is as a typed one-line field has it; kept so the two match.
 - Left: the emoji picker's field still doesn't scroll a long text.
+
+## Release 0.14.2 (2026-11-24)
+
+- On the user's word: "Release automatically after the fix". 0.14.2 is `e322895` (entry above): Ask's field wraps a long question under one box. README says nothing about the field's width, so it's unchanged.
+- Before this: a pass of every test with no agent on the PATH, and Linux's input path (crossterm's `use-dev-tty`) on macOS. Run beside the no-agents pass, at a load of about 20, `an_idle_window_wakes_only_when_something_is_due` counted 11 wakes in 5.3 s (2.06 a second against its 2.01: one extra, in its first window); run alone just after, all 41 PTY tests passed, that one too. Nothing in this release touches the loop.
