@@ -4628,3 +4628,10 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - Tests: `a_draft_is_posted_only_by_its_own_press_and_only_once` (two drafts, nothing run by saving them; Sync reads again and brings a new comment and reply by id, both drafts still drafts; one press posts that one alone, its prompt holding its words and quote and not the other's, allowed only the doc tool's server, the id kept, posted once after more polling; a later Sync finds it by its id and adds nothing twice) and `a_failed_post_keeps_the_draft_and_says_why` (the sign-in failure on the card, the draft unchanged, Copy, Retry posting it).
 - Scenes: `r3-remote-posting`, `r4-remote-posted`, `r5-remote-failed`, looked at with the ui-expert in the commit before.
 - Unverified: whether a real doc tool's comment tool can anchor on a quote; where it can't, the agent posts the comment unanchored or says why.
+
+## Remote doc review: Polish (2026-11-24)
+
+- The user: "I ask cellix to validate my comment and make it better (short and concise)". Polish on a draft runs Claude Code with no tools at all (`--tools "" --strict-mcp-config`), told the draft's words, its quote and the paragraph round them: "Make this review comment short, clear and kind; keep its meaning; answer with the text only". Its suggestion stands under the draft in a box of the page's ground: a "Polished" chip, "Claude Code · 17 words, from 38", the words, then Use This and Keep Mine. Use This makes them the draft's words; it's still a draft, posted only by its own Post to Doc. Keep Mine leaves the draft. While it runs the card says "Polishing with Claude Code…" and the bar's spinner "Polishing".
+- Test: `polish_suggests_a_shorter_draft_to_use_or_not` (no tools allowed, the prompt's words, quote and paragraph, the counts on the card, Keep Mine and then Use This, nothing posted).
+- Scene: `r2-remote-polish`; the ui-expert's review moved the box half a row down with air over and under it (it crowded the draft's last words and stood on Post to Doc).
+- Left: the board's 7 px between the box and the buttons is about 25 px here, a row's air being what a card's rows have.

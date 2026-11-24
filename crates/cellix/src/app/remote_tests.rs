@@ -580,3 +580,52 @@ fn a_failed_post_keeps_the_draft_and_says_why() {
     });
     assert_eq!(runs(dir.path()), 3);
 }
+
+/// Polish has the agent, with no tools at all, make a draft short, clear and kind, told its
+/// words, its quote and the paragraph round them. The suggestion shows under the draft with
+/// the words counted, after and before; Use This takes it as the draft's words, still a draft,
+/// and Keep Mine leaves the draft as it was. Polish posts nothing.
+#[test]
+fn polish_suggests_a_shorter_draft_to_use_or_not() {
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    read_doc(dir.path(), &mut app);
+    let long = "I think this is a problem because if one consumer gets slow for whatever reason \
+                then all of the events behind it are going to wait, and the doc doesn't say \
+                what happens then or how we'd notice.";
+    comment(&mut app, "slow consumer", long);
+    let short = "One slow consumer stalls its partition. How is that detected, and does the \
+                 two-second shed cover it?";
+    answers(dir.path(), 2, &printed(short));
+    press_on_card(&mut app, "Draft, not posted yet", "Polish");
+    let text = shows(&mut app, "Use This").text();
+    let (args, prompt, side) = given(dir.path(), 2);
+    assert_eq!(side, "1");
+    assert_eq!(values(&args, "--tools"), [""]);
+    assert!(
+        args.contains(&"--strict-mcp-config".to_string()),
+        "{args:?}"
+    );
+    assert!(values(&args, "--allowedTools").is_empty(), "{args:?}");
+    assert!(prompt.contains("short, clear and kind"), "{prompt}");
+    assert!(prompt.contains(long), "{prompt}");
+    assert!(
+        prompt.contains("Each partition is drained by one consumer"),
+        "{prompt}"
+    );
+    assert!(text.contains("Polished"), "{text}");
+    assert!(text.contains("Claude Code · 17 words, from 38"), "{text}");
+    assert!(text.contains("Keep Mine"), "{text}");
+    assert_eq!(thread_saying(&app, long).text, long);
+
+    // Keep Mine leaves the draft; asked again, Use This takes the suggestion.
+    press_on_card(&mut app, "Polished", "Keep Mine");
+    assert!(!screen(&app).text().contains("Use This"));
+    assert_eq!(thread_saying(&app, long).text, long);
+    answers(dir.path(), 3, &printed(short));
+    press_on_card(&mut app, "Draft, not posted yet", "Polish");
+    shows(&mut app, "Use This");
+    press_on_card(&mut app, "Polished", "Use This");
+    assert_eq!(state_of(&app, short), Some(Sent::Draft), "still a draft");
+    assert_eq!(runs(dir.path()), 3, "nothing posted");
+}

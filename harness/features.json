@@ -7719,5 +7719,12 @@
     "title": "A post the doc tool refuses keeps the draft and says why on its card, a run-out sign-in in words of its own, with Retry and Copy; Retry posts it",
     "test": "a_failed_post_keeps_the_draft_and_says_why",
     "passes": true
+  },
+  {
+    "id": "remote-doc-polish",
+    "milestone": 15,
+    "title": "Polish has the agent, with no tools, make a remote draft short, clear and kind; the suggestion shows under it with the words counted, Use This takes it as the draft and Keep Mine leaves it",
+    "test": "polish_suggests_a_shorter_draft_to_use_or_not",
+    "passes": true
   }
 ]
