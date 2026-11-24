@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use cellix_input::{Command, Event, Key, KeyEvent, Mods, MouseEvent, MouseKind};
 use cellix_render::Grid;
-use cellix_review::threads::Remote;
+use cellix_review::threads::{Remote, Sent};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -190,6 +190,29 @@ fn find_from(grid: &Grid, text: &str, from: u16) -> Option<(u16, u16)> {
     })
 }
 
+/// Presses the button that says `words` first under the card that says `card`.
+fn press_on_card(app: &mut App, card: &str, words: &str) {
+    let grid = screen(app);
+    let (_, top) = find(&grid, card);
+    let (x, y) = find_from(&grid, words, top)
+        .unwrap_or_else(|| panic!("no {words:?} under {card:?}:\n{}", grid.text()));
+    click(app, x + 1, y);
+}
+
+/// Presses `words` on the first row under the card that says `card` that also says `beside`:
+/// a button among others whose words another's contain ("Reply" in "Post Reply").
+fn press_beside(app: &mut App, card: &str, beside: &str, words: &str) {
+    let grid = screen(app);
+    let (_, top) = find(&grid, card);
+    let (_, y) = find_from(&grid, beside, top)
+        .unwrap_or_else(|| panic!("no {beside:?} under {card:?}:\n{}", grid.text()));
+    let row = grid.row_text(y);
+    let at = row
+        .find(words)
+        .unwrap_or_else(|| panic!("no {words:?} in {row}"));
+    click(app, row[..at].chars().count() as u16 + 1, y);
+}
+
 /// Polls until `done` holds.
 fn until(app: &mut App, what: &str, done: impl Fn(&App) -> bool) {
     let deadline = Instant::now() + PATIENCE;
@@ -215,11 +238,48 @@ fn shows(app: &mut App, want: &str) -> Grid {
     screen(app)
 }
 
+/// Selects `words` in the doc in front, as a drag over them does.
+fn select(app: &mut App, words: &str) {
+    let editor = app.editor_mut().unwrap();
+    let text = editor.buffer.text();
+    let start = text[..text.find(words).unwrap()].chars().count();
+    editor.selections.set_single(cellix_core::Selection {
+        anchor: start,
+        head: start + words.chars().count(),
+        goal: None,
+    });
+}
+
+/// A comment of the reviewer's on `words`, saved as Enter saves it.
+fn comment(app: &mut App, words: &str, text: &str) {
+    select(app, words);
+    app.run(Command::AddComment);
+    typed(app, text);
+    key(app, Key::Enter);
+}
+
 fn thread_saying<'a>(app: &'a App, text: &str) -> &'a cellix_review::Thread {
     app.threads
         .iter()
         .find(|t| t.text == text)
         .unwrap_or_else(|| panic!("no comment {text:?}"))
+}
+
+fn state_of(app: &App, text: &str) -> Option<Sent> {
+    thread_saying(app, text)
+        .remote
+        .as_ref()
+        .map(|r| r.state.clone())
+}
+
+/// The doc read as the palette reads it, the server picked already.
+fn read_doc(dir: &Path, app: &mut App) {
+    app.settings.remote_docs_mcp = Some(SERVER.to_string());
+    answers(dir, 1, &printed(&read_answer(json!([]))));
+    app.run(Command::ReviewRemoteDoc);
+    typed(app, LINK);
+    key(app, Key::Enter);
+    shows(app, "From team-docs, read by Claude Code");
 }
 
 /// The palette's Review Remote Doc… asks for a link, and the first time, which of Claude
@@ -358,4 +418,165 @@ fn a_remote_doc_is_read_through_its_mcp_server_and_opens_as_a_page() {
         grid.row_text(1)
     );
     assert_eq!(runs(dir.path()), 1, "nothing ran again");
+}
+
+/// The reviewer's comments on a remote doc are drafts. Neither Enter nor Sync posts one: Sync
+/// reads the doc again, bringing in a new comment and reply by id and leaving the drafts as
+/// they were. One press on a card's Post to Doc posts that comment, and only it, once: the
+/// agent is told its quote and words, allowed only the doc tool's server, and the card says
+/// Posted with the doc's id kept; the other draft is still one. A later Sync finds the posted
+/// one by its id and adds nothing twice.
+#[test]
+fn a_draft_is_posted_only_by_its_own_press_and_only_once() {
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    read_doc(dir.path(), &mut app);
+    comment(
+        &mut app,
+        "slow consumer",
+        "What happens when one consumer is slow?",
+    );
+    comment(&mut app, "holiday week", "Which week exactly?");
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("Draft, not posted yet"), "{text}");
+    assert!(
+        text.contains("Save") || text.contains("Post to Doc"),
+        "{text}"
+    );
+    assert_eq!(text.matches("Post to Doc").count(), 2, "{text}");
+    assert_eq!(state_of(&app, "Which week exactly?"), Some(Sent::Draft));
+    assert_eq!(runs(dir.path()), 1, "saving a draft posts nothing");
+
+    // Sync reads again and posts nothing.
+    let synced = read_with_replies(
+        json!([
+            {"id": "c2", "author": "Sam", "quote": "drained by one consumer",
+             "text": "Is one consumer enough?", "at": 1_795_500_000},
+        ]),
+        json!([{"id": "r2", "author": "Priya", "text": "Thanks."}]),
+    );
+    answers(dir.path(), 2, &printed(&synced));
+    let (x, y) = find(&screen(&app), "Sync");
+    click(&mut app, x + 1, y);
+    shows(&mut app, "Is one consumer enough?");
+    until(&mut app, "synced", |app| app.remote.reading.is_none());
+    assert_eq!(runs(dir.path()), 2);
+    let (args, prompt, _) = given(dir.path(), 2);
+    assert!(prompt.contains("read the document"), "{prompt}");
+    assert_eq!(values(&args, "--allowedTools"), ["mcp__team-docs__*"]);
+    assert_eq!(
+        thread_saying(&app, "Where does 3x come from?")
+            .replies
+            .len(),
+        2
+    );
+    for draft in [
+        "What happens when one consumer is slow?",
+        "Which week exactly?",
+    ] {
+        assert_eq!(state_of(&app, draft), Some(Sent::Draft), "{draft}");
+    }
+
+    // One press posts that comment alone.
+    answers(dir.path(), 3, &printed(r#"{"id": "c-41"}"#));
+    press_on_card(
+        &mut app,
+        "What happens when one consumer is slow?",
+        "Post to Doc",
+    );
+    until(&mut app, "posted", |app| {
+        matches!(
+            state_of(app, "What happens when one consumer is slow?"),
+            Some(Sent::Posted { .. })
+        )
+    });
+    assert_eq!(runs(dir.path()), 3);
+    let (args, prompt, _) = given(dir.path(), 3);
+    assert_eq!(values(&args, "--allowedTools"), ["mcp__team-docs__*"]);
+    assert!(
+        prompt.contains("What happens when one consumer is slow?"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Quoted words: slow consumer"), "{prompt}");
+    assert!(prompt.contains("Add only this comment, once"), "{prompt}");
+    assert!(!prompt.contains("Which week exactly?"), "{prompt}");
+    let posted = thread_saying(&app, "What happens when one consumer is slow?");
+    assert_eq!(posted.remote.as_ref().unwrap().id, "c-41");
+    let text = screen(&app).text();
+    assert!(text.contains("Posted just now"), "{text}");
+    assert_eq!(text.matches("Post to Doc").count(), 1, "{text}");
+    assert_eq!(state_of(&app, "Which week exactly?"), Some(Sent::Draft));
+    for _ in 0..20 {
+        app.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(runs(dir.path()), 3, "posted once");
+
+    // A later Sync finds it by its id: nothing twice, the draft still a draft.
+    let count = app.threads.len();
+    let mine = json!([
+        {"id": "c2", "author": "Sam", "quote": "drained by one consumer",
+         "text": "Is one consumer enough?"},
+        {"id": "c-41", "author": "Reviewer", "quote": "slow consumer",
+         "text": "What happens when one consumer is slow?"},
+    ]);
+    answers(dir.path(), 4, &printed(&read_answer(mine)));
+    let (x, y) = find(&screen(&app), "Sync");
+    click(&mut app, x + 1, y);
+    until(&mut app, "synced again", |app| {
+        runs(dir.path()) == 4 && app.remote.reading.is_none()
+    });
+    assert_eq!(app.threads.len(), count);
+    assert!(
+        thread_saying(&app, "What happens when one consumer is slow?")
+            .author
+            .is_empty()
+    );
+    assert_eq!(state_of(&app, "Which week exactly?"), Some(Sent::Draft));
+}
+
+/// A post the doc tool refuses keeps the draft as it was and says why on its card, a sign-in
+/// that ran out in words that say what to do, with Retry and Copy; Copy puts its words on the
+/// clipboard, and Retry posts it.
+#[test]
+fn a_failed_post_keeps_the_draft_and_says_why() {
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    read_doc(dir.path(), &mut app);
+    let words = "What happens when one consumer is slow?";
+    comment(&mut app, "slow consumer", words);
+    answers(
+        dir.path(),
+        2,
+        &printed(r#"{"error": "Your session has expired. Please sign in again."}"#),
+    );
+    press_on_card(&mut app, words, "Post to Doc");
+    until(&mut app, "failed", |app| {
+        matches!(state_of(app, words), Some(Sent::Failed { .. }))
+    });
+    assert_eq!(
+        state_of(&app, words),
+        Some(Sent::Failed {
+            why: remote::SIGN_IN_AGAIN.to_string()
+        })
+    );
+    assert_eq!(
+        thread_saying(&app, words).text,
+        words,
+        "the draft is as it was"
+    );
+    let text = screen(&app).text();
+    assert!(text.contains("Not posted"), "{text}");
+    assert!(text.contains("asked to sign in again"), "{text}");
+    assert!(text.contains("Retry"), "{text}");
+    press_on_card(&mut app, words, "Copy");
+    assert_eq!(app.clipboard, words);
+    assert_eq!(runs(dir.path()), 2);
+    answers(dir.path(), 3, &printed(r#"{"id": "c-7"}"#));
+    press_beside(&mut app, words, "Copy", "Retry");
+    until(&mut app, "posted", |app| {
+        matches!(state_of(app, words), Some(Sent::Posted { .. }))
+    });
+    assert_eq!(runs(dir.path()), 3);
 }

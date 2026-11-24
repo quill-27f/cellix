@@ -7705,5 +7705,19 @@
     "title": "Review Remote Doc… and cellix review <link> have Claude Code read a doc through the MCP server picked among those it knows, allowed only that server's tools; it opens as a read-only page named by its title with a cloud, a strip saying where it's from with Sync and Open in Browser, and others' comments as threads under their names",
     "test": "a_remote_doc_is_read_through_its_mcp_server_and_opens_as_a_page",
     "passes": true
+  },
+  {
+    "id": "remote-doc-post",
+    "milestone": 15,
+    "title": "On a remote doc the reviewer's comments are drafts that only their own Post to Doc posts, one comment once, never Sync or Enter; Sync merges by id and keeps drafts",
+    "test": "a_draft_is_posted_only_by_its_own_press_and_only_once",
+    "passes": true
+  },
+  {
+    "id": "remote-doc-post-failed",
+    "milestone": 15,
+    "title": "A post the doc tool refuses keeps the draft and says why on its card, a run-out sign-in in words of its own, with Retry and Copy; Retry posts it",
+    "test": "a_failed_post_keeps_the_draft_and_says_why",
+    "passes": true
   }
 ]
