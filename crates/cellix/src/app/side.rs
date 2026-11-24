@@ -101,14 +101,18 @@ pub(super) struct Side {
     pub version: u64,
 }
 
+/// How many lines of a long question Ask's field shows; past them it keeps the caret's in view.
+const FIELD_ROWS: usize = 5;
+
 /// What the card holds, row by row between its edges.
 #[derive(Clone, Debug, PartialEq)]
 enum Row {
     /// The question, or what the card asks for, bold; at its end, quietly, who answers.
     Head(String, String),
-    /// A field: its words, or its hint while empty, the caret's place in them, and what's
-    /// selected of them.
-    Field(String, bool, Option<usize>, Option<(usize, usize)>),
+    /// A line of a field: its words, or its hint while empty, the caret's place in them, what's
+    /// selected of them, and where the line starts in the field's text. A field longer than its
+    /// box is several, each a line of its words wrapped as a comment's are, under one box.
+    Field(String, bool, Option<usize>, Option<(usize, usize)>, usize),
     /// The choice of the agent's conversation, and whether it's chosen.
     Choice(bool),
     /// A row of the answer, or of what's wrong.
@@ -583,16 +587,30 @@ impl App {
     /// them.
     pub(super) fn side_field_place(&self, mouse: MouseEvent, clamp: bool) -> Option<usize> {
         let card = self.side_card()?;
-        let field = self.side.as_ref()?.field.as_ref()?;
+        self.side.as_ref()?.field.as_ref()?;
         let area = card.area;
-        let row = card.rows.iter().position(|r| matches!(r, Row::Field(..)))?;
-        let y = area.y + 1 + row as u16;
+        // The field's lines, each with its row, its words and where they start.
+        let lines: Vec<(u16, &str, usize)> = card
+            .rows
+            .iter()
+            .enumerate()
+            .filter_map(|(n, r)| match r {
+                Row::Field(words, hint, _, _, start) => {
+                    let words = if *hint { "" } else { words.as_str() };
+                    Some((area.y + 1 + n as u16, words, *start))
+                }
+                _ => None,
+            })
+            .collect();
+        let (top, bottom) = (lines.first()?.0, lines.last()?.0);
         let x = area.x + INSET;
         let right = area.right().saturating_sub(INSET);
-        let on = mouse.y == y && mouse.x + 1 >= x && mouse.x < right;
+        let on = (top..=bottom).contains(&mouse.y) && mouse.x + 1 >= x && mouse.x < right;
         if !clamp && !on {
             return None;
         }
+        let row = mouse.y.clamp(top, bottom);
+        let (_, text, line_start) = *lines.iter().find(|(y, _, _)| *y == row)?;
         let lead = self.card_lead(area);
         let inset = measures::columns(Self::card_room(), &*self.measure);
         let start = match inset {
@@ -608,7 +626,6 @@ impl App {
         } else {
             start
         };
-        let text = field.text();
         let advances = self.measure.advances(text, Font::default());
         let mut letters = 0;
         for advance in advances.iter() {
@@ -618,10 +635,13 @@ impl App {
             edge += advance;
             letters += 1;
         }
+        // Past a wrapped line's last letter is the next line's start, which is the same place.
         Some(
-            text.char_indices()
-                .nth(letters)
-                .map_or(text.len(), |(at, _)| at),
+            line_start
+                + text
+                    .char_indices()
+                    .nth(letters)
+                    .map_or(text.len(), |(at, _)| at),
         )
     }
 
@@ -993,6 +1013,46 @@ impl App {
         }
     }
 
+    /// A field's rows: its words wrapped to its box, as a comment's are in theirs, at most
+    /// `FIELD_ROWS` of them, the ones round the caret when there are more. Its words went on
+    /// one row, past the box's right edge, where they couldn't be seen.
+    fn field_rows(&self, field: &TextBox, hint: &str, width: f32) -> Vec<Row> {
+        if field.is_empty() {
+            return vec![Row::Field(hint.to_string(), true, Some(0), None, 0)];
+        }
+        let text = field.text();
+        // Inside the box: its padding each side where there are pictures, and room at the
+        // right for the caret and Vim's mode.
+        let pad = measures::columns(COMMAND_PADDING, &*self.measure).unwrap_or(0.0);
+        let mode = field
+            .mode_word()
+            .map_or(0.0, |word| self.measure.width(word, Font::default()) + 1.0);
+        let inside = (width - pad * 2.0 - mode - 1.0).max(4.0);
+        let spans = crate::threads::wrap_spans(text, inside, &*self.measure);
+        let (caret, selected) = (field.caret(), field.selection());
+        // At one line's end and the next one's start, it's at the start of the next.
+        let on = spans
+            .iter()
+            .rposition(|(start, end)| *start <= caret && caret <= *end)
+            .unwrap_or(0);
+        let first = on
+            .saturating_sub(FIELD_ROWS - 1)
+            .min(spans.len().saturating_sub(FIELD_ROWS));
+        spans
+            .iter()
+            .enumerate()
+            .skip(first)
+            .take(FIELD_ROWS)
+            .map(|(index, &(start, end))| {
+                let at = (index == on).then(|| caret - start);
+                let in_line = selected
+                    .map(|(a, b)| (a.clamp(start, end) - start, b.clamp(start, end) - start))
+                    .filter(|(a, b)| a < b);
+                Row::Field(text[start..end].to_string(), false, at, in_line, start)
+            })
+            .collect()
+    }
+
     /// What the card says, row by row, its words set to `width` columns.
     fn side_rows(&self, side: &Side, width: f32) -> Vec<Row> {
         let measure = &*self.measure;
@@ -1011,17 +1071,7 @@ impl App {
                 rows.push(Row::Head(format!("Ask {who}"), String::new()));
                 let field = side.field.clone().unwrap_or_default();
                 let hint = format!("Ask about ‘{shown_quote}’…");
-                if field.is_empty() {
-                    rows.push(Row::Field(hint, true, Some(0), None));
-                } else {
-                    let (caret, selected) = (field.caret(), field.selection());
-                    rows.push(Row::Field(
-                        field.text().to_string(),
-                        false,
-                        Some(caret),
-                        selected,
-                    ));
-                }
+                rows.extend(self.field_rows(&field, &hint, width));
                 if side.main.is_some() {
                     rows.push(Row::Choice(side.copy));
                 }
@@ -1064,18 +1114,7 @@ impl App {
                     }
                 }
                 if let Some(field) = &side.field {
-                    if field.is_empty() {
-                        let hint = "Ask a follow-up…".to_string();
-                        rows.push(Row::Field(hint, true, Some(0), None));
-                    } else {
-                        let (caret, selected) = (field.caret(), field.selection());
-                        rows.push(Row::Field(
-                            field.text().to_string(),
-                            false,
-                            Some(caret),
-                            selected,
-                        ));
-                    }
+                    rows.extend(self.field_rows(field, "Ask a follow-up…", width));
                 }
             }
         }
@@ -1147,8 +1186,17 @@ impl App {
                         }
                     }
                 }
-                Row::Field(text, hint, at, selected) => {
-                    let boxed = Rect::new(x - 1, y, area.w.saturating_sub(INSET * 2 - 2), 1);
+                Row::Field(text, hint, at, selected, _) => {
+                    // The field's lines stand under one box, drawn with its first.
+                    let first = n == 0 || !matches!(card.rows[n - 1], Row::Field(..));
+                    let lines = card.rows[n..]
+                        .iter()
+                        .take_while(|r| matches!(r, Row::Field(..)))
+                        .count() as u16;
+                    let last_line =
+                        n + 1 == card.rows.len() || !matches!(card.rows[n + 1], Row::Field(..));
+                    let wide_box = area.w.saturating_sub(INSET * 2 - 2);
+                    let boxed = Rect::new(x - 1, y, wide_box, 1);
                     let well = Style {
                         fg: theme.text.fg,
                         bg: theme.popup_input(),
@@ -1158,18 +1206,41 @@ impl App {
                     // What's typed `COMMAND_PADDING` into it, as in a card's box for a command.
                     let start = match inside {
                         Some((left, wide)) => {
-                            let air = cellix_render::FIELD_AIR;
-                            let ground = Bounds::inset(boxed, 0.0, 0.0);
-                            grid.panel(ground, 0, Some(theme.popup), None);
-                            let tall = 1.0 - air * 2.0;
-                            let bounds = Bounds::cells(left, f32::from(y) + air, wide, tall);
-                            let (fill, line) = (theme.popup_input(), theme.focus);
-                            grid.panel(bounds, 22, Some(fill), Some(line));
+                            if first {
+                                let air = cellix_render::FIELD_AIR;
+                                let all = Rect::new(x - 1, y, wide_box, lines);
+                                let ground = Bounds::inset(all, 0.0, 0.0);
+                                grid.panel(ground, 0, Some(theme.popup), None);
+                                // One line's box is shorter than its row, so it's drawn on the
+                                // words' line's scale in the middle of the row; a taller one
+                                // on the row's. Its edges stand where one line's would: at the
+                                // row's scale they stood 2 px higher and 4 px nearer the last
+                                // line's letters, and 4 px nearer the buttons (ui-expert).
+                                let edge = match self.measure.cell_pixels() {
+                                    Some((_, row)) if lines > 1 => {
+                                        let row = row.max(1) as f32;
+                                        let line = row / self.measure.row_air().max(1.0);
+                                        let one = (
+                                            cellix_render::units(air),
+                                            cellix_render::units(1.0 - air * 2.0),
+                                        );
+                                        cellix_render::stood(one.0, one.1, row, line).0 / row
+                                    }
+                                    _ => air,
+                                };
+                                let tall = f32::from(lines) - edge * 2.0;
+                                let bounds = Bounds::cells(left, f32::from(y) + edge, wide, tall);
+                                let (fill, line) = (theme.popup_input(), theme.focus);
+                                grid.panel(bounds, 22, Some(fill), Some(line));
+                            }
                             let pad = measures::columns(COMMAND_PADDING, &*self.measure);
                             left + pad.unwrap_or(0.0)
                         }
                         None => {
-                            grid.field(boxed, theme.popup, theme.popup_input(), theme.focus);
+                            if first {
+                                let all = Rect::new(x - 1, y, wide_box, lines);
+                                grid.field(all, theme.popup, theme.popup_input(), theme.focus);
+                            }
                             f32::from(x)
                         }
                     };
@@ -1203,8 +1274,14 @@ impl App {
                     mark(grid, false);
                     grid.label_at(start, cell, y, text, style, right, 100);
                     mark(grid, true);
-                    // Vim's mode at the field's right, as the status bar says the file's.
-                    if let Some(word) = side.field.as_ref().and_then(TextBox::mode_word) {
+                    // Vim's mode at the field's right, on its last line, as the status bar
+                    // says the file's.
+                    if let Some(word) = side
+                        .field
+                        .as_ref()
+                        .and_then(TextBox::mode_word)
+                        .filter(|_| last_line)
+                    {
                         let quiet = Style {
                             fg: theme.popup_dim,
                             ..well

@@ -7691,5 +7691,12 @@
     "title": "A switch in Settings is a pill with a round knob whatever a cell's shape and the row height: its sizes are pixels on the words' line's scale, under the height the rasterizer grows to a chip's",
     "test": "a_settings_switch_is_a_pill_with_a_round_knob_on_any_cell",
     "passes": true
+  },
+  {
+    "id": "ask-field-wraps",
+    "milestone": 15,
+    "title": "A long question in Ask's field wraps as a comment does, a line a row under one box up to five, then keeping the caret's line in view, and a press on a wrapped line puts the caret there",
+    "test": "a_long_question_wraps_in_asks_field_and_stays_in_view",
+    "passes": true
   }
 ]

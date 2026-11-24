@@ -4598,3 +4598,11 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - On the user's word: "go ahead and release automatically after that". 0.14.1 is `2f979f9` (entry above): Settings' switches drawn as a pill with a round knob on any cell. README has nothing on the switches' shape, so it's unchanged.
 - Before this: a pass of every test with no agent on the PATH, and Linux's input path (crossterm's `use-dev-tty`) on macOS.
 - Next: the Mac shortcuts proposal (Cmd apart from Ctrl, `cellix setup ghostty`, smart dashes) waits for the user's pick.
+
+## Ask's field wraps a long question (2026-11-24)
+
+- The user: "Ask agent textbox is not doing word wrapping and long texts goes behind the textbox and not visible". Ask's field (the question and the follow-up) was one row whose words were drawn to the card's right and cut there; track W left it ("the Ask and emoji fields don't scroll long text").
+- Now its words wrap to the box as a comment's do in its composer (`threads::wrap_spans`), a line a row (`Row::Field` carries its line's start), under one outlined box drawn with the first line. Up to `FIELD_ROWS` (5) lines show; past them the ones round the caret's line. Vim's mode stands at the last line's right, and a press or drag finds its letter on the line under the pointer (`side_field_place`), clamped to the first or last line above or below.
+- Test: `a_long_question_wraps_in_asks_field_and_stays_in_view` (24 words in a 70-column window: 2 to 5 rows, the last words in view, nothing past the card's edge; 12 words all shown; a press on the second line's first word puts the caret before it).
+- Tour: new scene `q1-ask-field-long`; looked at it beside `q1-ask-field` and `q4-ask-follow-up`. The ui-expert's review found the wrapped box 2 px higher than one line's and 15 px from the buttons where one line's is 19: a box shorter than its row is placed by `raster::stood` on the line's scale (grown to 0.78 of an airy row), a taller one on the row's. Its edges now stand where `stood` puts one line's box, and both measure the same (top and the 19 px gap). Its other point, the last line's descenders 7 px from the box's foot, is as a typed one-line field has it; kept so the two match.
+- Left: the emoji picker's field still doesn't scroll a long text.

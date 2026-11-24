@@ -15,6 +15,7 @@ use cellix_agent::{AgentEvent, AgentState, Request};
 
 use super::App;
 use super::side::{DISMISS, FOLLOW_UP, MAKE_COMMENT, SET_UP, WITH_AGENT};
+use crate::field::TextBox;
 
 /// How long a test waits for a stand-in, on a loaded machine.
 const PATIENCE: Duration = Duration::from_secs(120);
@@ -763,4 +764,65 @@ fn a_card_over_a_picture_hides_only_what_it_covers() {
     let image = rows(&grid, (inside / tall) as u16);
     let pixel = image[(inside % tall) as usize][(left + right) / 2];
     assert!(!lit(pixel), "the card covers the picture: {pixel:?}");
+}
+
+/// A long question wraps in Ask's field as a comment does in its box: every word stays inside
+/// the box and in view, the box grows a line at a time up to five and then keeps the caret's
+/// in view, and a press on a wrapped line puts the caret there. Its words went on one row, past
+/// the box's right edge, where they couldn't be seen (the user's feedback of 24 Nov).
+#[test]
+fn a_long_question_wraps_in_asks_field_and_stays_in_view() {
+    // Narrow, so the question wraps well before it's long.
+    let (dir, mut app) = page();
+    stand_in(dir.path(), "claude", CLAUDE);
+    app.handle(Event::Resize(70, 40));
+    select_word(&mut app, "ICL");
+    app.run(Command::AskAgent);
+    let words: Vec<String> = (1..=24).map(|n| format!("word{n:02}")).collect();
+    typed(&mut app, &words.join(" "));
+    let card = app.side_card().unwrap().area;
+    let grid = screen(&app);
+    // The box's rows: those the words are on, all inside the card and its box.
+    let rows: Vec<u16> = (card.y..card.bottom())
+        .filter(|y| grid.row_text(*y).contains("word"))
+        .collect();
+    assert!(
+        (2..=5).contains(&rows.len()),
+        "{} rows in {card:?}: {}",
+        rows.len(),
+        grid.text()
+    );
+    let shown: String = rows.iter().map(|y| grid.row_text(*y) + " ").collect();
+    // The last words, where the caret is, show in full; the rest scrolled above it.
+    for word in &words[words.len() - 4..] {
+        assert!(shown.contains(word.as_str()), "{word}: {shown}");
+    }
+    for y in &rows {
+        let row = grid.row_text(*y);
+        let end = row.trim_end().chars().count() as u16;
+        assert!(end < card.right(), "a word past the card's edge: {row}");
+    }
+    // Short enough, every word shows.
+    let field = app.side.as_mut().unwrap().field.as_mut().unwrap();
+    *field = TextBox::from(words[..12].join(" "));
+    let grid = screen(&app);
+    let all: String = (card.y..app.side_card().unwrap().area.bottom())
+        .map(|y| grid.row_text(y) + " ")
+        .collect();
+    for word in &words[..12] {
+        assert!(all.contains(word.as_str()), "{word}: {all}");
+    }
+    // A press on the second line's first word puts the caret before it.
+    let card = app.side_card().unwrap().area;
+    let lines: Vec<u16> = (card.y..card.bottom())
+        .filter(|y| grid.row_text(*y).contains("word"))
+        .collect();
+    assert!(lines.len() >= 2, "{all}");
+    let second = grid.row_text(lines[1]);
+    let first_word = second.split_whitespace().next().unwrap().to_string();
+    let x = second.find(first_word.as_str()).unwrap() as u16;
+    click(&mut app, x, lines[1]);
+    let field = app.side.as_ref().unwrap().field.as_ref().unwrap();
+    let at = field.text().find(first_word.as_str()).unwrap();
+    assert_eq!(field.caret(), at, "the caret before {first_word}");
 }

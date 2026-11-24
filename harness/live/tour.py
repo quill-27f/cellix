@@ -1491,8 +1491,13 @@ def ask_scenes(scratch):
     done = [*asked, ["until", "Make a Comment"], ["wait", 0.6]]
     follow = [*done, ["click", *ON("Follow Up")], ["until", "Ask a follow-up"],
               ["keys", "And in one line?"], ["wait", 0.6]]
+    # A question longer than the field is wide wraps under one box, and the caret's line shows.
+    long_question = ("Why a softmax and not a plain normalisation by the sum, and would a "
+                     "temperature change what the weights mean for the outputs here?")
+    long = [*field, ["keys", long_question], ["wait", 0.6]]
     scenes = [
         ("q1-ask-field", field, tools, {}),
+        ("q1-ask-field-long", long, tools, {}),
         ("q1-ask-field-light", field, tools, {"background": "eff1f5"}),
         ("q2-ask-streaming", [*asked, ["until", "Softmax turns"], ["wait", 0.8]], slow, {}),
         ("q3-ask-answer", done, tools, {}),
