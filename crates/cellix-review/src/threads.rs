@@ -31,6 +31,10 @@ pub struct Reply {
     /// When it was written, in seconds since 1970; nothing for one kept before Cellix said.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub at: u64,
+    /// On a document read from elsewhere: its id there and whether it's been posted. None
+    /// for a reply that stays here, as an agent's always does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<Remote>,
 }
 
 impl Reply {
@@ -40,8 +44,58 @@ impl Reply {
             author: author.into(),
             text: text.into(),
             at: now(),
+            remote: None,
         }
     }
+}
+
+/// A comment or reply on a document that lives elsewhere, read through an agent: the doc's
+/// id for it, once the doc has it, and where it stands. Nothing goes to the doc but by a
+/// press on its own Post button, so a draft stays one until then.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Remote {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub id: String,
+    #[serde(default)]
+    pub state: Sent,
+}
+
+impl Remote {
+    /// The reviewer's own, not posted yet.
+    pub fn draft() -> Self {
+        Self::default()
+    }
+
+    /// Someone's that came with the doc, or the reviewer's once the doc said its id.
+    pub fn posted(id: impl Into<String>, at: u64) -> Self {
+        Self {
+            id: id.into(),
+            state: Sent::Posted { at },
+        }
+    }
+
+    /// Not on the doc yet: a draft, or one whose post failed, which is still a draft.
+    pub fn unposted(&self) -> bool {
+        matches!(self.state, Sent::Draft | Sent::Failed { .. })
+    }
+}
+
+/// Where a remote comment or reply of the reviewer's stands.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "is", rename_all = "lowercase")]
+pub enum Sent {
+    /// On this machine only.
+    #[default]
+    Draft,
+    /// The agent is posting it now.
+    Posting,
+    /// The doc has it, since `at` (seconds since 1970).
+    Posted {
+        #[serde(default)]
+        at: u64,
+    },
+    /// The agent couldn't post it, and what it said.
+    Failed { why: String },
 }
 
 /// Now, in seconds since 1970, as a comment or reply says when it was written.
@@ -121,6 +175,14 @@ pub struct Thread {
     /// number was the only record of when.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub at: u64,
+    /// Who wrote it, where that isn't the reviewer: someone's comment that came with a
+    /// document read from elsewhere. Empty for the reviewer's own, and for a suggestion,
+    /// whose agent `suggested_by` names.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub author: String,
+    /// On a document read from elsewhere: the doc's id for it and whether it's posted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<Remote>,
 }
 
 /// What a thread is about besides a file's words.
@@ -152,11 +214,29 @@ enum Place {
 }
 
 impl Thread {
+    /// Who wrote it, as its card says: the reviewer, or someone on a document read from
+    /// elsewhere.
+    pub fn by(&self) -> &str {
+        if self.author.is_empty() {
+            YOU
+        } else {
+            &self.author
+        }
+    }
+
+    /// Whether it waits to be posted to the remote document it's on: the reviewer's own,
+    /// a draft or a failed post.
+    pub fn unposted(&self) -> bool {
+        self.remote.as_ref().is_some_and(Remote::unposted)
+    }
+
     /// Whether it's waiting on an agent: open, new since it was last told, and not already
-    /// answered by one.
+    /// answered by one. A remote document's comments are for its doc, not the agent at work
+    /// here: none is handed over with a prompt, and Ask Agent sends one when asked.
     pub fn waiting(&self) -> bool {
         let last = self.replies.last();
-        !self.resolved
+        self.remote.is_none()
+            && !self.resolved
             && self.told != Some(self.replies.len())
             && last.is_none_or(|r| r.author == YOU)
     }
@@ -346,6 +426,11 @@ impl Thread {
             None if !self.step.is_empty() => format!(
                 "Comment {id} on your transcript of this session, at {}, about {about}: {}",
                 self.step, self.text
+            ),
+            // Someone's on a remote document says whose it is: the agent's asked about it.
+            None if !self.author.is_empty() => format!(
+                "Comment {id} by {} on {}{at}, about {about}: {}",
+                self.author, self.file, self.text
             ),
             None => format!(
                 "Comment {id} on {}{at}, about {about}{earlier}: {}",

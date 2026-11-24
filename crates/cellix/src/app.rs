@@ -75,6 +75,7 @@ mod gitops;
 mod glance;
 mod links;
 mod peek;
+mod remote;
 mod report;
 mod reviewer;
 mod side;
@@ -564,6 +565,8 @@ enum PromptAction {
     Stash(cellix_review::Keep),
     /// Writes the review as Markdown to the file named, in the project.
     SaveReview,
+    /// Reviews the doc at the link typed, read through the agent.
+    ReviewRemote,
 }
 
 struct Prompt {
@@ -743,6 +746,8 @@ enum Choice {
     SaveReview(PathBuf),
     Git(GitChoice),
     Worktree(WorktreeChoice),
+    /// Take a remote doc and its comments off this machine, by its folder's name.
+    EndReview(String),
 }
 
 /// The engines behind a keymap. `vim` runs the real Neovim when it's installed, since the
@@ -1758,6 +1763,8 @@ pub struct App {
     side_kept: crate::ask::Conversations,
     /// How long an answer may take.
     side_limit: std::time::Duration,
+    /// Remote docs: those read, and the agent's reads, posts and polishes under way.
+    remote: remote::Remotes,
     /// The prompts typed in to go on their own, by `cellix_agent::prompt_key`: one comment
     /// asked about from its card. The prompt hook asks, and hands that prompt nothing else.
     alone: Vec<u64>,
@@ -1924,6 +1931,7 @@ impl App {
             side_path: None,
             side_kept,
             side_limit: crate::ask::TIME_LIMIT,
+            remote: remote::Remotes::default(),
             alone: Vec::new(),
             pending_review: None,
             neovim_z: false,
@@ -2106,6 +2114,7 @@ impl App {
         app.agents.docked = app.docked();
         app.refresh_tree();
         app.start_workflow();
+        app.load_remote_docs();
         app
     }
 
@@ -2273,6 +2282,12 @@ impl App {
         if crate::transcript::is_page(self.workspace.root(), path) {
             editor.buffer.read_only = true;
             editor.label = Some(crate::transcript::page_title(path));
+        }
+        // A remote doc is read and commented on here, and changed only in its doc tool: its
+        // tab goes by the doc's title.
+        if let Some(meta) = self.remote_meta_of(path) {
+            editor.buffer.read_only = true;
+            editor.label = Some(meta.title.clone());
         }
         // Track Changes stays as it was left for this document.
         let relative = self.relative(path);
@@ -3561,7 +3576,8 @@ impl App {
             | self.see_front_tab()
             | self.poll_team()
             | self.poll_peek()
-            | self.poll_side();
+            | self.poll_side()
+            | self.poll_remote();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -6003,7 +6019,12 @@ impl App {
             }
             Some(id) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
-                    thread.replies.push(Reply::new(YOU.to_string(), text));
+                    let mut reply = Reply::new(YOU.to_string(), text);
+                    // On a remote doc it's a draft, posted by its own Post Reply.
+                    if thread.remote.is_some() {
+                        reply.remote = Some(cellix_review::threads::Remote::draft());
+                    }
+                    thread.replies.push(reply);
                 }
             }
             None => {
@@ -6027,8 +6048,13 @@ impl App {
                     });
                 }
                 let step = self.transcript_step(&draft.file, draft.line);
+                // On a remote doc a comment is a draft until its own Post to Doc.
+                let remote = crate::remote::slug_of(&draft.file)
+                    .is_some()
+                    .then(cellix_review::threads::Remote::draft);
                 self.threads.push(Thread {
                     id,
+                    remote,
                     file: draft.file,
                     line: draft.line,
                     quote: draft.quote,
@@ -7740,6 +7766,7 @@ impl App {
                 self.refresh_tree();
             }
             Choice::SaveReview(path) => self.write_review(&path),
+            Choice::EndReview(slug) => self.end_review(&slug),
             Choice::DeleteReply(id, n) => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id)
                     && n < thread.replies.len()
@@ -9526,6 +9553,10 @@ impl App {
                 self.save_review_as(name);
                 Ok(())
             }
+            PromptAction::ReviewRemote => {
+                self.review_remote(name);
+                Ok(())
+            }
             PromptAction::NewFile(dir) => self.workspace.create_file(&dir.join(name)),
             PromptAction::NewFolder(dir) => self.workspace.create_dir(&dir.join(name)),
             PromptAction::Rename(path) => match path.parent() {
@@ -9893,6 +9924,7 @@ impl App {
             Command::UndoTurn => self.prompt_undo_turn(),
             Command::ShowAgentTask => self.show_task_page(),
             Command::Commit => self.ask("Commit message", PromptAction::Commit),
+            Command::ReviewRemoteDoc => self.ask_remote_link(),
             Command::OpenInBrowser => self.open_in_browser(),
             Command::OpenClaude => self.open_agent("claude"),
             Command::OpenCodex => self.open_agent("codex"),
@@ -12942,6 +12974,10 @@ impl App {
         if !free || !row || !editor.has_page() || self.toolbar_row().is_some() {
             return None;
         }
+        // A remote doc's strip stands in that row, and its source is in its doc tool.
+        if self.remote_in_view().is_some() {
+            return None;
+        }
         let name = if editor.rendered {
             "Show Source"
         } else {
@@ -13198,8 +13234,12 @@ impl App {
         // code's also goes with the review, so an agent is told of it by that road.
         let page = editor.rendered;
         let step = self.transcript_step(&file, line);
+        let remote = crate::remote::slug_of(&file)
+            .is_some()
+            .then(cellix_review::threads::Remote::draft);
         self.threads.push(Thread {
             id: cellix_review::threads::next_id(&self.threads),
+            remote,
             file: file.clone(),
             line,
             quote,
@@ -13487,6 +13527,7 @@ impl App {
             laid: Some(&self.comment_rows),
             edge: self.pane_edge(),
             selected: None,
+            polish: Some(&self.remote.polish),
         }
     }
 
@@ -14190,6 +14231,13 @@ impl App {
             }
             ThreadHit::Check => self.check_review(),
             ThreadHit::SendAll => self.send_to_agent(),
+            // The one press that posts to a remote doc: this comment, or this reply, alone.
+            ThreadHit::Post(id, reply) => self.post_remote(id, reply),
+            ThreadHit::CopyWords(id, reply) => self.copy_remote(id, reply),
+            ThreadHit::Polish(id) => self.polish_remote(id),
+            ThreadHit::UsePolish(id) => self.use_polish(id),
+            ThreadHit::KeepMine(id) => self.keep_mine(id),
+            ThreadHit::OpenInDoc(id) => self.open_comment_in_doc(id),
             // A web address, or a picture's name where the picture itself can't stand on the
             // card.
             ThreadHit::Link(id, index) => {
@@ -14669,6 +14717,21 @@ impl App {
                 };
                 let _ = opened.send(answer);
             }
+            Request::Review { link, started } => {
+                self.review_remote(&link);
+                let answer = match &self.remote.reading {
+                    Some(reading) if !reading.sync => {
+                        "Reading the doc with Claude Code; it opens in Cellix when it's read"
+                            .to_string()
+                    }
+                    Some(_) => "Syncing the doc in Cellix".to_string(),
+                    None if self.remote.waiting.is_some() => {
+                        "Pick the MCP server to read it through, in Cellix".to_string()
+                    }
+                    None => format!("error: {}", self.message.borrow()),
+                };
+                let _ = started.send(answer);
+            }
             Request::CommentsTaken => self.say("An agent took the review comments"),
             Request::Suggest {
                 file,
@@ -14991,6 +15054,9 @@ impl App {
         }
         if self.search.searching() {
             return Some("Searching".to_string());
+        }
+        if let Some(waiting) = self.remote_waiting() {
+            return Some(waiting);
         }
         let task = self.dock.sessions.iter().find(|s| s.task() && !s.exited);
         if let Some(task) = task {
@@ -15681,10 +15747,12 @@ impl App {
     /// came back with edits. A file whose edits began before it changed on disk is marked, as
     /// any file that changed under unsaved edits is.
     pub fn restore_state(&mut self) -> usize {
-        let Ok(text) = std::fs::read_to_string(self.state_file()) else {
-            return 0;
-        };
-        let Ok(state) = serde_json::from_str::<Kept>(&text) else {
+        let kept = std::fs::read_to_string(self.state_file())
+            .ok()
+            .and_then(|text| serde_json::from_str::<Kept>(&text).ok());
+        let Some(state) = kept else {
+            // Nothing kept of the last run, and still the remote docs under review are back.
+            self.reopen_remote_docs();
             return 0;
         };
         self.dock.width = state.pane.width;
@@ -15728,6 +15796,9 @@ impl App {
                 cellix_core::Selections::single(Selection::cursor(file.cursor.min(length)));
             editor.top = file.top;
         }
+        // A remote doc under review comes back with its workspace, whether or not its tab
+        // was open, until End Review takes it away.
+        self.reopen_remote_docs();
         if let Some(index) = state.active.and_then(|a| opened.get(a)) {
             self.set_active(*index);
         }
@@ -16829,6 +16900,12 @@ impl App {
                     && !in_sidebar
                     && self.toolbar_row().is_some()
                     && self.click_toolbar(x) => {}
+            MouseKind::Left
+                if y == 1
+                    && !in_sidebar
+                    && self.chrome_rows() == 2
+                    && x >= self.main_area().x
+                    && self.click_remote_strip(x) => {}
             MouseKind::Left if y == self.plan_bar().y + 1 && self.plan_in_view() && !in_sidebar => {
                 self.click_plan_bar(x)
             }
@@ -17617,6 +17694,9 @@ impl App {
                 }
             }
             MenuAction::Start(program) => self.open_agent(program),
+            MenuAction::RemoteServer(server) => self.picked_remote_server(server),
+            MenuAction::PickRemoteServer => self.pick_remote_server((self.main_area().x + 2, 2)),
+            MenuAction::EndReview(slug) => self.ask_end_review(slug),
             MenuAction::ReviewWorktree(path) => self.review = Some(self.new_review(path)),
             MenuAction::RemoveWorktree(path) => self.ask_remove_worktree(path),
             MenuAction::StartRole(program, prompt) => self.start_role(program, &prompt),
@@ -18040,6 +18120,12 @@ impl App {
                     |e| format!("Couldn't: {e}"),
                     |()| "Done. Reload Ghostty's config with Cmd+Shift+,".to_string(),
                 );
+            }
+            // The MCP servers Claude Code knows, the one in use marked, to pick the doc tool's.
+            Control::RemoteDocs => {
+                let at = self.hover.unwrap_or((self.main_area().x + 2, 2));
+                self.pick_remote_server((at.0, at.1 + 1));
+                return;
             }
         }
         if let Some(page) = &mut self.settings_page {
@@ -20257,6 +20343,9 @@ impl App {
             // a file's has its kind's icon in that kind's; on cells only the Task page's.
             let mark = if task {
                 Some((Icon::ListTask, TASK_TAB_MARK, theme.accent))
+            } else if pictures && self.tab_is_remote(i) {
+                // A remote doc's cloud, in the accent: where it's from.
+                Some((Icon::Cloud, TAB_ICON_SIZE, theme.accent))
             } else if pictures {
                 let kind = crate::explorer::file_icon(&name);
                 Some((kind, TAB_ICON_SIZE, crate::explorer::file_color(&name)))
@@ -20487,6 +20576,10 @@ impl App {
 
     fn draw_breadcrumbs(&self, grid: &mut Grid) {
         if self.chrome_rows() < 2 {
+            return;
+        }
+        // A remote doc's row says where it's from, in place of a path or a page's tools.
+        if self.draw_remote_strip(grid) {
             return;
         }
         let Some(path) = self
@@ -22676,6 +22769,8 @@ mod motion_tests;
 mod page_look_tests;
 #[cfg(test)]
 mod pane_tab_tests;
+#[cfg(test)]
+mod remote_tests;
 #[cfg(test)]
 mod reply_tests;
 #[cfg(test)]

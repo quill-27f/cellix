@@ -234,7 +234,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 298
+SCENES_IN_ALL = 305
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # The scene shot last, with its picture's digest and what it was taken from; and this one's.
@@ -1515,6 +1515,148 @@ def ask_scenes(scratch):
         shutil.rmtree(cache, ignore_errors=True)
 
 
+REMOTE_DOC = """# Queue service launch
+
+## Traffic and capacity
+
+At launch the service takes the order events now sent to the batch pipeline. We expect three \
+times last year's peak in the first holiday week, about 42,000 events a second, and size the \
+fleet for that with a third to spare.
+
+Each partition is drained by one consumer, so a slow consumer holds back every event behind \
+it. We cap a batch at 500 events and shed to the retry queue past two seconds of lag.
+
+Capacity is reviewed weekly for the first month, then monthly, against the dashboards in the \
+appendix.
+
+## Rollout
+
+Traffic moves in four steps of a quarter each, a day apart, with the batch pipeline kept warm \
+until the last step has run a full week without a page.
+"""
+
+
+def forget_remote_pick():
+    """Takes the remote docs' server out of the throwaway home's settings, if a scene kept one."""
+    settings = f"{HOME}/.config/cellix/settings.json"
+    try:
+        with open(settings) as f:
+            kept = json.load(f)
+    except (OSError, ValueError):
+        return
+    if kept.pop("remote_docs_mcp", None) is not None:
+        with open(settings, "w") as f:
+            json.dump(kept, f)
+
+
+def remote_scenes(scratch):
+    """Reviewing a remote doc: the pick of the MCP server, the doc as a page with its strip and
+    someone else's comment, a draft with Polish's suggestion, a card posting, one posted and one
+    whose post failed. Claude Code is a stand-in on a PATH of its own that answers each kind of
+    run by what it's told; Claude Code's config, in the throwaway home, names made-up servers.
+    Nothing here is a real doc tool, person or doc."""
+    now = int(time.time())
+    link = "https://docs.example/d/queue-launch"
+    read = json.dumps({
+        "title": "Queue service launch", "link": link, "version": 12, "markdown": REMOTE_DOC,
+        "comments": [{"id": "c3", "author": "Priya", "quote": "three times last year's peak",
+                      "text": "Where does 3x come from?", "at": now - 7200, "resolved": False,
+                      "replies": [{"id": "r1", "author": "Sam", "at": now - 3600,
+                                   "text": "Last year's growth on the same week, rounded up."}]}]})
+    polished = ("One slow consumer stalls its partition. How is that detected, and does the "
+                "two-second shed cover it?")
+    def result(answer):
+        return "\n".join([
+            json.dumps({"type": "system", "subtype": "init", "session_id": "remote-tour"}),
+            json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": answer}),
+        ]) + "\n"
+    # Each folder's stand-in answers a read and Polish alike; they differ in how a post goes.
+    kinds = {"ok": result(json.dumps({"id": "c9"})), "hang": None,
+             "fail": result(json.dumps({"error": "Your session has expired. Please sign in again."}))}
+    tools = {}
+    for kind, post in kinds.items():
+        folder = f"{scratch}/remote-{kind}-bin"
+        os.makedirs(folder)
+        for name, text in (("read", result(read)), ("polish", result(polished)), ("post", post or "")):
+            with open(f"{folder}/{name}", "w") as f:
+                f.write(text)
+        posting = "exec sleep 300" if post is None else f"cat '{folder}/post'"
+        with open(f"{folder}/claude", "w") as f:
+            f.write("#!/bin/sh\ninput=$(cat)\ncase \"$input\" in\n"
+                    f"  *'read the document'*) cat '{folder}/read' ;;\n"
+                    f"  *'Make this review comment'*) cat '{folder}/polish' ;;\n"
+                    f"  *) {posting} ;;\nesac\n")
+        os.chmod(f"{folder}/claude", 0o755)
+        tools[kind] = folder
+    config = f"{HOME}/.claude.json"
+    with open(config, "w") as f:
+        json.dump({"mcpServers": {"team-docs": {"command": "docs-mcp"}, "tracker": {"command": "tracker-mcp"}}}, f)
+    system = "/usr/bin:/bin:/usr/sbin:/sbin"
+    # The doc as a read leaves it, with three comments: Priya's with Sam's reply, the
+    # reviewer's draft and the reviewer's posted one.
+    def seed(state):
+        folder = f"{ROOT}/.cellix/remote/queue-launch"
+        os.makedirs(folder, exist_ok=True)
+        with open(f"{folder}/doc.md", "w") as f:
+            f.write(REMOTE_DOC)
+        with open(f"{folder}/remote.json", "w") as f:
+            json.dump({"title": "Queue service launch", "link": link, "version": "12",
+                       "server": "team-docs", "synced": now - 120, "others": 1}, f)
+        with open(f"{ROOT}/.cellix/remote/.gitignore", "w") as f:
+            f.write("*\n")
+        doc = ".cellix/remote/queue-launch/doc.md"
+        posted = {"is": "posted", "at": now - 300}
+        threads = [
+            {"id": 3, "file": doc, "line": 5, "quote": "three times last year's peak",
+             "text": "Where does 3x come from?", "author": "Priya", "at": now - 7200,
+             "told": 1, "placed": True, "remote": {"id": "c3", "state": {"is": "posted", "at": now - 7200}},
+             "replies": [{"author": "Sam", "text": "Last year's growth on the same week, rounded up.",
+                          "at": now - 3600, "remote": {"id": "r1", "state": {"is": "posted", "at": now - 3600}}}]},
+            {"id": 4, "file": doc, "line": 7, "kind": "Correctness", "placed": True, "at": now - 600,
+             "quote": "Each partition is drained by one consumer, so a slow consumer holds back every event behind it.",
+             "text": "I think this is a problem because if one consumer gets slow for whatever reason "
+                     "then all of the events behind it are going to wait, and the doc doesn't say what "
+                     "happens then or how we'd notice.",
+             "remote": {"state": state}},
+            {"id": 5, "file": doc, "line": 5, "kind": "Clarity", "placed": True, "at": now - 900,
+             "quote": "with a third to spare",
+             "text": "A third over 42k, or over the 3x estimate?",
+             "remote": {"id": "c7", "state": posted}},
+        ]
+        with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+            json.dump(threads, f)
+    comments = [["until", "From team-docs"], *command("Show Comments"), ["until", "Others: 1"], ["wait", 0.8]]
+    first = [*command("Review Remote Doc"), ["until", "Link to the doc"], ["keys", link + "\r"],
+             ["until", "tracker"], ["wait", 0.6]]
+    read_it = [*first, ["click", *ON("team-docs")], ["until", "From team-docs"], ["wait", 1.2]]
+    scenes = [
+        ("r0-remote-pick", first, "ok", None),
+        ("r1-remote-page", read_it, "ok", None),
+        ("r1-remote-page-light", read_it, "ok", None),
+        ("r2-remote-polish", [*comments, ["click", *ON("Polish")], ["until", "Use This"], ["wait", 0.8]],
+         "ok", {"is": "draft"}),
+        ("r3-remote-posting", [*comments, ["click", *ON("Post to Doc")], ["until", "Posting to the doc"],
+                               ["wait", 0.8]], "hang", {"is": "draft"}),
+        ("r4-remote-posted", comments, "ok", {"is": "posted", "at": now - 60}),
+        ("r5-remote-failed", comments, "fail",
+         {"is": "failed", "why": "The doc tool asked to sign in again. Sign in (your security key), then Retry."}),
+    ]
+    for name, steps, kind, state in scenes:
+        shutil.rmtree(f"{ROOT}/.cellix", ignore_errors=True)
+        if state is not None:
+            seed(state)
+        cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
+        env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools[kind]}:{system}"}
+        extra = {"background": "eff1f5"} if name.endswith("-light") else {}
+        shoot(name, steps, size="170x46", env=env, cellix=state is not None, **extra)
+        subprocess.run(["pkill", "-9", "-f", cache])
+        shutil.rmtree(cache, ignore_errors=True)
+        # The server picked is kept machine-wide, in the throwaway home: each scene asks anew.
+        forget_remote_pick()
+    shutil.rmtree(f"{ROOT}/.cellix", ignore_errors=True)
+    os.unlink(config)
+
+
 def agents_by_urgency(scratch):
     """The Agents list by urgency, from agents in the side pane that report through Cellix's
     real hook: one asking, one done and not yet looked at, one working, one idle. The list
@@ -1706,6 +1848,7 @@ with tempfile.TemporaryDirectory() as made:
     team_scenes(scratch)
     reviewer_scenes(scratch)
     ask_scenes(scratch)
+    remote_scenes(scratch)
     shoot("01-welcome", [])
     shoot("02-code", [], CODE_FILE)
     # The dark theme on a terminal whose background isn't herdr's: the frame is that

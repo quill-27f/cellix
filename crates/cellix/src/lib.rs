@@ -41,6 +41,7 @@ pub mod plugin;
 mod prof;
 mod program;
 mod recent;
+mod remote;
 mod rendered;
 mod review;
 mod roles;

@@ -365,6 +365,7 @@ pub fn fallback(icon: Icon) -> &'static str {
         Icon::ChevronLeft => "‹",
         Icon::ChevronDown => "⌄",
         Icon::Globe => "◍",
+        Icon::Cloud => "☁",
         Icon::Agents => "◎",
         Icon::Panel => "▭",
         Icon::Bell => "◬",

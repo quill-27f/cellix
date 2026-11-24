@@ -74,6 +74,9 @@ pub struct Settings {
     /// Which agent's command line answers Ask's side questions: `claude`, `codex` or
     /// `gemini`. Unset, the kind of agent in the side pane, else the first installed.
     pub ask_agent: Option<String>,
+    /// The MCP server, among those Claude Code knows, that a remote doc is read and posted
+    /// through: its tools are the only ones the agent is allowed. Unset, the first review asks.
+    pub remote_docs_mcp: Option<String>,
 }
 
 /// The row heights `row_height` can name, with how many of the terminal's lines each is
@@ -128,6 +131,7 @@ impl Settings {
         self.auto_save_delay = other.auto_save_delay.or(self.auto_save_delay.take());
         self.comment_sort = other.comment_sort.or(self.comment_sort.take());
         self.ask_agent = other.ask_agent.or(self.ask_agent.take());
+        self.remote_docs_mcp = other.remote_docs_mcp.or(self.remote_docs_mcp.take());
     }
 
     /// The words the user has said are right.

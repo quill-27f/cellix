@@ -283,6 +283,8 @@ pub enum Command {
     ReviewPreviousTurn,
     /// Starts an agent reviewing the changes, from a menu of the agents.
     ReviewWith,
+    /// Asks for a link to a doc that lives elsewhere, to read through the agent and review.
+    ReviewRemoteDoc,
     UndoTurn,
     /// The Task page: the agent work here as a timeline.
     ShowAgentTask,

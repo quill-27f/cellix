@@ -136,6 +136,7 @@ Usage: cellix [--wait] [files]
   cellix comments [--take]  Review comments, as JSON
   cellix comments --waiting Everything no agent has had yet, a document's comments too
   cellix open <file>        Opens a file in the running Cellix
+  cellix review <link>      Reviews a doc that lives elsewhere, read through Claude Code
   cellix setup [claude|codex|gemini|opencode|copilot|cursor|kiro]
                             Connects an agent
   cellix setup --remove     Disconnects Claude Code
@@ -505,6 +506,10 @@ fn main() -> ExitCode {
         ["open", file, rest @ ..] => {
             let path = std::path::absolute(file).unwrap_or_else(|_| PathBuf::from(file));
             return client(&format!("open {}", path.display()), rest.first().copied());
+        }
+        // The running Cellix has its agent read the doc, and opens it when it's read.
+        ["review", link, rest @ ..] => {
+            return client(&format!("review {link}"), rest.first().copied());
         }
         _ => {}
     }

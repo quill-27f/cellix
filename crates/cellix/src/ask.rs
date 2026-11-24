@@ -512,6 +512,28 @@ impl Drop for Running {
 /// Starts `program` on `question`, with `path` as its PATH, stopped after `limit`. What it says
 /// comes on `news`, ending with `Done` or `Failed`, each waking the loop.
 pub fn start(program: &Path, question: &Question, path: &OsString, limit: Duration) -> Running {
+    let run = Run {
+        cli: question.cli,
+        args: args(question),
+        root: &question.root,
+        prompt: &question.prompt,
+    };
+    start_run(program, run, path, limit)
+}
+
+/// One run of a command line, said whole: which it is, its arguments after its name, the
+/// folder it runs in and what it's told on its input. Ask builds one from a question; a
+/// remote doc's reads and posts build their own, with the tools they allow.
+pub struct Run<'a> {
+    pub cli: Cli,
+    pub args: Vec<String>,
+    pub root: &'a Path,
+    pub prompt: &'a str,
+}
+
+/// Starts `program` as `run` says, with `path` as its PATH, stopped after `limit`, its news
+/// read as `start`'s is.
+pub fn start_run(program: &Path, run: Run, path: &OsString, limit: Duration) -> Running {
     let (sender, news) = crate::wake::channel();
     let ended = Arc::new(AtomicBool::new(false));
     let shared = Arc::new(Mutex::new(None));
@@ -522,8 +544,8 @@ pub fn start(program: &Path, question: &Question, path: &OsString, limit: Durati
     };
     let mut command = Process::new(program);
     command
-        .args(args(question))
-        .current_dir(&question.root)
+        .args(&run.args)
+        .current_dir(run.root)
         .env("PATH", path)
         .env(SIDE_QUESTION_VAR, "1")
         .stdin(Stdio::piped())
@@ -547,7 +569,7 @@ pub fn start(program: &Path, question: &Question, path: &OsString, limit: Durati
     }
     // On a thread, so a long document can't fill the pipe while nothing reads the other end.
     if let Some(mut input) = input {
-        let prompt = question.prompt.clone();
+        let prompt = run.prompt.to_string();
         std::thread::spawn(move || {
             let _ = input.write_all(prompt.as_bytes());
         });
@@ -586,7 +608,7 @@ pub fn start(program: &Path, question: &Question, path: &OsString, limit: Durati
             }
         });
     }
-    let cli = question.cli;
+    let cli = run.cli;
     std::thread::spawn(move || {
         let mut reader = Reader::new(cli);
         let mut finished = false;

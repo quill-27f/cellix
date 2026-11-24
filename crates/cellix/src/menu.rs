@@ -131,6 +131,12 @@ pub enum Action {
     ReviewWorktree(PathBuf),
     /// Asks to take a worktree away.
     RemoveWorktree(PathBuf),
+    /// Reads remote docs through this MCP server, from now on.
+    RemoteServer(String),
+    /// Lists the MCP servers to read remote docs through.
+    PickRemoteServer,
+    /// Asks to take a remote doc and its comments off this machine, by its folder's name.
+    EndReview(String),
 }
 
 /// What a click or a key on a menu came to.

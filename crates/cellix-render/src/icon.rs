@@ -119,6 +119,8 @@ pub enum Icon {
     Log = 92,
     /// `ChevronRight` turned back: a step back, as the Task page's narrow step control has.
     ChevronLeft = 93,
+    /// Lucide's cloud: a doc that lives elsewhere, read through an agent.
+    Cloud = 94,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -994,6 +996,17 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
                 .min(meridian)
                 .min(segment(p, (2.5, 12.0), (21.5, 12.0)))
         }
+        // The outline of a big disc on the left, a small one on the right and a flat foot
+        // under both: the edge of what the three cover together.
+        Icon::Cloud => {
+            let big = circle(p, (9.0, 12.0)) - 7.0;
+            let small = circle(p, (17.5, 14.5)) - 4.5;
+            let (cx, cy, hx, hy) = (13.25, 14.5, 4.25, 4.5);
+            let (qx, qy) = ((p.0 - cx).abs() - hx, (p.1 - cy).abs() - hy);
+            let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+            let foot = outside + qx.max(qy).min(0.0);
+            big.min(small).min(foot).abs()
+        }
     };
     distance < half_stroke(icon)
 }
@@ -1070,6 +1083,7 @@ mod tests {
             Icon::AgentCopilot,
             Icon::AgentCursor,
             Icon::AgentKiro,
+            Icon::Cloud,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

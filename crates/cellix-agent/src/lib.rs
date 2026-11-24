@@ -96,6 +96,12 @@ pub enum Request {
         path: PathBuf,
         opened: Sender<String>,
     },
+    /// `cellix review <link>`: reviews a doc that lives elsewhere, read through the agent.
+    /// `started` says it's being read, or why it isn't.
+    Review {
+        link: String,
+        started: Sender<String>,
+    },
     /// The socket thread already emptied the shared list.
     CommentsTaken,
     Agent(AgentEvent),
@@ -300,6 +306,14 @@ fn answer(line: &str, comments: &SharedComments, requests: &Sender<Request>) -> 
             let path = PathBuf::from(path);
             ask(requests, Request::Open { path, opened });
             // A Cellix too busy to answer in time still opens it when it gets to it.
+            Ok(answer
+                .recv_timeout(ANSWER_TIME)
+                .unwrap_or_else(|_| "ok".to_string()))
+        }
+        (Some("review"), Some(link)) => {
+            let (started, answer) = channel();
+            let link = link.trim().to_string();
+            ask(requests, Request::Review { link, started });
             Ok(answer
                 .recv_timeout(ANSWER_TIME)
                 .unwrap_or_else(|_| "ok".to_string()))

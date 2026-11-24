@@ -205,6 +205,8 @@ pub enum Control {
     InstallBrowser,
     /// A command to put on the clipboard.
     CopyInstall(&'static str),
+    /// Which of Claude Code's MCP servers a remote doc is read and posted through.
+    RemoteDocs,
 }
 
 /// The settings as they stand, passed in so the page holds no second copy.
@@ -836,6 +838,16 @@ impl SettingsPage {
                 action: Some(("Install", true, Control::InstallBrowser)),
             }
         });
+        // Where Claude Code is here, the server a remote doc is read through, to pick.
+        if found.claude {
+            blocks.push(Block {
+                name: "Remote docs",
+                state: "Read through an MCP server of Claude Code's",
+                tone: Tone::Quiet,
+                detail: "Review Remote Doc… reads a doc there, and posts each comment you post.",
+                action: Some(("Pick Server", false, Control::RemoteDocs)),
+            });
+        }
         match found.ghostty_keeps_cmd_d {
             Some(true) => blocks.push(Block {
                 name: "Ghostty keys",

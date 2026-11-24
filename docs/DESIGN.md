@@ -969,6 +969,70 @@ Again: not signed in, the command line's own failure, or no answer in four minut
 (`TIME_LIMIT`), after which it's stopped. Inside Claude Code Ask is the same side question,
 where Ask Agent had filled Claude Code's prompt box.
 
+### Reviewing a remote doc
+
+Docs that live behind a doc tool Cellix can't reach (a web app behind a security key, which
+the person's agent reads through an MCP server they already have) are reviewed as a silent
+review is: read, ask, write a comment, polish it, and post it, one by one, only when chosen
+(approved by the user, 24 November 2026; board "Reviewing a remote doc").
+
+The agent is the bridge. Cellix never speaks the doc tool's protocol and doesn't know its
+tool names: it runs Claude Code in the background, as Ask runs it (`ask::start_run`, the run
+carrying `CELLIX_SIDE_QUESTION` so no hook stirs), with a fixed instruction, and the agent
+answers with data that Cellix checks and writes itself (`remote.rs`, `app/remote.rs`).
+
+- Which server: those Claude Code knows, read and never written: `mcpServers` in its
+  `.claude.json` (in `CLAUDE_CONFIG_DIR` when set, else the home folder), the ones it keeps
+  for this project there, and the project's `.mcp.json`. The machine-wide setting
+  `remote_docs_mcp` names the doc tool's; the first review asks, with a menu of them, and the
+  strip's menu has Read Through Another Server…. A test names its own config (`Remotes::env`)
+  and without one reads none.
+- What a run may do: `claude -p --output-format stream-json --verbose --tools ""
+  --allowedTools mcp__<server>__* --disallowedTools Bash,Edit,Write,MultiEdit,NotebookEdit,
+  WebFetch,WebSearch,Task,mcp__<every other server>__*`: no built-in tool, only that server's,
+  never `--dangerously-skip-permissions`. The server's name is made as Claude Code names its
+  tools, anything but letters, digits, `_` and `-` as `_`. `--tools` was read from `claude
+  --help` on this machine. Polish has none at all: `--tools "" --strict-mcp-config`.
+- A read is told to use the tools that read only and to answer one JSON object, `{title, link,
+  version, markdown, comments: [{id, author, quote, text, at, resolved, replies: [{id, author,
+  text, at}]}]}`, or `{"error": …}`; times may be ISO 8601 or seconds. Cellix writes
+  `.cellix/remote/<slug>/doc.md` and `remote.json` (title, link, version, server, when synced,
+  how many comments are others'); `.cellix/remote` has a `.gitignore` of `*`, since it's
+  someone's company's content. The slug is the link's words and six letters of its hash.
+- Others' comments are threads with an `author` (empty for the reviewer's own) and a `remote`
+  of the doc's id and a state, `draft`, `posting`, `posted` (when) or `failed` (why); replies
+  carry the same. They're anchored by quote; a remote thread is never handed to the agent at
+  work here with a prompt (`Thread::waiting`), and Ask Agent sends one when pressed.
+- The doc opens as a page, read-only, its tab named by its title with a cloud in the accent.
+  The row under the tabs is its strip: a cloud, "From <server>, read by Claude Code", then
+  quietly the version, "synced N ago" and how many comments are others', and at its end Sync,
+  Open in Browser (the system's browser, where the doc tool's sign-in is, never the pane's)
+  and a menu with End Review. A workspace's remote docs reopen next run from `.cellix/remote`.
+- Cards: someone's says "Priya · in the doc", with Reply, Ask Agent and Open in Doc. The
+  reviewer's is a draft until its own Post to Doc (filled), with Copy, Polish, Edit and
+  Delete; its pill says "Draft, not posted yet", "Posting…", "Posted N ago" in green, or "Not
+  posted" in red with why under the words and Retry and Copy. A sign-in the doc tool wants
+  again reads "The doc tool asked to sign in again. Sign in (your security key), then Retry."
+  The list's head says "Yours: N posted · N drafts" and "Others: N" in place of Check My
+  Review and the kinds. The composer's button says Save Draft.
+- Nothing posts but that press. Not Sync, not Enter, not a batch: a post carries one comment,
+  its quote and words, and asks for `{"id": …}`; a reply goes under its comment by the doc's
+  id. One posting or posted isn't posted again; one under way when Cellix closed comes back
+  failed, saying to look in the doc before Retry.
+- Polish runs on the draft's words, its quote and the paragraph round it ("make this review
+  comment short, clear and kind; keep its meaning; answer with the text only"); the
+  suggestion stands under the draft in a box of the page's ground, "Polished · Claude Code ·
+  17 words, from 41", with Use This and Keep Mine. It's still a draft either way.
+- Sync reads again: comments and replies new by id come in, someone's edited or resolved ones
+  are brought up to date, `doc.md` is replaced and every thread found again by its quote (one
+  whose words went says so). Drafts are never touched or posted. End Review asks, then deletes
+  the folder, its tab and its comments.
+
+Claude Code only, for now: Codex has no way to allow one MCP server's tools and refuse the
+rest in `exec` (its MCP servers are all-or-nothing per config, so a run would need a config of
+its own naming just that server), and Gemini CLI's `--allowed-mcp-server-names` would do it
+but its MCP tools still ask for approval it can't get in `-p`, unless trusted. Both are left.
+
 ## The pointer
 
 Cellix tells the terminal which pointer to show with OSC 22: a hand on what can be pressed, a bar on

@@ -142,6 +142,113 @@ pub enum Hit {
     AcceptAll,
     RejectAll,
     NextSuggestion,
+    /// On a remote doc: posts the reviewer's comment, or one of their replies by its place
+    /// among the replies, to the doc through the agent. Only this press ever posts.
+    Post(u32, Option<usize>),
+    /// Puts a comment's words, or a reply's, on the clipboard, to paste into the doc.
+    CopyWords(u32, Option<usize>),
+    /// Has the agent make a draft short and clear, or takes its suggestion, or keeps the draft.
+    Polish(u32),
+    UsePolish(u32),
+    KeepMine(u32),
+    /// Opens the doc a comment is on, in the browser.
+    OpenInDoc(u32),
+}
+
+/// On a remote doc, the reviewer's comment's buttons while it's a draft, while it posts, and
+/// when a post failed; and a posted comment's, the reviewer's or someone else's.
+const POST: &str = "Post to Doc";
+const POST_REPLY: &str = "Post Reply";
+const RETRY: &str = "Retry";
+const COPY: &str = "Copy";
+const POLISH: &str = "Polish";
+const USE_THIS: &str = "Use This";
+const KEEP_MINE: &str = "Keep Mine";
+const OPEN_IN_DOC: &str = "Open in Doc";
+const DRAFT_BUTTONS: [&str; 3] = [POST, COPY, POLISH];
+const FAILED_BUTTONS: [&str; 2] = [RETRY, COPY];
+const POSTING_BUTTONS: [&str; 1] = [COPY];
+const POSTED_BUTTONS: [&str; 2] = ["Reply", ASK];
+const POLISH_CHOICE: [&str; 2] = [USE_THIS, KEEP_MINE];
+
+/// What Polish has for a draft: under way, its suggestion with the words counted before and
+/// after, or why it has none.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Polish {
+    Running(String),
+    Ready {
+        text: String,
+        by: String,
+        from: usize,
+    },
+    Failed(String),
+}
+
+/// Each draft's Polish, by its comment.
+pub type Polishes = std::collections::HashMap<u32, Polish>;
+
+/// Which of a remote comment's rows of buttons a card has.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PostState {
+    Draft,
+    Posting,
+    Failed,
+    Posted,
+}
+
+/// A remote comment's state as its card shows it.
+fn posting_of(thread: &Thread) -> Option<PostState> {
+    use cellix_review::threads::Sent;
+    let remote = thread.remote.as_ref()?;
+    if !thread.author.is_empty() {
+        return Some(PostState::Posted);
+    }
+    Some(match remote.state {
+        Sent::Draft => PostState::Draft,
+        Sent::Posting => PostState::Posting,
+        Sent::Failed { .. } => PostState::Failed,
+        Sent::Posted { .. } => PostState::Posted,
+    })
+}
+
+/// Where the reviewer's reply on a remote doc stands; none for someone else's, or an agent's.
+fn reply_posting(reply: &Reply) -> Option<PostState> {
+    use cellix_review::threads::Sent;
+    let remote = reply.remote.as_ref().filter(|_| reply.author == YOU)?;
+    Some(match remote.state {
+        Sent::Draft => PostState::Draft,
+        Sent::Posting => PostState::Posting,
+        Sent::Failed { .. } => PostState::Failed,
+        Sent::Posted { .. } => PostState::Posted,
+    })
+}
+
+/// The buttons under the reviewer's reply on a remote doc, by where it stands.
+fn reply_post_labels(posting: PostState) -> &'static [&'static str] {
+    match posting {
+        PostState::Draft => &[POST_REPLY, COPY],
+        PostState::Failed => &FAILED_BUTTONS,
+        PostState::Posting | PostState::Posted => &POSTING_BUTTONS,
+    }
+}
+
+/// The labels of a remote comment's row of buttons, those before the plain ones at its end.
+fn posting_labels(posting: PostState) -> &'static [&'static str] {
+    match posting {
+        PostState::Draft => &DRAFT_BUTTONS,
+        PostState::Posting => &POSTING_BUTTONS,
+        PostState::Failed => &FAILED_BUTTONS,
+        PostState::Posted => &POSTED_BUTTONS,
+    }
+}
+
+/// The plain ones at its end: the draft's Edit and Delete, a posted one's Open in Doc.
+fn posting_ends(posting: PostState) -> &'static [&'static str] {
+    match posting {
+        PostState::Draft | PostState::Failed => &EDITS,
+        PostState::Posting => &[],
+        PostState::Posted => &[OPEN_IN_DOC],
+    }
 }
 
 /// An agent's verdict on a comment, from how its reply starts: `Agree (Evidence): …` or
@@ -256,6 +363,22 @@ enum Line {
     Reopen(u32),
     /// The button that shows the resolved comments, how many there are, and whether they show.
     Resolved(usize, bool),
+    /// Over a remote doc's comments: how many of the reviewer's are posted and how many are
+    /// drafts, and how many are someone else's.
+    RemoteHead(usize, usize, usize, usize),
+    /// A remote comment's buttons, by where it stands.
+    Remote(u32, PostState),
+    /// Over Polish's suggestion: who made it and the words counted, after and before.
+    Polished(u32, String),
+    /// A row of the suggestion, in its box.
+    Polish(u32, String),
+    /// Use This and Keep Mine, under it.
+    PolishChoice(u32),
+    /// Under one of the reviewer's replies on a remote doc: Post Reply and Copy, Retry where
+    /// it failed, by the reply's place.
+    ReplyPost(u32, usize, PostState),
+    /// A row of why a post failed, small and in the error's colour.
+    Failure(String),
     Gap,
 }
 
@@ -269,12 +392,40 @@ enum Words {
     Removed,
     /// Only for a pill's colour: an agent says it did what the comment asks.
     Addressed,
+    /// Only for a pill's colour, on a remote doc: the reviewer's comment is on the doc, is
+    /// still a draft or posting, or failed to post.
+    Posted,
+    Unposted,
+    Failed,
 }
 
-/// The pills at a card's top: that an agent says it addressed it, and what became of its
-/// words. The first stands beside who wrote it where it fits, the rest under it.
-fn pills_of(thread: &Thread) -> Vec<(String, Words)> {
+/// What a remote comment's pill says of where it stands, by the time `now`.
+fn remote_pill(thread: &Thread, now: u64) -> Option<(String, Words)> {
+    use cellix_review::threads::Sent;
+    let remote = thread
+        .remote
+        .as_ref()
+        .filter(|_| thread.author.is_empty())?;
+    Some(match &remote.state {
+        Sent::Draft => ("Draft, not posted yet".to_string(), Words::Unposted),
+        Sent::Posting => ("Posting\u{2026}".to_string(), Words::Unposted),
+        Sent::Failed { .. } => ("Not posted".to_string(), Words::Failed),
+        Sent::Posted { at } => {
+            let ago = age(*at, now).map_or_else(String::new, |ago| match ago.as_str() {
+                "now" => " just now".to_string(),
+                ago => format!(" {ago} ago"),
+            });
+            (format!("Posted{ago}"), Words::Posted)
+        }
+    })
+}
+
+/// The pills at a card's top: where a remote comment stands, that an agent says it
+/// addressed it, and what became of its words. The first stands beside who wrote it where it
+/// fits, the rest under it.
+fn pills_of(thread: &Thread, now: u64) -> Vec<(String, Words)> {
     let mut pills = Vec::new();
+    pills.extend(remote_pill(thread, now));
     if let Some(by) = thread.addressed_by() {
         pills.push((format!("Addressed by {by}"), Words::Addressed));
     }
@@ -381,9 +532,9 @@ pub const WORDS_GONE: &str = "Words gone";
 /// which said something else.
 fn pill_tone(words: Words, theme: &Theme) -> cellix_render::Rgb {
     match words {
-        Words::Changed => theme.gutter.fg,
-        Words::Addressed => theme.git_added,
-        Words::Removed | Words::Here => theme.error,
+        Words::Changed | Words::Unposted => theme.gutter.fg,
+        Words::Addressed | Words::Posted => theme.git_added,
+        Words::Removed | Words::Here | Words::Failed => theme.error,
     }
 }
 
@@ -782,13 +933,45 @@ pub fn wrap_spans(text: &str, width: f32, measure: &dyn Measure) -> Vec<(usize, 
 }
 
 /// What the button that sends a comment being written says: what sending it does.
-fn send_label(draft: &Draft) -> &'static str {
+/// On a remote doc what's written is kept here as a draft, which its own Post sends later.
+fn send_label(draft: &Draft, remote: bool) -> &'static str {
     match (draft.thread, draft.editing, draft.ask) {
         (Some(_), true, _) => "Save",
+        (_, false, _) if remote => SAVE_DRAFT,
         (Some(_), false, _) => "Reply",
         (None, _, true) => ASK,
         (None, _, false) => "Comment",
     }
+}
+
+const SAVE_DRAFT: &str = "Save Draft";
+
+/// Where Polish's box stands from its first row's top, and past its buttons' row's foot, in
+/// rows, its rows being `POLISH_DROP` down theirs: 15 px under the draft's last words and
+/// 8 px round what's in it.
+const POLISH_BOX: (f32, f32) = (0.4, 0.07);
+/// How far Polish's rows stand down theirs, so its box has air over it.
+const POLISH_DROP: f32 = 0.5;
+
+/// How wide a row of small words may be, in the columns words of the usual size are
+/// measured in: small words wrapped by the usual size's width stopped a fifth short.
+fn small_width(width: f32, measure: &dyn Measure) -> f32 {
+    if measure.in_cells() {
+        width
+    } else {
+        width * 100.0 / f32::from(SMALL)
+    }
+}
+/// How far its words and buttons stand in from its edge, in columns.
+const POLISH_IN: f32 = 1.0;
+
+/// Use This and Keep Mine, inside Polish's box, `POLISH_IN` in from the card's buttons.
+fn polish_row(area: Rect, measure: &dyn Measure) -> Vec<(&'static str, String, u16)> {
+    let shift = POLISH_IN as u16;
+    row_of(area, &POLISH_CHOICE, measure)
+        .into_iter()
+        .map(|(label, cells, x)| (label, cells, x + shift))
+        .collect()
 }
 
 const CANCEL: &str = "Cancel";
@@ -1256,6 +1439,8 @@ pub struct View<'a> {
     /// What's selected among the cards' words, first place to last, which is tinted as a
     /// page's selection is. It changes nothing laid out.
     pub selected: Option<(Spot, Spot)>,
+    /// What Polish has for each of a remote doc's drafts.
+    pub polish: Option<&'a Polishes>,
 }
 
 /// A list's rows as they were last laid out, with a mark of all they were laid out from.
@@ -1314,6 +1499,11 @@ fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dy
         .map(|unsent| unsent.0.borrow().clone())
         .hash(&mut hasher);
     view.suggestions.hash(&mut hasher);
+    // Polish's, by comment, in order: a map has none.
+    let mut polish: Vec<(&u32, &Polish)> =
+        view.polish.map(|p| p.iter().collect()).unwrap_or_default();
+    polish.sort_by_key(|(id, _)| **id);
+    polish.hash(&mut hasher);
     // A picture takes rows by its size. They're summed, since a map has no order.
     let pictures = view.pictures.map(|pictures| {
         let sum = pictures.iter().fold(0u64, |sum, (name, figure)| {
@@ -1364,6 +1554,7 @@ impl Default for View<'_> {
             edge: 0.0,
             suggestions: None,
             selected: None,
+            polish: None,
         }
     }
 }
@@ -1775,6 +1966,11 @@ pub fn card_at(area: Rect, shown: Shown, top: usize, y: u16, measure: &dyn Measu
         | Line::Rewrite(id, _)
         | Line::Buttons(id)
         | Line::Reopen(id)
+        | Line::Remote(id, _)
+        | Line::Polished(id, _)
+        | Line::Polish(id, _)
+        | Line::PolishChoice(id)
+        | Line::ReplyPost(id, ..)
         | Line::Send(id, _) => *id,
         Line::Picture { thread, .. } => *thread,
         _ => return None,
@@ -2167,6 +2363,12 @@ fn control_drop(all: &[Line], index: usize, measure: &dyn Measure) -> f32 {
         Some(Line::Sort(_) | Line::Resolved(..)) if !measure.in_cells() && !under_hint => {
             CONTROL_DROP
         }
+        // Polish's rows stand half a row down, and are pressed where they stand.
+        Some(Line::Polished(..) | Line::Polish(..) | Line::PolishChoice(_))
+            if !measure.in_cells() =>
+        {
+            POLISH_DROP
+        }
         _ => 0.0,
     }
 }
@@ -2376,7 +2578,20 @@ fn lay_out(
     }
     // The counts are of what's still open, whether or not the resolved ones show.
     let open: Vec<&Thread> = threads.iter().copied().filter(|t| !t.resolved).collect();
-    if !open.is_empty() {
+    // A remote doc's comments are counted as the doc has them: the reviewer's posted and
+    // drafts, and everyone else's. Checking the review and kinds are for an agent's work.
+    let remote = !open.is_empty() && open.iter().all(|t| t.remote.is_some());
+    if remote {
+        let others = open.iter().filter(|t| !t.author.is_empty()).count();
+        let drafts = open.iter().filter(|t| t.unposted()).count();
+        let posting = open
+            .iter()
+            .filter(|t| posting_of(t) == Some(PostState::Posting))
+            .count();
+        let posted = open.len() - others - drafts - posting;
+        out.push(Line::RemoteHead(posted, posting, drafts, others));
+        out.push(Line::Gap);
+    } else if !open.is_empty() {
         let mine = open.iter().filter(|t| t.suggested_by.is_empty()).count();
         let mut places: Vec<String> = open.iter().map(|t| place_of(t)).collect();
         places.sort();
@@ -2419,7 +2634,8 @@ fn lay_out(
             Words::Here,
         ));
         draft_lines(new, view, width, measure, &mut out);
-        out.push(Line::Send(NEW_DRAFT, send_label(new)));
+        let on_remote = crate::remote::slug_of(&new.file).is_some();
+        out.push(Line::Send(NEW_DRAFT, send_label(new, on_remote)));
         out.push(Line::Gap);
     } else if open.is_empty() {
         out.push(Line::Empty(resolved.0 > 0));
@@ -2475,10 +2691,13 @@ fn lay_out(
         } else {
             format!(" · {}{kind}", thread.step)
         };
+        // Someone's on a remote doc goes under their name, and says it's from the doc.
         let by = if suggested {
             format!("Suggested by {}", thread.suggested_by)
-        } else {
+        } else if thread.author.is_empty() {
             YOU.to_string()
+        } else {
+            format!("{} \u{b7} in the doc", thread.author)
         };
         // Words a plan's next version changed or dropped: still said, and marked as such.
         // The pill sits at the header's end when both fit, and under it when they don't.
@@ -2491,15 +2710,14 @@ fn lay_out(
             measure.width(&label, small()) + PILL_AIR + pill_width(pill, measure) <= width
         };
         let open = view.changes == Some(id);
-        let mut pills =
-            pills_of(thread)
-                .into_iter()
-                .map(|(pill, tone)| match pill.strip_suffix('\u{203a}') {
-                    Some(words) if open && pill.starts_with(CHANGED_SINCE) => {
-                        (format!("{words}\u{25be}"), tone)
-                    }
-                    _ => (pill, tone),
-                });
+        let mut pills = pills_of(thread, view.now).into_iter().map(|(pill, tone)| {
+            match pill.strip_suffix('\u{203a}') {
+                Some(words) if open && pill.starts_with(CHANGED_SINCE) => {
+                    (format!("{words}\u{25be}"), tone)
+                }
+                _ => (pill, tone),
+            }
+        });
         let first = pills.next();
         let (beside, under) = match first {
             Some((pill, tone)) if fits(&pill) => (Some((pill, tone)), None),
@@ -2550,6 +2768,48 @@ fn lay_out(
                 picture_lines(id, &pictures, &mut which, (view, width), &mut out);
             }
         }
+        let posting = posting_of(thread);
+        // A draft's Polish, under its words: its suggestion in a box with Use This and Keep
+        // Mine, or what it's doing, or why it has none.
+        let polish = view.polish.and_then(|polish| polish.get(&id));
+        if !short
+            && editing.is_none()
+            && matches!(posting, Some(PostState::Draft | PostState::Failed))
+            && let Some(polish) = polish
+        {
+            match polish {
+                Polish::Running(by) => {
+                    out.push(Line::Status(format!("Polishing with {by}\u{2026}")))
+                }
+                Polish::Failed(why) => {
+                    let said = format!("Polish failed: {why}");
+                    out.extend(wrap(&said, width, measure).into_iter().map(Line::Status));
+                }
+                Polish::Ready { text, by, from } => {
+                    let counted = crate::remote::words(text);
+                    let what = format!("{by} \u{b7} {counted} words, from {from}");
+                    // Its rows stand `POLISH_DROP` down theirs, so the box has air over it, and
+                    // the row after them is that air under it.
+                    out.push(Line::Polished(id, what));
+                    let room = width - POLISH_IN * 2.0;
+                    let rows = wrap(text, room, measure);
+                    out.extend(rows.into_iter().map(|row| Line::Polish(id, row)));
+                    out.push(Line::PolishChoice(id));
+                    out.push(Line::Gap);
+                }
+            }
+        }
+        // Where a post failed, why, in the agent's words or a sign-in's, in the error's
+        // colour, across the card as small words go. The pill and the bar say a post is under
+        // way, so the card doesn't say it a third time.
+        if let Some(cellix_review::threads::Sent::Failed { why }) =
+            thread.remote.as_ref().map(|r| &r.state)
+            && !short
+        {
+            let said = format!("Couldn't post it: {why}");
+            let room = small_width(width, measure);
+            out.extend(wrap(&said, room, measure).into_iter().map(Line::Failure));
+        }
         let answers = thread.replies.len();
         // The last word a rewrite: it's for the reviewer to apply or not, with its own buttons.
         let deciding = !short
@@ -2568,6 +2828,16 @@ fn lay_out(
             let author = match age(reply.at, view.now) {
                 Some(ago) => format!("{author} · {ago}"),
                 None => author,
+            };
+            // The reviewer's reply on a remote doc says where it stands, as a comment's
+            // pill does.
+            let sent = reply_posting(reply);
+            let author = match sent {
+                Some(PostState::Draft) => format!("{author} \u{b7} Draft"),
+                Some(PostState::Posting) => format!("{author} \u{b7} Posting\u{2026}"),
+                Some(PostState::Failed) => format!("{author} \u{b7} Not posted"),
+                Some(PostState::Posted) if reply.author == YOU => format!("{author} \u{b7} Posted"),
+                _ => author,
             };
             out.push(Line::Answer(id, word, author, n, reply.author == YOU));
             let (words, pictures) = shown(&body, view);
@@ -2590,6 +2860,20 @@ fn lay_out(
             let text = wrap(&words, width, measure);
             out.extend(text.into_iter().map(|row| Line::Reply(id, row)));
             picture_lines(id, &pictures, &mut which, (view, width), &mut out);
+            // Not on the doc yet: why a post failed, and the buttons that post it or copy it.
+            if let Some(cellix_review::threads::Sent::Failed { why }) =
+                reply.remote.as_ref().map(|r| &r.state)
+            {
+                let said = format!("Couldn't post it: {why}");
+                out.extend(
+                    wrap(&said, small_width(width, measure), measure)
+                        .into_iter()
+                        .map(Line::Failure),
+                );
+            }
+            if let Some(sent) = sent.filter(|s| *s != PostState::Posted) {
+                out.push(Line::ReplyPost(id, n, sent));
+            }
         }
         // A suggestion is the agent's own, so there's nothing to wait for. What no agent has
         // yet says how it gets to one, so nobody wonders whether it went.
@@ -2617,7 +2901,10 @@ fn lay_out(
         // what's being written or drop it: one thing is being done to it at a time.
         let writing = draft.filter(|d| d.thread == Some(id));
         out.push(if let Some(written) = writing {
-            Line::Send(id, send_label(written))
+            Line::Send(id, send_label(written, posting.is_some()))
+        } else if let Some(posting) = posting {
+            // On a remote doc, by where it stands; resolved there, it's answered still.
+            Line::Remote(id, posting)
         } else if thread.resolved {
             Line::Reopen(id)
         } else if suggested {
@@ -2774,6 +3061,41 @@ fn buttons(
         &EDITS
     } else {
         &[MORE]
+    };
+    let (edits, nudge) = edits(area, ends, view, measure);
+    placed.extend(edits);
+    (placed, nudge)
+}
+
+/// A remote comment's buttons as (label, padded cells, start column): its chips from the
+/// card's left, and the plain ones at its end where they fit, Edit and Delete behind the "⋯"
+/// where they don't; with how far right of their cells those at the end are painted.
+fn remote_buttons(
+    area: Rect,
+    posting: PostState,
+    view: View,
+    measure: &dyn Measure,
+) -> (Vec<(&'static str, String, u16)>, f32) {
+    let width = text_width(area, view, measure);
+    let mut placed = row_of(area, posting_labels(posting), measure);
+    let ends = posting_ends(posting);
+    if ends.is_empty() {
+        return (placed, 0.0);
+    }
+    let gap = BUTTON_GAP as usize;
+    let chips: usize = placed
+        .iter()
+        .map(|(_, cells, _)| cells.chars().count() + gap)
+        .sum();
+    let words: usize = ends
+        .iter()
+        .map(|label| plain_cells(label, measure).chars().count() + PLAIN_GAP as usize)
+        .sum();
+    let fit = (chips + words) as f32 <= width + f32::from(PLAIN_GAP);
+    let ends: &[&'static str] = match (fit, posting) {
+        (true, _) => ends,
+        (false, PostState::Posted) => &[],
+        (false, _) => &[MORE],
     };
     let (edits, nudge) = edits(area, ends, view, measure);
     placed.extend(edits);
@@ -3083,6 +3405,42 @@ pub fn hit(
                 _ => Some(Hit::Resolve(*id)),
             }
         }
+        Line::Remote(id, posting) => {
+            let pressed = remote_buttons(area, *posting, view, measure)
+                .0
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            Some(match pressed?.0 {
+                POST | RETRY => Hit::Post(*id, None),
+                COPY => Hit::CopyWords(*id, None),
+                POLISH => Hit::Polish(*id),
+                "Reply" => Hit::Reply(*id),
+                ASK => Hit::Ask(*id),
+                OPEN_IN_DOC => Hit::OpenInDoc(*id),
+                "Edit" => Hit::Edit(*id),
+                "Delete" => Hit::Delete(*id),
+                _ => Hit::More(*id),
+            })
+        }
+        Line::ReplyPost(id, n, posting) => {
+            let pressed = row_of(area, reply_post_labels(*posting), measure)
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            Some(match pressed?.0 {
+                COPY => Hit::CopyWords(*id, Some(*n)),
+                _ => Hit::Post(*id, Some(*n)),
+            })
+        }
+        Line::PolishChoice(id) => {
+            let pressed = polish_row(area, measure)
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            Some(match pressed?.0 {
+                USE_THIS => Hit::UsePolish(*id),
+                _ => Hit::KeepMine(*id),
+            })
+        }
+        Line::Polished(id, _) | Line::Polish(id, _) => Some(Hit::Open(*id)),
         Line::Send(_, label) => {
             let pressed = row_of(area, &[label, CANCEL], measure)
                 .into_iter()
@@ -3334,6 +3692,7 @@ pub fn draw(
             | Line::Choices(_)
             | Line::Addressed(_)
             | Line::Reopen(_)
+            | Line::Remote(..)
             | Line::Send(..) => {
                 if let Some(first) = start.take() {
                     let (y, height) = (row_y(first), (index - first + 1) as f32);
@@ -3341,7 +3700,7 @@ pub fn draw(
                         Bounds::cells(a.left, y - over, a.right - a.left, height + over + under);
                     let of = match line {
                         Line::Buttons(id) | Line::Choices(id) | Line::Addressed(id) => Some(*id),
-                        Line::Reopen(id) | Line::Send(id, _) => Some(*id),
+                        Line::Reopen(id) | Line::Send(id, _) | Line::Remote(id, _) => Some(*id),
                         _ => None,
                     };
                     if let Some(of) = of {
@@ -3353,6 +3712,10 @@ pub fn draw(
                         (mix(theme.accent, card, 0.1), theme.accent)
                     } else if matches!(line, Line::Choices(_)) {
                         (card, offered_edge)
+                    } else if matches!(line, Line::Remote(_, PostState::Draft | PostState::Failed))
+                    {
+                        // A remote draft is yours to post still: ringed in the accent.
+                        (card, theme.accent)
                     } else {
                         (card, theme.border)
                     };
@@ -3422,6 +3785,27 @@ pub fn draw(
             index += 1;
         }
     }
+    // Polish's suggestion stands in a box of the page's own ground, from the row that says
+    // who made it to its Use This and Keep Mine, the buttons' foot inside it.
+    let mut index = 0;
+    while index < all.len() {
+        if let Line::Polished(..) = all[index] {
+            let rows = all[index..]
+                .iter()
+                .position(|l| matches!(l, Line::PolishChoice(_)))
+                .map_or(1, |last| last + 1);
+            let (y, height) = (row_y(index), rows as f32);
+            if shown(y, height) {
+                let top = y + POLISH_BOX.0;
+                let foot = y + height + POLISH_DROP + POLISH_BOX.1;
+                let bounds = Bounds::cells(a.text, top, a.end - a.text, foot - top);
+                grid.panel(bounds, 22, Some(theme.sidebar.bg), None);
+            }
+            index += rows;
+        } else {
+            index += 1;
+        }
+    }
     let inner = Style {
         fg: theme.text.fg,
         bg: card,
@@ -3482,6 +3866,9 @@ pub fn draw(
                 | Line::Reopen(_)
                 | Line::Send(..)
                 | Line::Rewrite(..)
+                | Line::Remote(..)
+                | Line::ReplyPost(..)
+                | Line::PolishChoice(_)
         );
         match line {
             Line::Kinds(kinds) => {
@@ -3516,6 +3903,13 @@ pub fn draw(
             }
             Line::Status(text) => {
                 grid.label_at(a.text, text_x, y, text, inner_dim, right, SMALL);
+            }
+            Line::Failure(text) => {
+                let said = Style {
+                    fg: theme.error,
+                    ..inner
+                };
+                grid.label_at(a.text, text_x, y, text, said, right, SMALL);
             }
             Line::Input(text, caret, selected, _) => {
                 // A field's padding inside its box, which stands on the card's columns.
@@ -4362,15 +4756,158 @@ pub fn draw(
                     grid.button(x, y, &cells, label, fill, style);
                 }
             }
+            Line::RemoteHead(posted, posting, drafts, others) => {
+                let draft_word = if *drafts == 1 { "draft" } else { "drafts" };
+                let mut yours = format!("Yours: {posted} posted");
+                if *posting > 0 {
+                    yours.push_str(&format!(" \u{b7} {posting} posting"));
+                }
+                yours.push_str(&format!(" \u{b7} {drafts} {draft_word}"));
+                grid.label_at(a.text, text_x, y, &yours, dim, right, SMALL);
+                let theirs = format!("Others: {others}");
+                let x = a.end - measure.width(&theirs, small());
+                let quiet = Style {
+                    fg: mix(theme.gutter.fg, theme.sidebar.bg, 0.75),
+                    ..dim
+                };
+                // Its words end on the card's right edge; its cells, a letter each, end at the
+                // pane's text edge, or the last letters were cut where small words are narrow.
+                let cells = right.saturating_sub(theirs.chars().count() as u16);
+                let cell = (x.floor() as u16).min(cells);
+                grid.label_at(x, cell, y, &theirs, quiet, right, SMALL);
+            }
+            Line::Remote(id, posting) => {
+                let card = card_fill(*id);
+                let (placed, at_end) = remote_buttons(area, *posting, view, measure);
+                for (index, (label, cells, x)) in placed.into_iter().enumerate() {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    // Post to Doc, or Retry, is the one thing to do with a draft: filled.
+                    let main = index == 0 && matches!(label, POST | RETRY);
+                    let plain = EDITS.contains(&label) || label == MORE || label == OPEN_IN_DOC;
+                    let fill = match (main, on_it, plain) {
+                        (true, true, _) => theme.quiet_button(theme.button),
+                        (true, false, _) => theme.button,
+                        (_, true, true) => theme.secondary(card, false),
+                        (_, _, false) => theme.secondary(card, on_it),
+                        (_, false, true) => card,
+                    };
+                    let fg = if main {
+                        theme.button_text
+                    } else if plain && !on_it {
+                        theme.secondary_words()
+                    } else {
+                        inner.fg
+                    };
+                    let style = Style {
+                        bg: fill,
+                        fg,
+                        ..inner
+                    };
+                    let drawn = grid.painted_so_far();
+                    if label == MORE {
+                        draw_more(grid, (x, y), &cells, (fill, style), measure);
+                    } else {
+                        grid.button(x, y, &cells, label, fill, style);
+                    }
+                    grid.nudge_since(drawn, if plain { at_end } else { nudge });
+                }
+            }
+            Line::ReplyPost(_, _, posting) => {
+                for (index, (label, cells, x)) in row_of(area, reply_post_labels(*posting), measure)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let main = index == 0 && matches!(label, POST_REPLY | RETRY);
+                    let fill = match (main, on_it) {
+                        (true, true) => theme.quiet_button(theme.button),
+                        (true, false) => theme.button,
+                        _ => theme.secondary(card, on_it),
+                    };
+                    let style = Style {
+                        bg: fill,
+                        fg: if main { theme.button_text } else { inner.fg },
+                        ..inner
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                }
+            }
+            Line::Polished(_, what) => {
+                // "Polished" on a chip in the accent, then who made it and the words counted.
+                let ground = theme.sidebar.bg;
+                let chip = "Polished";
+                let x = a.text + POLISH_IN;
+                let wide = pill_width(chip, measure);
+                let bounds = Bounds::cells(x, y as f32 + PILL.0, wide, PILL.1);
+                grid.panel(bounds, 34, Some(mix(theme.accent, ground, 0.22)), None);
+                let tag = Style {
+                    fg: theme.accent,
+                    bg: ground,
+                    ..inner
+                };
+                let at = x + PILL_ROOM;
+                grid.label_at(at, at.floor() as u16, y, chip, tag, right, SMALL);
+                let after = x + wide + PILL_AIR;
+                let said = Style {
+                    fg: theme.gutter.fg,
+                    bg: ground,
+                    ..inner
+                };
+                grid.label_at(after, after.floor() as u16, y, what, said, right, SMALL);
+            }
+            Line::Polish(_, row) => {
+                let words = Style {
+                    bg: theme.sidebar.bg,
+                    ..inner
+                };
+                let x = a.text + POLISH_IN;
+                grid.label_at(x, x.floor() as u16, y, row, words, right, 100);
+            }
+            Line::PolishChoice(_) => {
+                let ground = theme.sidebar.bg;
+                for (index, (label, cells, x)) in polish_row(area, measure).into_iter().enumerate()
+                {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    // Use This a quiet button; Keep Mine plain words until pointed at.
+                    let fill = match (index, on_it) {
+                        (0, _) => theme.secondary(ground, on_it),
+                        (_, true) => theme.secondary(ground, false),
+                        _ => ground,
+                    };
+                    let style = Style {
+                        bg: fill,
+                        fg: if index > 0 && !on_it {
+                            theme.secondary_words()
+                        } else {
+                            inner.fg
+                        },
+                        ..inner
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                }
+            }
             Line::Gap => {}
         }
         if actions {
             // A row of buttons stands on the card's left column, but for those at its end,
             // which `Buttons` puts in their place itself.
-            if !matches!(line, Line::Buttons(_)) {
+            if !matches!(line, Line::Buttons(_) | Line::Remote(..)) {
                 grid.nudge_since(from, nudge);
             }
-            grid.lift_since(from, -ACTIONS_DROP);
+            // Polish's buttons stand with its words, `POLISH_DROP` down, inside its box.
+            if !matches!(line, Line::PolishChoice(_)) {
+                grid.lift_since(from, -ACTIONS_DROP);
+            }
+        }
+        if matches!(
+            line,
+            Line::Polished(..) | Line::Polish(..) | Line::PolishChoice(_)
+        ) && !measure.in_cells()
+        {
+            grid.lift_since(from, -POLISH_DROP);
         }
     }
     // The thumb in the middle of the air right of the cards.
