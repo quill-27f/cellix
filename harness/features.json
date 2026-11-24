@@ -7726,5 +7726,12 @@
     "title": "Polish has the agent, with no tools, make a remote draft short, clear and kind; the suggestion shows under it with the words counted, Use This takes it as the draft and Keep Mine leaves it",
     "test": "polish_suggests_a_shorter_draft_to_use_or_not",
     "passes": true
+  },
+  {
+    "id": "remote-doc-replies",
+    "milestone": 15,
+    "title": "Replies on a remote doc are drafts posted one by one under their comment's id, and End Review asks, then takes the doc, its tab and its comments off the machine",
+    "test": "replies_post_one_by_one_and_end_review_takes_the_doc_away",
+    "passes": true
   }
 ]

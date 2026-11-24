@@ -629,3 +629,85 @@ fn polish_suggests_a_shorter_draft_to_use_or_not() {
     assert_eq!(state_of(&app, short), Some(Sent::Draft), "still a draft");
     assert_eq!(runs(dir.path()), 3, "nothing posted");
 }
+
+/// A reply the reviewer writes on any thread, someone else's or their own posted one, is a
+/// draft with its own Post Reply, posted one by one: a press posts that reply alone, under the
+/// doc's id of its comment. End Review asks, then takes the doc's folder, its tab and its
+/// comments off this machine.
+#[test]
+fn replies_post_one_by_one_and_end_review_takes_the_doc_away() {
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    read_doc(dir.path(), &mut app);
+    press_beside(&mut app, "Where does 3x come from?", "Ask Agent", "Reply");
+    typed(&mut app, "Can we link the growth numbers?");
+    key(&mut app, Key::Enter);
+    press_beside(&mut app, "Where does 3x come from?", "Ask Agent", "Reply");
+    typed(&mut app, "And last year's peak itself?");
+    key(&mut app, Key::Enter);
+    let thread = thread_saying(&app, "Where does 3x come from?");
+    let drafts: Vec<_> = thread
+        .replies
+        .iter()
+        .filter(|r| r.author == "You")
+        .collect();
+    assert_eq!(drafts.len(), 2);
+    assert!(drafts.iter().all(|r| r.remote == Some(Remote::draft())));
+    let text = screen(&app).text();
+    assert_eq!(text.matches("Post Reply").count(), 2, "{text}");
+    assert_eq!(runs(dir.path()), 1, "nothing posted by writing");
+
+    answers(dir.path(), 2, &printed(r#"{"id": "r-9"}"#));
+    press_on_card(&mut app, "Can we link the growth numbers?", "Post Reply");
+    until(&mut app, "posted the reply", |app| {
+        let thread = thread_saying(app, "Where does 3x come from?");
+        thread.replies.iter().any(|r| {
+            r.text == "Can we link the growth numbers?"
+                && matches!(
+                    r.remote.as_ref().map(|r| &r.state),
+                    Some(Sent::Posted { .. })
+                )
+        })
+    });
+    let (_, prompt, _) = given(dir.path(), 2);
+    assert!(prompt.contains("comment whose id is c1"), "{prompt}");
+    assert!(
+        prompt.contains("Can we link the growth numbers?"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("last year's peak itself"), "{prompt}");
+    let thread = thread_saying(&app, "Where does 3x come from?");
+    let other = thread
+        .replies
+        .iter()
+        .find(|r| r.text == "And last year's peak itself?")
+        .unwrap();
+    assert_eq!(
+        other.remote,
+        Some(Remote::draft()),
+        "the other is still a draft"
+    );
+    assert_eq!(screen(&app).text().matches("Post Reply").count(), 1);
+    assert_eq!(runs(dir.path()), 2);
+
+    // End Review asks first, then takes it all away.
+    let slug = remote::slug(LINK);
+    let folder = dir.path().join(remote::FOLDER).join(&slug);
+    let strip = screen(&app).row_text(1);
+    let at = strip
+        .find('\u{22ef}')
+        .unwrap_or_else(|| panic!("no menu in {strip}"));
+    click(&mut app, strip[..at].chars().count() as u16, 1);
+    let (x, y) = find(&screen(&app), "End Review");
+    click(&mut app, x + 1, y);
+    let grid = screen(&app);
+    assert!(grid.text().contains("End this review?"), "{}", grid.text());
+    assert!(folder.is_dir(), "nothing gone before it's agreed to");
+    let (x, y) = find(&grid, "End Review");
+    click(&mut app, x + 1, y);
+    assert!(!folder.exists());
+    let file = remote::doc_file(&slug);
+    assert!(app.threads.iter().all(|t| t.file != file));
+    assert!(!screen(&app).row_text(0).contains("Queue service launch"));
+    assert_eq!(runs(dir.path()), 2);
+}

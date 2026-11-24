@@ -4635,3 +4635,11 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - Test: `polish_suggests_a_shorter_draft_to_use_or_not` (no tools allowed, the prompt's words, quote and paragraph, the counts on the card, Keep Mine and then Use This, nothing posted).
 - Scene: `r2-remote-polish`; the ui-expert's review moved the box half a row down with air over and under it (it crowded the draft's last words and stood on Post to Doc).
 - Left: the board's 7 px between the box and the buttons is about 25 px here, a row's air being what a card's rows have.
+
+## Remote doc review: replies, Sync and End Review (2026-11-24)
+
+- A reply the reviewer writes on any remote thread, someone else's or their own posted one, is a draft: "You · Draft" over it and Post Reply (filled) and Copy under it, posted one by one under its comment's id in the doc ("add this one reply to the comment whose id is …"). Failed, it says why and has Retry. An agent's reply after Ask Agent stays here and is never posted.
+- Sync, the strip's, reads the doc again: comments and replies new by id come in under their authors, someone's edited or resolved ones are brought up to date, `doc.md` is replaced in its tab and every thread found again by its quote (one whose words went says so). Drafts are never touched or posted by it.
+- End Review, in the strip's menu, asks ("End this review?", saying drafts not posted go too), then deletes `.cellix/remote/<slug>`, closes its tab and takes its comments away: the user's company's content doesn't linger.
+- Test: `replies_post_one_by_one_and_end_review_takes_the_doc_away` (two reply drafts, nothing run by writing them; one press posts that one under `c1` and not the other; End Review asks before anything goes, then the folder, the comments and the tab are gone). Sync's merging is proven in `a_draft_is_posted_only_by_its_own_press_and_only_once` and `remote::tests::a_read_merges_by_id_and_keeps_drafts`.
+- Unverified: a real doc tool's reply tool. Next: what the ui-expert left (authors not bold, the server menu with no row lit, icons on Post to Doc and Copy), and Codex and Gemini CLI as readers.
