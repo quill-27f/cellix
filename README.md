@@ -124,8 +124,16 @@ edits what you edit and git sees every change.
 You read and you comment; the agent checks your review and points at what you missed. Select any
 words and Comment as you go, then press **Check My Review** in the Comments pane.
 
-- **Each of your comments gets a verdict.** The agent answers under it, *agrees* or *pushes back*,
-  with why, so a weak point is caught before it reaches the author.
+- **Each of your comments gets a verdict.** Press **Validate** on one and the agent says whether it
+  *holds up*, *doesn't hold*, or is *already answered*, with the kind and why, checked against the
+  whole document — kept with the comment across sync and restarts, and it never changes your words.
+- **The whole review at once.** **Validate All** and **Polish All**, at the top of the Comments pane,
+  run over your comments with no result yet, two at a time, with "Validating 2 of 5" and a **Stop**
+  that lets what's under way finish and starts nothing more. On a remote doc, **Post All Drafts**
+  asks first, then posts one at a time, a refused one saying why on its card while the rest still go.
+  Pick a kind's pill and the row acts on what the pane shows.
+- **The Default agent is your pick.** Settings › Integrations' Default agent row says who answers
+  Ask, Polish and Validate: Auto, Claude, Codex, Gemini, or one of your own agents.
 - **It suggests what you missed.** Comments you didn't make arrive marked *Suggested by Claude*, with
   their kind, to **Keep** as your own or **Dismiss**.
 - **Coverage you can see.** A strip counts your comments by kind (Clarity, Correctness, Evidence,
@@ -175,7 +183,13 @@ words and Comment as you go, then press **Check My Review** in the Comments pane
 Cellix is also a full editor you can run alone: `cellix` in a project, or `cellix src/lib.rs` for a
 file. It has highlighting and suggestions in every file type, language servers, a minimap, and Vim
 and Neovim modes. The icons at the top right put a real agent, a terminal or a browser in a pane
-beside your file.
+beside your file. Agents are Claude Code, Codex, Gemini CLI, OpenCode, Copilot CLI, Cursor CLI and
+Kiro CLI, plus **your own**: a command like `claude-ds` that wraps an agent's CLI for another model.
+Add one in Settings › Integrations' **Your agents** card — its name, its command, and which agent it
+works like — and it's offered and started everywhere the agents are, with that agent's marks, hooks
+and treatment. Runners found on your PATH are offered there with **Add as Claude Code**; Cellix reads
+only their names, never their contents. Every agent has a switch there: turned off, it's offered
+nowhere new, and what's already running keeps its tab.
 
 The window is your terminal's own colour, and the file and the side pane are sheets on it. The
 views (files, search, outline, source control, agent context, and Settings at the end) run across

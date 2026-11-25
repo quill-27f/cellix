@@ -2,6 +2,20 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.16.0] - 2026-11-25
+
+Your own agents, and the whole review at once.
+
+### Added
+- **Your own agents.** A runner like `claude-ds` — a command that wraps an agent's CLI, for another model behind the same interface — is a first-class agent. Settings › Integrations' **Your agents** card lists yours with Add (a name, a command and the agent it works like), Edit and Remove, and offers runners found on your PATH with **Add as Claude Code**; Cellix reads only their names and the executable bit, never a runner's contents. Once added, a runner is offered everywhere an agent is — the + menu, START, New Worktree, Review with… and the **Default agent** row — and runs everywhere one does: in the side pane, in Ask, Polish and Validate, and as the reader of remote docs where it works like Claude Code, with that agent's marks, hooks, plugin and treatment, its cards saying its name. Kept sessions resume the like agent's way. One that needs something interactive (a Keychain prompt, a sign-in) says what it printed on the card, and suggests running it once in a Terminal tab.
+- **Agents turn on and off.** Every agent, built-in or your own, has a switch in the same list (`disabled_agents`). Off, it's offered nowhere new; what's already running keeps its tab and can still be resumed, and the Default agent row, which Auto then answers for, stops offering it. The Agents panel says where the switches are when none are on.
+- **The whole review at once.** At the top of the Comments pane: **Validate All** and **Polish All** run over your comments with no result yet, two at a time, with "Validating 2 of 5" and a **Stop** that lets what's under way finish and starts nothing more; on a remote doc, **Post All Drafts** asks first and posts one at a time, a refused one saying why on its card while the rest still go. A press on a kind's pill lists only that kind, and the row acts on what the pane shows. The question's detail wraps and the dialog grows with it; the row's buttons flow over rows where the pane has no room, each whole.
+- **The Default agent** answers Ask, Polish and Validate, picked in Settings › Integrations. **Validate** checks one comment of yours against the whole document — it holds up, it doesn't, or it's already answered, with the kind and why — kept with the comment across sync and restarts. **Polish** works on a page's comments too, and your card's buttons are the same on a page and on a remote doc; only posting differs.
+
+### Fixed
+- The head's quiet "Others: N" keeps a 4.5-to-1 contrast in the light theme.
+- Two pixel-tier tests named the harness's terminal rather than a plain one, so they could fail on a machine whose terminal config sizes tiles differently.
+
 ## [0.15.1] - 2026-11-25
 
 A workspace you close stays closed.
