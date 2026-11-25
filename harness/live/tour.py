@@ -1594,7 +1594,7 @@ def remote_scenes(scratch):
     system = "/usr/bin:/bin:/usr/sbin:/sbin"
     # The doc as a read leaves it, with three comments: Priya's with Sam's reply, the
     # reviewer's draft and the reviewer's posted one.
-    def seed(state):
+    def seed(state, extra=None):
         folder = f"{ROOT}/.cellix/remote/queue-launch"
         os.makedirs(folder, exist_ok=True)
         with open(f"{folder}/doc.md", "w") as f:
@@ -1617,7 +1617,7 @@ def remote_scenes(scratch):
              "text": "I think this is a problem because if one consumer gets slow for whatever reason "
                      "then all of the events behind it are going to wait, and the doc doesn't say what "
                      "happens then or how we'd notice.",
-             "remote": {"state": state}},
+             "remote": {"state": state}, **(extra or {})},
             {"id": 5, "file": doc, "line": 5, "kind": "Clarity", "placed": True, "at": now - 900,
              "quote": "with a third to spare",
              "text": "A third over 42k, or over the 3x estimate?",
@@ -1640,11 +1640,21 @@ def remote_scenes(scratch):
         ("r4-remote-posted", comments, "ok", {"is": "posted", "at": now - 60}),
         ("r5-remote-failed", comments, "fail",
          {"is": "failed", "why": "The doc tool asked to sign in again. Sign in (your security key), then Retry."}),
+        ("r6-remote-validated", comments, "ok", {"is": "draft"}),
     ]
+    # The draft with what Validate said of it and Polish's words, kept with it.
+    draft_words = ("I think this is a problem because if one consumer gets slow for whatever reason "
+                   "then all of the events behind it are going to wait, and the doc doesn't say what "
+                   "happens then or how we'd notice.")
+    extras = {"r6-remote-validated": {
+        "validation": {"verdict": "holds_up", "kind": "Correctness", "by": "Claude Code",
+                       "on": draft_words,
+                       "why": "Nothing in the doc says how a stalled partition is noticed or shed."},
+        "polished": {"text": polished, "by": "Claude Code", "from": 38, "on": draft_words}}}
     for name, steps, kind, state in scenes:
         shutil.rmtree(f"{ROOT}/.cellix", ignore_errors=True)
         if state is not None:
-            seed(state)
+            seed(state, extras.get(name))
         cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
         env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools[kind]}:{system}"}
         extra = {"background": "eff1f5"} if name.endswith("-light") else {}
@@ -2186,6 +2196,29 @@ with tempfile.TemporaryDirectory() as made:
         json.dump(mentions, f)
     mentioned = [["wait", 1.0], *command("show comments", F1), ["until", "yours"], ["wait", 1.0]]
     shoot("50-comment-mentions", mentioned, NOTE_FILE, size="150x44", cellix=True)
+    # The reviewer's comment with what Validate said of it and Polish's words for it, each in
+    # its box under the words, as they're kept with the comment.
+    wordy = ("I wonder whether this needs to say which normaliser it assumes, since a reader "
+             "could take it for a sparse one.")
+    validated = [
+        {"id": 1, "file": NOTE_FILE, "line": 3, "quote": "the weights sum to one",
+         "text": wordy, "replies": [], "resolved": False, "told": 0, "asked": False,
+         "kind": "Clarity", "suggested_by": "",
+         "validation": {"verdict": "holds_up", "kind": "Clarity", "by": "Claude Code", "on": wordy,
+                        "why": "The section never names the normaliser, and a sparse one breaks the sum."},
+         "polished": {"text": "Say which normaliser this assumes: a sparse one breaks the sum.",
+                      "by": "Claude Code", "from": 21, "on": wordy}},
+        {"id": 2, "file": NOTE_FILE, "line": 3, "quote": "for inputs of $n$ tokens",
+         "text": "Where is the cost claim measured?", "replies": [], "resolved": False,
+         "told": 0, "asked": False, "kind": "Evidence", "suggested_by": "",
+         "validation": {"verdict": "already_answered", "kind": "Evidence", "by": "Claude Code",
+                        "on": "Where is the cost claim measured?",
+                        "why": "The section Cost gives the measurement, on 4k tokens."}},
+    ]
+    with open(f"{ROOT}/.cellix/threads.json", "w") as f:
+        json.dump(validated, f)
+    shoot("50-comment-validated", mentioned, NOTE_FILE, size="150x44", cellix=True,
+          expect="Holds up")
     # A comment with the reviewer's reply and an agent's: the pointer on the reviewer's shows
     # its Edit and Delete at the end of the line over it, and on the agent's only Delete. Then
     # the reviewer's being changed, in the box replies are written in.

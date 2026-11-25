@@ -535,10 +535,13 @@ fn a_cards_buttons_say_what_the_palette_calls_them() {
     let grid = screen(&app);
     let text = grid.text();
     assert!(text.contains("prompt. Ask Agent"), "the hint: {text}");
-    let buttons = (0..grid.height())
+    // The card's buttons, over the rows they flow on, Validate first and Resolve last.
+    let buttons: String = (0..grid.height())
         .map(|y| grid.row_text(y))
-        .find(|row| row.contains("Resolve"))
-        .expect("the card's buttons");
+        .skip_while(|row| !row.contains(" Validate "))
+        .take_while(|row| !row.trim().is_empty())
+        .collect();
+    assert!(buttons.contains("Resolve"), "{buttons}");
     assert!(buttons.contains(" Ask Agent "), "{buttons}");
     assert!(text.contains("Check My Review"), "{text}");
     assert!(!text.contains("Ask agent") && !text.contains("Check my review"));
@@ -1344,11 +1347,22 @@ fn a_narrow_cards_buttons_stay_inside_it_with_edit_and_delete_behind_more() {
             "{name} ends inside the card: {chip:?}"
         );
     }
-    let edit = grid
-        .paint
-        .iter()
-        .any(|p| matches!(p, Paint::Text { text, .. } if text == "Edit"));
-    assert!(!edit, "Edit and Delete aren't on a row of their own");
+    // Edit and Delete never take a row of their own: beside the last of the others where
+    // they fit, which the buttons flowing over two rows leaves room for, else behind a "⋯".
+    let row_of = |name: &str| {
+        grid.paint.iter().find_map(|p| match p {
+            Paint::Text { text, y, .. } if text == name => Some(*y),
+            _ => None,
+        })
+    };
+    if let Some(edit) = row_of("Edit") {
+        assert_eq!(Some(edit), row_of("Resolve"), "Edit beside Resolve");
+        assert_eq!(row_of("Delete"), Some(edit));
+        let (x, y) = find(&screen(&app), "Delete");
+        click(&mut app, x + 1, y);
+        assert!(screen(&app).text().contains("Delete this comment?"));
+        return;
+    }
     let more = grid.paint.iter().any(|p| {
         matches!(
             p,

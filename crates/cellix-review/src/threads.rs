@@ -98,6 +98,59 @@ pub enum Sent {
     Failed { why: String },
 }
 
+/// What Validate said of a comment: whether it holds up, the kind of comment it is, and why,
+/// by the agent that said it. It's kept with the comment, through a Sync, a restart or the doc
+/// opened again, until the comment's words change: it was said of the words in `on`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Validation {
+    pub verdict: Verdict,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub kind: String,
+    pub why: String,
+    /// The agent that said it, as Cellix names it: "Claude Code".
+    pub by: String,
+    pub on: String,
+}
+
+/// Whether a comment holds up, as Validate says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// It's right, and the document should change for it.
+    HoldsUp,
+    /// It's mistaken, or asks for what the document already does.
+    DoesntHold,
+    /// The document answers it already, somewhere else.
+    AlreadyAnswered,
+}
+
+impl Verdict {
+    pub const ALL: [Verdict; 3] = [
+        Verdict::HoldsUp,
+        Verdict::DoesntHold,
+        Verdict::AlreadyAnswered,
+    ];
+
+    /// As a card says it.
+    pub fn words(self) -> &'static str {
+        match self {
+            Verdict::HoldsUp => "Holds up",
+            Verdict::DoesntHold => "Doesn't hold",
+            Verdict::AlreadyAnswered => "Already answered",
+        }
+    }
+}
+
+/// Polish's suggestion for a comment: its new words, the agent that made them, and how many
+/// words the comment had. Kept with the comment as a validation is, till its words change.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Polished {
+    pub text: String,
+    pub by: String,
+    pub from: usize,
+    pub on: String,
+}
+
 /// Now, in seconds since 1970, as a comment or reply says when it was written.
 pub fn now() -> u64 {
     std::time::SystemTime::now()
@@ -183,6 +236,11 @@ pub struct Thread {
     /// On a document read from elsewhere: the doc's id for it and whether it's posted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remote: Option<Remote>,
+    /// What Validate said of it, and Polish's words for it, each kept till its words change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<Validation>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polished: Option<Polished>,
 }
 
 /// What a thread is about besides a file's words.

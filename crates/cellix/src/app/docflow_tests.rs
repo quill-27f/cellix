@@ -120,14 +120,14 @@ fn press(app: &mut App, words: &str) {
     click(app, x + 1, y);
 }
 
-/// Presses a card's button: `words` on the row of a card's buttons, which has Resolve, and
-/// not where a card's words name it.
+/// Presses a card's button: `words` on a row of a card's buttons, which flow over two rows
+/// with Validate on the first and Resolve on the last, and not where a card's words name it.
 fn press_button(app: &mut App, words: &str) {
     let grid = screen(app);
     let y = (0..grid.height())
         .find(|y| {
             let row = grid.row_text(*y);
-            row.contains(words) && row.contains("Resolve")
+            row.contains(words) && (row.contains("Resolve") || row.contains("Validate"))
         })
         .unwrap_or_else(|| panic!("no button {words:?}:\n{}", grid.text()));
     let row = grid.row_text(y);
@@ -889,13 +889,13 @@ fn a_comments_kind_is_picked_from_chips_as_it_is_written() {
         "{text}"
     );
     // Changed, it starts from its kind, and takes another.
-    press_beside(&mut app, "Edit", "Resolve");
+    press_button(&mut app, "Edit");
     assert_eq!(app.dock.draft.as_ref().unwrap().kind, "Evidence");
     press_chip(&mut app, "Clarity");
     enter(&mut app);
     assert_eq!(app.threads[0].kind, "Clarity");
     // A reply is about the comment, whose kind it has.
-    press_beside(&mut app, "Reply", "Resolve");
+    press_button(&mut app, "Reply");
     let grid = screen(&app);
     let chips = (0..grid.height()).any(|y| {
         let row = grid.row_text(y);

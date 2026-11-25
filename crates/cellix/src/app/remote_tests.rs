@@ -880,3 +880,154 @@ fn the_default_agent_is_picked_in_settings_and_polish_runs_it() {
     assert!(text.contains("Codex · 10 words, from 26"), "{text}");
     assert_eq!(thread_saying(&app, long).text, long);
 }
+
+/// Validate, on one of the reviewer's comments on a page of the project: the Default agent
+/// runs with no tools, given the whole document, the words the comment is on and the comment,
+/// and its one line shows under the comment, a verdict on a chip with the kind and who said it,
+/// and why. The comment's words and kind stay as they were. What it said is kept with the
+/// comment, so a new Cellix shows it, until the comment is edited.
+#[test]
+fn validate_says_whether_a_comment_holds_up_and_never_changes_it() {
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    let path = dir.path().join("plan.md");
+    fs::write(&path, DOC).unwrap();
+    app.open(&path).unwrap();
+    let words = "Where is a slow consumer noticed?";
+    comment(&mut app, "slow consumer", words);
+    app.dock.open = true;
+    app.dock.show_comments();
+    answers(
+        dir.path(),
+        1,
+        &printed(
+            "**Already answered (Evidence):** Traffic and capacity says each partition is \
+             drained by one consumer.",
+        ),
+    );
+    press_on_card(&mut app, words, "Validate");
+    let text = shows(&mut app, "Already answered").text();
+    assert_eq!(runs(dir.path()), 1);
+    let (args, prompt, side) = given(dir.path(), 1);
+    assert_eq!(side, "1");
+    assert_eq!(values(&args, "--tools"), [""], "no tools at all");
+    assert!(
+        args.contains(&"--strict-mcp-config".to_string()),
+        "{args:?}"
+    );
+    assert!(values(&args, "--allowedTools").is_empty(), "{args:?}");
+    assert!(prompt.contains(DOC), "the whole document: {prompt}");
+    assert!(
+        prompt.contains("The words the comment is on: slow consumer"),
+        "{prompt}"
+    );
+    assert!(prompt.contains(words), "{prompt}");
+    assert!(
+        prompt.contains("Holds up, Doesn't hold, Already answered"),
+        "{prompt}"
+    );
+    for said in [
+        "Evidence · Claude Code",
+        "drained by one consumer",
+        "Dismiss",
+    ] {
+        assert!(text.contains(said), "{said:?} in\n{text}");
+    }
+    let thread = thread_saying(&app, words);
+    assert_eq!(thread.text, words, "the comment is as it was");
+    assert!(thread.kind.is_empty(), "its kind too");
+    let validation = thread.validation.clone().expect("kept with the comment");
+    assert_eq!(
+        validation.verdict,
+        cellix_review::threads::Verdict::AlreadyAnswered
+    );
+    assert_eq!(validation.kind, "Evidence");
+
+    // A new Cellix shows it from the comments file.
+    let mut again = App::new(dir.path().to_path_buf(), (210, 46));
+    again.open(&path).unwrap();
+    again.dock.open = true;
+    again.dock.show_comments();
+    assert!(screen(&again).text().contains("Already answered"));
+    assert_eq!(runs(dir.path()), 1, "nothing ran again");
+
+    // Edited, the comment's words are new, and what was said of the old ones goes.
+    let id = thread_saying(&app, words).id;
+    app.thread_hit(crate::threads::Hit::Edit(id));
+    typed(&mut app, " And who is told?");
+    key(&mut app, Key::Enter);
+    let text = screen(&app).text();
+    assert!(text.contains("And who is told?"), "{text}");
+    assert!(!text.contains("Already answered"), "{text}");
+}
+
+/// On a remote doc's draft, Validate is the same press, and posts nothing: what it said stands
+/// under the draft, green where it holds up, beside Polish's words, both at once. It's kept
+/// through a Sync and a new Cellix. Dismiss takes it away and leaves the draft and Polish's
+/// words as they were.
+#[test]
+fn validate_on_a_draft_is_kept_through_sync_and_reopening_till_dismissed() {
+    use cellix_render::Paint;
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    read_doc(dir.path(), &mut app);
+    let words = "How is a stalled partition noticed?";
+    comment(&mut app, "slow consumer", words);
+    answers(
+        dir.path(),
+        2,
+        &printed("Holds up (Correctness): Nothing in the doc says how a stall is noticed."),
+    );
+    press_on_card(&mut app, "Draft, not posted yet", "Validate");
+    let text = shows(&mut app, "Holds up").text();
+    assert!(text.contains("Correctness · Claude Code"), "{text}");
+    let (args, prompt, _) = given(dir.path(), 2);
+    assert!(values(&args, "--allowedTools").is_empty(), "{args:?}");
+    assert!(prompt.contains(DOC), "{prompt}");
+    assert!(!prompt.contains("add this one comment"), "{prompt}");
+    assert_eq!(state_of(&app, words), Some(Sent::Draft), "nothing posted");
+    // Its chip in green, the colour a comment that holds up has.
+    app.set_measure(std::rc::Rc::new(cellix_render::FontMeasure::new(17, 37)));
+    let grid = screen(&app);
+    let green = app.theme.git_added;
+    let chip = grid.paint.iter().any(
+        |p| matches!(p, Paint::Text { text, color, .. } if text == "Holds up" && *color == green),
+    );
+    assert!(chip, "the verdict in green");
+    app.set_measure(std::rc::Rc::new(cellix_render::CellMeasure));
+
+    // Polish too: both stand at once.
+    answers(
+        dir.path(),
+        3,
+        &printed("How is a stalled partition noticed?"),
+    );
+    press_on_card(&mut app, "Draft, not posted yet", "Polish");
+    let text = shows(&mut app, "Use This").text();
+    assert!(text.contains("Holds up"), "{text}");
+
+    // Sync, and a new Cellix: still there.
+    answers(dir.path(), 4, &printed(&read_answer(json!([]))));
+    let (x, y) = find(&screen(&app), "Sync");
+    click(&mut app, x + 1, y);
+    until(&mut app, "synced", |app| {
+        runs(dir.path()) == 4 && app.remote.reading.is_none()
+    });
+    assert!(screen(&app).text().contains("Holds up"));
+    let mut again = App::new(dir.path().to_path_buf(), (210, 46));
+    again.reopen_remote_docs();
+    again.dock.open = true;
+    again.dock.show_comments();
+    let text = screen(&again).text();
+    assert!(text.contains("Holds up"), "{text}");
+    assert!(text.contains("Use This"), "{text}");
+
+    press_on_card(&mut app, "Holds up", "Dismiss");
+    let text = screen(&app).text();
+    assert!(!text.contains("Holds up"), "{text}");
+    assert!(text.contains("Use This"), "Polish's words stay: {text}");
+    let thread = thread_saying(&app, words);
+    assert!(thread.validation.is_none());
+    assert_eq!(state_of(&app, words), Some(Sent::Draft));
+    assert_eq!(runs(dir.path()), 4);
+}

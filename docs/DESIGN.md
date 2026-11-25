@@ -1032,6 +1032,17 @@ answers with data that Cellix checks and writes itself (`remote.rs`, `app/remote
   comment short, clear and kind; keep its meaning; answer with the text only"); the
   suggestion stands under the draft in a box of the page's ground, "Polished · Claude Code ·
   17 words, from 41", with Use This and Keep Mine. It's still a draft either way.
+- Validate, on the reviewer's own comment here or on a page of the project alike
+  (`app/checks.rs`): the Default agent with no tools, given the whole document, the words the
+  comment is on and the comment, answers one line, `Verdict (Kind): why`, the verdict Holds up,
+  Doesn't hold or Already answered (naming where), the kind one of the five. It stands under
+  the comment in a box as Polish's words do, its verdict on a chip, green where it holds up and
+  the warning colour otherwise, then the kind and who said it, why, and Dismiss. It never
+  changes the comment, its words or its kind. Both may stand at once, Validate's first.
+  What each said is kept with the comment in the comments file (`Thread::validation`,
+  `Thread::polished`), with the words it was said of: so it's there after a Sync, a restart or
+  the doc opened again, and goes once the words change (Edit, Use This). A run under way or
+  failed is only on screen.
 - Sync reads again: comments and replies new by id come in, someone's edited or resolved ones
   are brought up to date, `doc.md` is replaced and every thread found again by its quote (one
   whose words went says so). Drafts are never touched or posted. End Review asks, then deletes

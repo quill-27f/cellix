@@ -48,9 +48,9 @@ pub enum Action {
     Run(Command),
     /// Lists the Comments pane in another order.
     SortComments(crate::threads::Sort),
-    /// Changes a comment of the reviewer's own, or removes it, from its card's "⋯".
-    EditComment(u32),
-    DeleteComment(u32),
+    /// One of a comment card's buttons, from its "⋯" where it has no room on the card: Edit
+    /// and Delete, and on a short card what doesn't fit its row.
+    Card(crate::threads::Hit),
     /// A reply's: its comment, and its place among the replies.
     EditReply(u32, usize),
     DeleteReply(u32, usize),

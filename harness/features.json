@@ -7768,5 +7768,19 @@
     "title": "Settings › Integrations has a Default agent, Auto, Claude, Codex or Gemini, kept machine-wide in ask_agent, which Ask and Polish run; the page scrolls so every card under it stays reachable, and remote docs stay Claude Code's",
     "test": "the_default_agent_is_picked_in_settings_and_polish_runs_it",
     "passes": true
+  },
+  {
+    "id": "validate-a-comment",
+    "milestone": 15,
+    "title": "Validate on the reviewer's comment, local and remote: the Default agent with no tools, given the whole document, the quote and the comment, answers a verdict (Holds up, Doesn't hold, Already answered), a kind and why, shown under the comment with Dismiss; the comment never changes, and what it said is kept with the comment till its words change",
+    "test": "validate_says_whether_a_comment_holds_up_and_never_changes_it",
+    "passes": true
+  },
+  {
+    "id": "validate-kept-on-remote-drafts",
+    "milestone": 15,
+    "title": "On a remote draft Validate posts nothing, stands beside Polish's words, and both are kept through a Sync and a new Cellix until dismissed",
+    "test": "validate_on_a_draft_is_kept_through_sync_and_reopening_till_dismissed",
+    "passes": true
   }
 ]

@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use super::*;
 use crate::ask::{self, Cli, News};
 use crate::remote::{self as doc, Meta};
-use crate::threads::{Polish, Polishes};
 use cellix_review::threads::{Remote, Sent};
 
 /// Who reads and posts: Claude Code, whose `--allowedTools` limits a run to one MCP server.
@@ -41,24 +40,12 @@ pub(super) struct Posting {
     pub said: String,
 }
 
-/// Polish under way for a draft, which agent runs it, and how many words it had.
-pub(super) struct Polishing {
-    pub thread: u32,
-    pub cli: Cli,
-    pub from: usize,
-    pub running: ask::Running,
-    pub said: String,
-}
-
 #[derive(Default)]
 pub(super) struct Remotes {
     /// The docs this project has read, by their folder's name.
     pub docs: HashMap<String, Meta>,
     pub reading: Option<Reading>,
     pub posts: Vec<Posting>,
-    pub polishing: Vec<Polishing>,
-    /// What Polish has for each draft, as the cards show it.
-    pub polish: Polishes,
     /// A link waiting for the MCP server to be picked.
     pub waiting: Option<String>,
     /// Claude Code's config as a test names it (`HOME`, `CLAUDE_CONFIG_DIR`). A test without
@@ -66,12 +53,6 @@ pub(super) struct Remotes {
     pub env: Option<HashMap<String, String>>,
     /// How long a run may take; a test makes it short.
     pub limit: Option<std::time::Duration>,
-}
-
-/// How a draft's polish run ends: its suggestion, or why there's none.
-enum Polished {
-    Ready(String),
-    Failed(String),
 }
 
 impl App {
@@ -328,13 +309,10 @@ impl App {
             let what = if reading.sync { "Syncing" } else { "Reading" };
             return Some(format!("{what} the doc with {}", READER.name()));
         }
-        if !self.remote.posts.is_empty() {
-            return Some("Posting to the doc".to_string());
-        }
-        (!self.remote.polishing.is_empty()).then(|| "Polishing".to_string())
+        (!self.remote.posts.is_empty()).then(|| "Posting to the doc".to_string())
     }
 
-    /// Takes in what the reads, posts and polishes said since. True when anything changed.
+    /// Takes in what the reads and posts said since. True when anything changed.
     pub(super) fn poll_remote(&mut self) -> bool {
         let mut changed = false;
         if let Some(reading) = self.remote.reading.as_mut() {
@@ -363,30 +341,6 @@ impl App {
         for (index, thread, reply, result) in ended.into_iter().rev() {
             self.remote.posts.remove(index);
             self.finish_post(thread, reply, result);
-            changed = true;
-        }
-        let mut polished = Vec::new();
-        for (index, run) in self.remote.polishing.iter_mut().enumerate() {
-            if let Some(result) = drain(&run.running, &mut run.said, run.cli) {
-                let result = match result {
-                    Ok(text) if !text.trim().is_empty() => Polished::Ready(text),
-                    Ok(_) => Polished::Failed("it gave no text".to_string()),
-                    Err(why) => Polished::Failed(why),
-                };
-                polished.push((index, run.thread, (run.cli, run.from), result));
-            }
-        }
-        for (index, thread, (cli, from), result) in polished.into_iter().rev() {
-            self.remote.polishing.remove(index);
-            let shown = match result {
-                Polished::Ready(text) => Polish::Ready {
-                    text: clean_polish(&text),
-                    by: cli.name().to_string(),
-                    from,
-                },
-                Polished::Failed(why) => Polish::Failed(why),
-            };
-            self.remote.polish.insert(thread, shown);
             changed = true;
         }
         changed
@@ -543,9 +497,15 @@ impl App {
                         *remote = Remote::posted(posted, now);
                     }
                 }
+                // Polish's words were for a draft, which a posted comment isn't.
+                if reply.is_none() {
+                    self.checks.polish.remove(&id);
+                    if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+                        thread.polished = None;
+                    }
+                }
                 self.threads_seen = None;
                 self.save_threads();
-                self.remote.polish.remove(&id);
                 let what = if reply.is_some() { "reply" } else { "comment" };
                 self.say(format!("Posted your {what} to the doc"));
             }
@@ -569,94 +529,13 @@ impl App {
                 None => return,
             },
         };
-        self.copy_text(text, "Copied. Paste it in the doc");
-    }
-
-    /// Has Claude Code make a draft short, clear and kind, with no tools: its suggestion
-    /// shows under the draft, to use or not.
-    pub(super) fn polish_remote(&mut self, id: u32) {
-        let Some(thread) = self.threads.iter().find(|t| t.id == id && t.unposted()) else {
-            return;
+        // From a remote doc, to paste in it; from a page here, wherever it goes.
+        let said = if thread.remote.is_some() {
+            "Copied. Paste it in the doc"
+        } else {
+            "Copied"
         };
-        if self.remote.polishing.iter().any(|p| p.thread == id) {
-            return;
-        }
-        let text = self
-            .editors
-            .iter()
-            .find(|e| {
-                e.buffer
-                    .path()
-                    .is_some_and(|p| self.relative(p) == thread.file)
-            })
-            .map(|e| e.buffer.text())
-            .unwrap_or_default();
-        let paragraph = doc::paragraph_around(&text, thread.anchor());
-        let prompt = doc::polish_prompt(&thread.text, &thread.quote, &paragraph);
-        let from = doc::words(&thread.text);
-        let Some((cli, running)) = self.start_toolless_run("Polish", &prompt) else {
-            return;
-        };
-        self.remote.polishing.push(Polishing {
-            thread: id,
-            cli,
-            from,
-            running,
-            said: String::new(),
-        });
-        self.remote
-            .polish
-            .insert(id, Polish::Running(cli.name().to_string()));
-    }
-
-    /// Starts the Default agent (Settings › Integrations) on `prompt` with no tools, as
-    /// Polish and Validate run it; or says what's missing, `what` naming the action.
-    fn start_toolless_run(&mut self, what: &str, prompt: &str) -> Option<(Cli, ask::Running)> {
-        let cli = match self.side_cli() {
-            Ok(cli) => cli,
-            Err(Some(named)) => {
-                self.say(format!(
-                    "{what} runs {}, the Default agent in Settings › Integrations, which isn't \
-                     installed here",
-                    named.name()
-                ));
-                return None;
-            }
-            Err(None) => {
-                self.say(format!(
-                    "{what} needs Claude Code, Codex or Gemini CLI installed here"
-                ));
-                return None;
-            }
-        };
-        let path = self.side_path();
-        let program = ask::find(cli.program(), &path)?;
-        let root = self.workspace.root();
-        let run = ask::Run {
-            cli,
-            args: ask::toolless_args(cli, root),
-            root,
-            prompt,
-        };
-        let running = ask::start_run(&program, run, &path, self.remote_limit());
-        Some((cli, running))
-    }
-
-    /// Takes Polish's suggestion as the draft's words. It's still a draft.
-    pub(super) fn use_polish(&mut self, id: u32) {
-        let Some(Polish::Ready { text, .. }) = self.remote.polish.remove(&id) else {
-            return;
-        };
-        if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id && t.unposted()) {
-            thread.text = text;
-        }
-        self.threads_seen = None;
-        self.save_threads();
-    }
-
-    pub(super) fn keep_mine(&mut self, id: u32) {
-        self.remote.polish.remove(&id);
-        self.remote.polishing.retain(|p| p.thread != id);
+        self.copy_text(text, said);
     }
 
     /// Opens the doc a comment is on in the system's browser, where the doc tool's sign-in is.
@@ -910,9 +789,8 @@ impl App {
             .collect();
         self.threads.retain(|t| t.file != file);
         for id in ids {
-            self.remote.polish.remove(&id);
             self.remote.posts.retain(|p| p.thread != id);
-            self.remote.polishing.retain(|p| p.thread != id);
+            self.forget_checks(id);
         }
         self.threads_seen = None;
         self.save_threads();
@@ -924,7 +802,11 @@ impl App {
 
 /// What a run said since, up to its end: its answer, or why there's none. None while it's
 /// still going.
-fn drain(running: &ask::Running, said: &mut String, cli: Cli) -> Option<Result<String, String>> {
+pub(super) fn drain(
+    running: &ask::Running,
+    said: &mut String,
+    cli: Cli,
+) -> Option<Result<String, String>> {
     for news in running.news.try_iter() {
         match news {
             News::Fresh => said.clear(),
@@ -943,27 +825,4 @@ fn drain(running: &ask::Running, said: &mut String, cli: Cli) -> Option<Result<S
         }
     }
     None
-}
-
-/// Polish's text as it's shown: without a fence or quotes round it.
-fn clean_polish(text: &str) -> String {
-    let text = text.trim();
-    let text = text
-        .strip_prefix("```")
-        .and_then(|t| t.strip_suffix("```"))
-        .map_or(text, |t| {
-            t.trim_start_matches(|c: char| c.is_alphanumeric())
-        });
-    let text = text.trim();
-    let quoted = text.len() > 1
-        && ((text.starts_with('"') && text.ends_with('"'))
-            || (text.starts_with('\u{201c}') && text.ends_with('\u{201d}')));
-    if quoted {
-        let inner: String = text.chars().skip(1).collect();
-        let mut inner = inner;
-        inner.pop();
-        inner.trim().to_string()
-    } else {
-        text.to_string()
-    }
 }

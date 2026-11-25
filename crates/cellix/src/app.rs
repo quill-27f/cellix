@@ -70,6 +70,7 @@ use crate::source::{Hit as SourceHit, Source as SourceControl};
 
 mod available;
 mod blink;
+mod checks;
 mod focus;
 mod gitops;
 mod glance;
@@ -1763,8 +1764,10 @@ pub struct App {
     side_kept: crate::ask::Conversations,
     /// How long an answer may take.
     side_limit: std::time::Duration,
-    /// Remote docs: those read, and the agent's reads, posts and polishes under way.
+    /// Remote docs: those read, and the agent's reads and posts under way.
     remote: remote::Remotes,
+    /// Validate and Polish under way on comments, and what failed.
+    checks: checks::Checks,
     /// The prompts typed in to go on their own, by `cellix_agent::prompt_key`: one comment
     /// asked about from its card. The prompt hook asks, and hands that prompt nothing else.
     alone: Vec<u64>,
@@ -1932,6 +1935,7 @@ impl App {
             side_kept,
             side_limit: crate::ask::TIME_LIMIT,
             remote: remote::Remotes::default(),
+            checks: checks::Checks::default(),
             alone: Vec::new(),
             pending_review: None,
             neovim_z: false,
@@ -3577,7 +3581,8 @@ impl App {
             | self.poll_team()
             | self.poll_peek()
             | self.poll_side()
-            | self.poll_remote();
+            | self.poll_remote()
+            | self.poll_checks();
         let mut events = Vec::new();
         for client in self.servers.values() {
             events.extend(client.events.try_iter());
@@ -6004,17 +6009,9 @@ impl App {
             }
             Some(id) if draft.editing => {
                 if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
-                    if let Ok(mut comments) = self.comments.lock() {
-                        for comment in comments.iter_mut() {
-                            if comment.file == thread.file && comment.text == thread.text {
-                                comment.text = text.clone();
-                            }
-                        }
-                    }
-                    thread.text = text;
                     thread.kind = draft.kind;
                 }
-                self.save_threads();
+                self.set_comment_words(id, text);
                 return;
             }
             Some(id) => {
@@ -6082,6 +6079,27 @@ impl App {
         if let Some(id) = asked {
             self.thread_hit(ThreadHit::Ask(id));
         }
+    }
+
+    /// Gives the reviewer's comment new words, as Edit's Save does, and Polish's Use This: what
+    /// waits to go with the review changes with it, and one an agent was told of already is an
+    /// edited comment, which isn't told again. What Validate and Polish said of the old words
+    /// goes, as it's said of words that are gone.
+    fn set_comment_words(&mut self, id: u32, text: String) {
+        if let Some(thread) = self.threads.iter_mut().find(|t| t.id == id) {
+            if let Ok(mut comments) = self.comments.lock() {
+                for comment in comments.iter_mut() {
+                    if comment.file == thread.file && comment.text == thread.text {
+                        comment.text = text.clone();
+                    }
+                }
+            }
+            thread.text = text;
+            thread.validation = None;
+            thread.polished = None;
+        }
+        self.threads_seen = None;
+        self.save_threads();
     }
 
     /// Where the buttons by a selection stand.
@@ -7788,6 +7806,7 @@ impl App {
                     if let Ok(mut comments) = self.comments.lock() {
                         comments.retain(|c| !(c.file == thread.file && c.text == thread.text));
                     }
+                    self.forget_checks(id);
                     self.save_threads();
                     self.say("Comment deleted");
                 }
@@ -13392,14 +13411,18 @@ impl App {
         open.and_then(|e| e.buffer.path()).is_none()
     }
 
-    /// Edit and Delete for a comment's card, from the "⋯" that stands for them where they
-    /// don't fit beside its other buttons: on a row of their own, a narrow card had three rows
-    /// of buttons. It drops from under the "⋯", as every menu dropped from a button does.
+    /// What a comment's card has behind its "⋯": Edit and Delete where they don't fit beside
+    /// its other buttons, and on a short card the buttons that don't fit its row. It drops
+    /// from under the "⋯", as every menu dropped from a button does.
     fn show_card_menu(&mut self, id: u32, at: (u16, u16)) {
-        let items = vec![
-            MenuItem::new("Edit", MenuAction::EditComment(id)),
-            MenuItem::new("Delete", MenuAction::DeleteComment(id)),
-        ];
+        let Some(panel) = self.dock_panel() else {
+            return;
+        };
+        let more = self.card_rows(|shown, measure| threads::more_of(panel, shown, id, measure));
+        let items = more
+            .into_iter()
+            .map(|(label, hit)| MenuItem::new(label, MenuAction::Card(hit)))
+            .collect();
         self.show_menu(at, items);
     }
 
@@ -13527,7 +13550,8 @@ impl App {
             laid: Some(&self.comment_rows),
             edge: self.pane_edge(),
             selected: None,
-            polish: Some(&self.remote.polish),
+            validate: Some(&self.checks.validate),
+            polish: Some(&self.checks.polish),
         }
     }
 
@@ -14234,7 +14258,9 @@ impl App {
             // The one press that posts to a remote doc: this comment, or this reply, alone.
             ThreadHit::Post(id, reply) => self.post_remote(id, reply),
             ThreadHit::CopyWords(id, reply) => self.copy_remote(id, reply),
-            ThreadHit::Polish(id) => self.polish_remote(id),
+            ThreadHit::Polish(id) => self.polish_comment(id),
+            ThreadHit::Validate(id) => self.validate_comment(id),
+            ThreadHit::DismissValidation(id) => self.dismiss_validation(id),
             ThreadHit::UsePolish(id) => self.use_polish(id),
             ThreadHit::KeepMine(id) => self.keep_mine(id),
             ThreadHit::OpenInDoc(id) => self.open_comment_in_doc(id),
@@ -15055,7 +15081,7 @@ impl App {
         if self.search.searching() {
             return Some("Searching".to_string());
         }
-        if let Some(waiting) = self.remote_waiting() {
+        if let Some(waiting) = self.remote_waiting().or_else(|| self.checks_waiting()) {
             return Some(waiting);
         }
         let task = self.dock.sessions.iter().find(|s| s.task() && !s.exited);
@@ -17822,8 +17848,7 @@ impl App {
                     self.show_lit_comment(id);
                 }
             }
-            MenuAction::EditComment(id) => self.thread_hit(ThreadHit::Edit(id)),
-            MenuAction::DeleteComment(id) => self.thread_hit(ThreadHit::Delete(id)),
+            MenuAction::Card(hit) => self.thread_hit(hit),
             MenuAction::EditReply(id, n) => self.thread_hit(ThreadHit::EditReply(id, n)),
             MenuAction::DeleteReply(id, n) => self.thread_hit(ThreadHit::DeleteReply(id, n)),
             MenuAction::CloseSession(index) => self.close_session_tab(index),
@@ -29682,13 +29707,13 @@ mod tests {
         enter(app);
     }
 
-    /// Where a card's Ask Agent button is: on the row of its buttons, which has Resolve, and
-    /// not in the hint over them, which names it too.
+    /// Where a card's Ask Agent button is: on a row of its buttons, which flow over two with
+    /// Validate first and Resolve last, and not in the hint over them, which names it too.
     fn ask_button(grid: &Grid) -> (u16, u16) {
         let y = (0..grid.height())
             .find(|y| {
                 let row = grid.row_text(*y);
-                row.contains("Ask Agent") && row.contains("Resolve")
+                row.contains("Ask Agent") && (row.contains("Resolve") || row.contains("Validate"))
             })
             .unwrap_or_else(|| panic!("no Ask Agent button:\n{}", grid.text()));
         let row = grid.row_text(y);
@@ -31852,10 +31877,12 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         press(&mut app, " Reply ");
         assert_eq!(app.threads[0].replies.len(), 1);
         assert_eq!(app.threads[0].replies[0].text, "Third");
-        // Changing the comment itself is saved: Edit is behind the card's "⋯", where the
-        // five buttons don't fit on its row.
-        press(&mut app, " \u{22ef}");
-        press(&mut app, "Edit");
+        // Changing the comment itself is saved: Edit stands at the end of the card's buttons,
+        // which flow over two rows, or behind its "⋯" where there's no room for it there.
+        if screen(&app).text().contains(" \u{22ef}") {
+            press(&mut app, " \u{22ef}");
+        }
+        press(&mut app, " Edit ");
         typed(&mut app, "!");
         press(&mut app, " Save ");
         assert_eq!(app.threads[0].text, "First!");
@@ -41614,7 +41641,8 @@ while True:
         let fields = r#""id":1,"file":"alpha.txt","line":1,"text":"Why first","quote":"""#;
         app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
         app.run(Command::ShowComments);
-        check(&app, &["Reply", "Ask Agent", "Resolve"]);
+        // Those on its first row: the rest flow to the next.
+        check(&app, &["Validate", "Reply", "Ask Agent"]);
 
         // A change in Review.
         let (dir, mut app) = reviewed();

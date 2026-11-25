@@ -225,6 +225,92 @@ pub fn polish_prompt(text: &str, quote: &str, paragraph: &str) -> String {
     )
 }
 
+/// What Validate asks of a comment: the whole document it's on, by its place, the words it's
+/// on and the comment, and one line back, a verdict, the comment's kind and why.
+pub fn validate_prompt(place: &str, document: &str, quote: &str, text: &str) -> String {
+    let kinds = crate::threads::KINDS.join(", ");
+    format!(
+        "You're checking one review comment for someone reviewing a document in Cellix, an \
+         editor. Read the whole document below, then the comment, and say whether the comment \
+         holds up. Change nothing.\n\nAnswer with one line and nothing else, shaped like this:\n\n\
+         Verdict (Kind): why\n\nVerdict is one of: Holds up, Doesn't hold, Already answered. \
+         Holds up: the comment is right, and the document should change for it. Doesn't hold: \
+         the comment is mistaken, or asks for what the document already does where it stands. \
+         Already answered: the document answers it somewhere else; say where, by its heading or \
+         its words. Kind is one of: {kinds}. Why is one short sentence.\n\n\
+         The document, {place}:\n\n{document}\n\nThe words the comment is on: {quote}\n\n\
+         The comment:\n{text}\n"
+    )
+}
+
+/// What Validate answered, read: its verdict, the comment's kind where it named one of
+/// `KINDS`, and why. Bold marks, a fence and words before the verdict on its line are let go.
+pub fn validation_of(
+    answer: &str,
+) -> Result<(cellix_review::threads::Verdict, String, String), String> {
+    use cellix_review::threads::Verdict;
+    let found = answer.lines().find_map(|line| {
+        let line = line.replace(['*', '`'], "").replace('\u{2019}', "'");
+        let lower = line.to_lowercase();
+        let said = [
+            ("holds up", Verdict::HoldsUp),
+            ("doesn't hold", Verdict::DoesntHold),
+            ("does not hold", Verdict::DoesntHold),
+            ("already answered", Verdict::AlreadyAnswered),
+        ];
+        // The first said on the line: why may say "holds up" after a verdict that it doesn't.
+        said.into_iter()
+            .filter_map(|(words, verdict)| Some((lower.find(words)?, words, verdict)))
+            .min_by_key(|(at, ..)| *at)
+            .map(|(at, words, verdict)| {
+                let rest = line.get(at + words.len()..).unwrap_or("");
+                (verdict, rest.to_string())
+            })
+    });
+    let Some((verdict, rest)) = found else {
+        return Err("Its answer had no verdict in it".to_string());
+    };
+    let rest = rest.trim_start();
+    let (kind, rest) = match rest.strip_prefix('(').and_then(|r| r.split_once(')')) {
+        Some((kind, after)) => {
+            let named = crate::threads::KINDS
+                .iter()
+                .find(|k| k.eq_ignore_ascii_case(kind.trim()))
+                .map_or(String::new(), |k| k.to_string());
+            (named, after)
+        }
+        None => (String::new(), rest),
+    };
+    let why = rest
+        .trim_start_matches(|c: char| c == ':' || c == '-' || c == '\u{2014}' || c.is_whitespace())
+        .trim()
+        .to_string();
+    Ok((verdict, kind, why))
+}
+
+/// Polish's text as it's shown: without a fence or quotes round it.
+pub fn clean_polish(text: &str) -> String {
+    let text = text.trim();
+    let text = text
+        .strip_prefix("```")
+        .and_then(|t| t.strip_suffix("```"))
+        .map_or(text, |t| {
+            t.trim_start_matches(|c: char| c.is_alphanumeric())
+        });
+    let text = text.trim();
+    let quoted = text.len() > 1
+        && ((text.starts_with('"') && text.ends_with('"'))
+            || (text.starts_with('\u{201c}') && text.ends_with('\u{201d}')));
+    if quoted {
+        let inner: String = text.chars().skip(1).collect();
+        let mut inner = inner;
+        inner.pop();
+        inner.trim().to_string()
+    } else {
+        text.to_string()
+    }
+}
+
 /// The one JSON object in an answer, wherever it stands in it: alone, in a fence, or after
 /// a line of words. An `error` it gives is the error.
 pub fn answer_json(answer: &str) -> Result<Value, String> {
@@ -767,6 +853,42 @@ mod tests {
         assert_eq!(draft.remote, Some(Remote::draft()));
         assert!(draft.gone, "Gamma left the doc");
         assert_eq!(threads.len(), 3);
+    }
+
+    /// Validate's one line is read whatever dress it comes in: bold, after a word or two, with
+    /// or without a kind; the first verdict on it is the one, whatever why says after it.
+    #[test]
+    fn a_validation_is_read_from_its_line() {
+        use cellix_review::threads::Verdict;
+        let read = |answer: &str| validation_of(answer).unwrap();
+        assert_eq!(
+            read("**Holds up (Evidence):** No source is given."),
+            (
+                Verdict::HoldsUp,
+                "Evidence".to_string(),
+                "No source is given.".to_string()
+            )
+        );
+        assert_eq!(
+            read("Verdict: Doesn’t hold (correctness) — the number holds up.").0,
+            Verdict::DoesntHold
+        );
+        let answered = read("Already answered: Traffic and capacity says so.");
+        assert_eq!(answered.0, Verdict::AlreadyAnswered);
+        assert!(answered.1.is_empty());
+        assert_eq!(answered.2, "Traffic and capacity says so.");
+        assert_eq!(
+            read("Holds up (Style): fine.").1,
+            "",
+            "not one of the kinds"
+        );
+        assert!(validation_of("I think it's fine.").is_err());
+        let prompt = validate_prompt("plan.md", "# Plan\n\nAll of it.\n", "All", "Why?");
+        assert!(prompt.contains("# Plan\n\nAll of it.\n"), "{prompt}");
+        assert!(
+            prompt.contains("Clarity, Correctness, Evidence"),
+            "{prompt}"
+        );
     }
 
     #[test]
