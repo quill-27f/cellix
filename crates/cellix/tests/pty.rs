@@ -748,6 +748,10 @@ fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
         .unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
     command.env("SHELL", "/bin/sh");
+    // A TERM of the harness's (this machine's Ghostty) would put the binary on its
+    // Ghostty path, whose tiles are sized with the person's padding, where this test's
+    // size marker is for the plain path: give the binary a plain terminal.
+    command.env("TERM", "xterm-256color");
     command.env("XDG_CACHE_HOME", test_cache(dir.path()));
     command.cwd(dir.path());
     command.arg("hello.txt");
