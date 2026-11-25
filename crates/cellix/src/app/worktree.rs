@@ -670,7 +670,10 @@ mod tests {
             let (words, buttons) = (row_of(&grid, "lost if you"), row_of(&grid, "Cancel"));
             assert_eq!(buttons, words + 1 + gap, "airy: {airy}\n{}", grid.text());
             if airy {
-                let area = app.confirm_area();
+                let Overlay::Confirm(confirm) = &app.overlay else {
+                    panic!("the dialog");
+                };
+                let area = app.confirm_area(confirm);
                 assert_eq!(area.bottom(), buttons + 1);
                 let last = Some("Your changes");
                 let air = dialog_air(&app, &grid, area, ("Save changes", "Cancel"), last);

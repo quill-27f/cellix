@@ -158,6 +158,13 @@ pub enum Hit {
     DismissValidation(u32),
     /// Opens the doc a comment is on, in the browser.
     OpenInDoc(u32),
+    /// From the top of the pane: Validate or Polish every comment of the reviewer's that has
+    /// nothing from it yet, two at a time; post every draft, one at a time, once asked; or stop
+    /// what hasn't started.
+    ValidateAll,
+    PolishAll,
+    PostAll,
+    StopAll,
 }
 
 /// On a remote doc, the reviewer's comment's buttons while it's a draft, while it posts, and
@@ -187,6 +194,35 @@ const THEIRS_BUTTONS: [&str; 2] = [REPLY, ASK];
 const REPLY_FAILED: [&str; 2] = [RETRY, COPY];
 const POLISH_CHOICE: [&str; 2] = [USE_THIS, KEEP_MINE];
 const VALIDATE_CHOICE: [&str; 1] = [DISMISS];
+const VALIDATE_ALL: &str = "Validate All";
+const POLISH_ALL: &str = "Polish All";
+const POST_ALL: &str = "Post All Drafts";
+const STOP: &str = "Stop";
+
+fn yours(thread: &Thread) -> bool {
+    thread.author.is_empty() && thread.suggested_by.is_empty()
+}
+
+/// Whether Validate All takes a comment: the reviewer's own, open, with nothing from Validate
+/// for its words as they are.
+pub fn wants_validation(thread: &Thread) -> bool {
+    yours(thread)
+        && !thread.resolved
+        && thread
+            .validation
+            .as_ref()
+            .is_none_or(|v| v.on != thread.text)
+}
+
+/// Whether Polish All takes one: the same, but for one posted to a remote doc, whose words
+/// are the doc's.
+pub fn wants_polish(thread: &Thread) -> bool {
+    let posted = thread.remote.is_some() && !thread.unposted();
+    yours(thread)
+        && !thread.resolved
+        && !posted
+        && thread.polished.as_ref().is_none_or(|p| p.on != thread.text)
+}
 
 /// Validate or Polish on a comment with nothing of its own to show yet: under way, by which
 /// agent, or why it said nothing. What it says once it has is kept with the comment.
@@ -683,6 +719,12 @@ enum Line {
     ReplyPost(u32, usize, PostState),
     /// A row of why a post failed, small and in the error's colour.
     Failure(String),
+    /// At the top of the pane: Validate All, Polish All and Post All Drafts, those that have
+    /// something to do.
+    Bulk(Vec<&'static str>),
+    /// While one of them goes: how far it's got, "Validating 3 of 7", and Stop till it's
+    /// pressed.
+    BulkRun(String, bool),
     Gap,
 }
 
@@ -1756,6 +1798,9 @@ pub struct View<'a> {
     /// is the comment's own (`Thread::validation`, `Thread::polished`).
     pub validate: Option<&'a Pendings>,
     pub polish: Option<&'a Pendings>,
+    /// Validate All, Polish All or Post All Drafts under way: what it's doing, how many it's
+    /// started of how many, and whether Stop is still to press.
+    pub bulk: Option<(&'static str, usize, usize, bool)>,
 }
 
 /// A list's rows as they were last laid out, with a mark of all they were laid out from.
@@ -1814,6 +1859,7 @@ fn mark((threads, draft, agent, resolved, view): Shown, width: f32, measure: &dy
         .map(|unsent| unsent.0.borrow().clone())
         .hash(&mut hasher);
     view.suggestions.hash(&mut hasher);
+    view.bulk.hash(&mut hasher);
     // Validate's and Polish's, by comment, in order: a map has none.
     for pending in [view.validate, view.polish] {
         let mut by: Vec<(&u32, &Pending)> = pending.map(|p| p.iter().collect()).unwrap_or_default();
@@ -1872,6 +1918,7 @@ impl Default for View<'_> {
             selected: None,
             validate: None,
             polish: None,
+            bulk: None,
         }
     }
 }
@@ -2904,6 +2951,7 @@ fn lay_out(
             .count();
         let posted = open.len() - others - drafts - posting;
         out.push(Line::RemoteHead(posted, posting, drafts, others));
+        out.extend(bulk_line(head_width, &open, true, view, measure));
         out.push(Line::Gap);
     } else if !open.is_empty() {
         let mine = open.iter().filter(|t| t.suggested_by.is_empty()).count();
@@ -2918,6 +2966,7 @@ fn lay_out(
         if let Some(waiting) = view.send.filter(|n| *n > 0) {
             out.push(Line::Deliver(waiting));
         }
+        out.extend(bulk_line(head_width, &open, false, view, measure));
         // The reviewer's own: a suggestion not yet kept covers nothing, and was counted.
         let count = |kind: &str| {
             let mine = |t: &&&Thread| t.kind == kind && t.suggested_by.is_empty();
@@ -3277,6 +3326,88 @@ fn lay_out(
         out.push(Line::Gap);
     }
     out
+}
+
+/// The row at the top of the pane that acts on many comments at once: Validate All and Polish
+/// All where a comment of the reviewer's has nothing from them yet, and on a remote doc Post
+/// All Drafts where there's a draft; or, while one of them goes, how far it's got. A press on
+/// a kind's pill lists only that kind, and the buttons act on what's listed: what a press
+/// acts on is what the pane shows. As many labels as fit `head_width` share a row, the rest
+/// flow to another, as a card's buttons do.
+fn bulk_line(
+    head_width: f32,
+    open: &[&Thread],
+    remote: bool,
+    view: View,
+    measure: &dyn Measure,
+) -> Vec<Line> {
+    if let Some((doing, started, total, stop)) = view.bulk {
+        return vec![Line::BulkRun(format!("{doing} {started} of {total}"), stop)];
+    }
+    let listed = |t: &&&Thread| view.kind.is_none_or(|kind| t.kind == kind);
+    let running = |pending: Option<&Pendings>, id: u32| {
+        pending.is_some_and(|p| matches!(p.get(&id), Some(Pending::Running(_))))
+    };
+    let mut labels = Vec::new();
+    if open
+        .iter()
+        .filter(listed)
+        .any(|t| wants_validation(t) && !running(view.validate, t.id))
+    {
+        labels.push(VALIDATE_ALL);
+    }
+    if open
+        .iter()
+        .filter(listed)
+        .any(|t| wants_polish(t) && !running(view.polish, t.id))
+    {
+        labels.push(POLISH_ALL);
+    }
+    if remote && open.iter().filter(listed).any(|t| t.unposted()) {
+        labels.push(POST_ALL);
+    }
+    if labels.is_empty() {
+        return Vec::new();
+    }
+    // The head's span in cells, as the buttons are laid out in cells on every tier.
+    let room = head_width.floor() as u16;
+    let wide = |label: &'static str| button_cells(label, measure).chars().count() as u16;
+    let mut rows = Vec::new();
+    let mut row: Vec<&'static str> = Vec::new();
+    let mut used = 0u16;
+    for label in labels {
+        let more = if row.is_empty() { 0 } else { BUTTON_GAP };
+        if used + more + wide(label) > room && !row.is_empty() {
+            rows.push(Line::Bulk(std::mem::take(&mut row)));
+            used = 0;
+        }
+        row.push(label);
+        used += more + wide(label);
+    }
+    rows.push(Line::Bulk(row));
+    rows
+}
+
+/// Those buttons as (label, cells, start column), from where the list's head starts.
+fn bulk_row(area: Rect, labels: &[&'static str], measure: &dyn Measure) -> Vec<Placed> {
+    let mut x = head(area);
+    labels
+        .iter()
+        .map(|label| {
+            let cells = button_cells(label, measure);
+            let at = x;
+            x += cells.chars().count() as u16 + BUTTON_GAP;
+            (*label, cells, at)
+        })
+        .collect()
+}
+
+/// Stop, at the row's end where the cards end, as (cells, start column).
+fn bulk_stop(area: Rect, view: View, measure: &dyn Measure) -> (String, u16) {
+    let cells = button_cells(STOP, measure);
+    let (end, _) = head_end(area, view);
+    let x = end.saturating_sub(cells.chars().count() as u16);
+    (cells, x)
 }
 
 /// How long ago something written at `at` was, as a card says it: "now", "5 min", "2 h",
@@ -3745,6 +3876,20 @@ pub fn hit(
                 "Reject All" => Some(Hit::RejectAll),
                 _ => Some(Hit::NextSuggestion),
             }
+        }
+        Line::Bulk(labels) => {
+            let pressed = bulk_row(area, labels, measure)
+                .into_iter()
+                .find(|(_, cells, at)| x >= *at && x < at + cells.chars().count() as u16);
+            Some(match pressed?.0 {
+                VALIDATE_ALL => Hit::ValidateAll,
+                POLISH_ALL => Hit::PolishAll,
+                _ => Hit::PostAll,
+            })
+        }
+        Line::BulkRun(_, true) => {
+            let (cells, at) = bulk_stop(area, view, measure);
+            (x >= at && x < at + cells.chars().count() as u16).then_some(Hit::StopAll)
         }
         Line::Deliver(count) => {
             let (cells, at) = deliver_button(area, (*count, shown.2), view, measure);
@@ -4821,6 +4966,52 @@ pub fn draw(
                     grid.nudge_since(from, head_end(area, view).1);
                 }
             }
+            Line::Bulk(labels) => {
+                // Quiet, as every button on the pane is, from where the head starts.
+                for (label, cells, x) in bulk_row(area, labels, measure) {
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let fill = theme.secondary(body.bg, on_it);
+                    let ground = Bounds::cells(f32::from(x), f32::from(y), f32::from(width), 1.0);
+                    grid.panel(ground, 0, Some(body.bg), None);
+                    let style = Style {
+                        bg: if measure.in_cells() { fill } else { body.bg },
+                        fg: theme.text.fg,
+                        ..body
+                    };
+                    grid.button(x, y, &cells, label, fill, style);
+                }
+            }
+            Line::BulkRun(said, stop) => {
+                // A spinner and how far it's got where the head's words start, and Stop at the
+                // row's end, where the cards end.
+                let start = head(area);
+                grid.spinner(
+                    f32::from(start),
+                    y,
+                    crate::measures::WAIT_SPIN,
+                    theme.accent,
+                    body,
+                );
+                let at = start + 2;
+                grid.label_at(f32::from(at), at, y, said, body, right, SMALL);
+                if *stop {
+                    let from = grid.painted_so_far();
+                    let (cells, x) = bulk_stop(area, view, measure);
+                    let width = cells.chars().count() as u16;
+                    let on_it = hover.is_some_and(|h| h.1 == y && h.0 >= x && h.0 < x + width);
+                    let fill = theme.secondary(body.bg, on_it);
+                    let ground = Bounds::cells(f32::from(x), f32::from(y), f32::from(width), 1.0);
+                    grid.panel(ground, 0, Some(body.bg), None);
+                    let style = Style {
+                        bg: if measure.in_cells() { fill } else { body.bg },
+                        fg: theme.text.fg,
+                        ..body
+                    };
+                    grid.button(x, y, &cells, STOP, fill, style);
+                    grid.nudge_since(from, head_end(area, view).1);
+                }
+            }
             Line::Deliver(count) => {
                 // Quiet, as Check My Review over it is. As high in its row as
                 // that one is in its own, so the pills under it keep the same air.
@@ -5031,7 +5222,13 @@ pub fn draw(
                 let theirs = format!("Others: {others}");
                 let x = a.end - measure.width(&theirs, small());
                 let quiet = Style {
-                    fg: mix(theme.gutter.fg, theme.sidebar.bg, 0.75),
+                    // A step quieter than the head's words, with a 4.5 to 1 floor on the
+                    // sidebar's ground: half a step from the words was 3.55 to 1 in light.
+                    fg: crate::theme::readable(
+                        mix(theme.gutter.fg, theme.sidebar.bg, 0.75),
+                        theme.sidebar.bg,
+                        4.5,
+                    ),
                     ..dim
                 };
                 // Its words end on the card's right edge; its cells, a letter each, end at the

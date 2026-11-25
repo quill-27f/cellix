@@ -7789,5 +7789,33 @@
     "title": "The reviewer's card has Validate, Polish, Copy, Ask Agent and Reply in one order on a page and on a remote doc, a remote draft's Post to Doc before them and a page's Resolve after; Polish works on a page's comments, Use This saving its words as Edit does",
     "test": "the_same_buttons_stand_on_both_and_polish_works_on_a_page",
     "passes": true
+  },
+  {
+    "id": "bulk-validate-polish",
+    "milestone": 15,
+    "title": "Validate All and Polish All at the top of the Comments pane, on a page and a remote doc, run over the reviewer's comments with no result yet two at a time, the head saying 'Validating 2 of 5' with a Stop that cancels what hasn't started",
+    "test": "validate_all_runs_two_at_a_time_and_stop_cancels_the_rest",
+    "passes": true
+  },
+  {
+    "id": "post-all-drafts",
+    "milestone": 15,
+    "title": "Post All Drafts on a remote doc asks first with the count, then posts each draft once, one at a time, a failed one saying why on its card while the rest still go",
+    "test": "post_all_drafts_asks_first_and_posts_each_once_one_at_a_time",
+    "passes": true
+  },
+  {
+    "id": "bulk-flow",
+    "milestone": 15,
+    "title": "The bulk row's buttons flow over rows where the pane's head has no room, each whole, a press on one that flowed working as one that fit",
+    "test": "bulk_buttons_flow_where_the_narrow_pane_has_no_room",
+    "passes": true
+  },
+  {
+    "id": "bulk-kind",
+    "milestone": 15,
+    "title": "Validate All acts on what the pane shows: with a kind's pill picked, only that kind's comments",
+    "test": "validate_all_takes_only_the_kind_the_pill_lists",
+    "passes": true
   }
 ]

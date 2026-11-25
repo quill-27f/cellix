@@ -1029,10 +1029,20 @@ answers with data that Cellix checks and writes itself (`remote.rs`, `app/remote
   again reads "The doc tool asked to sign in again. Sign in (your security key), then Retry."
   The list's head says "Yours: N posted · N drafts" and "Others: N" in place of Check My
   Review and the kinds. The composer's button says Save Draft.
-- Nothing posts but that press. Not Sync, not Enter, not a batch: a post carries one comment,
-  its quote and words, and asks for `{"id": …}`; a reply goes under its comment by the doc's
-  id. One posting or posted isn't posted again; one under way when Cellix closed comes back
-  failed, saying to look in the doc before Retry.
+- Nothing posts but that press, or Post All Drafts once its question is answered Post. Not
+  Sync, not Enter: a post carries one comment, its quote and words, and asks for `{"id": …}`;
+  a reply goes under its comment by the doc's id. One posting or posted isn't posted again;
+  one under way when Cellix closed comes back failed, saying to look in the doc before Retry.
+- At the top of the Comments pane, on a page and a remote doc alike, under its head: Validate
+  All and Polish All, each where a comment of the reviewer's has nothing from it yet (Polish
+  leaving posted ones), and on a remote doc Post All Drafts (25 November 2026). Validate and
+  Polish run two at a time; Post All Drafts first asks "Post 4 comments to the doc?" with Post
+  and Cancel, then posts one at a time, each as its own Post to Doc would, a failed one saying
+  why on its card while the rest go. While one runs the row says "Validating 3 of 7" with a
+  spinner, and Stop, which lets what's under way finish and starts nothing more. A press on a
+  kind's pill lists only that kind, and the row acts on what the pane shows; the buttons flow
+  over rows where the pane's head has no room, each whole, never cut short, as a card's do.
+  The question's detail wraps in the dialog's width, and the dialog grows with it.
 - Polish runs on the draft's words, its quote and the paragraph round it ("make this review
   comment short, clear and kind; keep its meaning; answer with the text only"); the
   suggestion stands under the draft in a box of the page's ground, "Polished · Claude Code ·

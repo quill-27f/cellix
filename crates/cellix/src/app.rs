@@ -741,6 +741,8 @@ enum Choice {
     Undo(String),
     /// Remove a comment and its replies.
     DeleteComment(u32),
+    /// Post All Drafts, the person having said Post.
+    PostAll,
     /// Removes a reply: its comment, and its place among the replies.
     DeleteReply(u32, usize),
     /// Write the review over the file there.
@@ -1443,7 +1445,8 @@ const CODE_PILL: (f32, f32) = (8.0, 4.0);
 const HELD_SPACE: char = '\u{1f}';
 
 /// Words set in lines of `width` columns, measured by `wide`: a line takes words until the
-/// next would go past it.
+/// next would go past it, and never ends on a one-letter word, which stays with the word
+/// after it ("A comment" reads as one, and a line's end doesn't strand its article).
 fn wrap_words(text: &str, width: f32, wide: &dyn Fn(&str) -> f32) -> Vec<String> {
     let mut lines = Vec::new();
     let mut line = String::new();
@@ -1454,7 +1457,15 @@ fn wrap_words(text: &str, width: f32, wide: &dyn Fn(&str) -> f32) -> Vec<String>
             format!("{line} {word}")
         };
         if !line.is_empty() && wide(&tried) > width {
-            lines.push(std::mem::replace(&mut line, word.to_string()));
+            let ending = line.rsplit(' ').next().unwrap_or_default();
+            if ending.chars().count() == 1 && line.len() > ending.len() {
+                // The one-letter word at the line's end goes with the word after it.
+                let kept = line[..line.len() - ending.len() - 1].to_string();
+                lines.push(kept);
+                line = format!("{ending} {word}");
+            } else {
+                lines.push(std::mem::replace(&mut line, word.to_string()));
+            }
         } else {
             line = tried;
         }
@@ -7800,6 +7811,7 @@ impl App {
                     self.say("Reply deleted");
                 }
             }
+            Choice::PostAll => self.start_bulk(checks::BulkJob::Post),
             Choice::DeleteComment(id) => {
                 if let Some(at) = self.threads.iter().position(|t| t.id == id) {
                     let thread = self.threads.remove(at);
@@ -7857,18 +7869,26 @@ impl App {
         }
     }
 
-    fn confirm_area(&self) -> Rect {
+    fn confirm_area(&self, confirm: &Confirm) -> Rect {
         let screen = Rect::new(0, 0, self.size.0, self.size.1);
         let width = CONFIRM_WIDTH.min(screen.w);
-        let height = self.confirm_button_row() + self.dialog_foot();
+        let height = self.confirm_button_row(confirm) + self.dialog_foot();
         let y = (screen.h / 3).min(screen.h.saturating_sub(height));
         Rect::new(screen.x + (screen.w - width) / 2, y, width, height)
     }
 
     /// The row of a dialog's buttons, from its top: the row after its words, as a card's are,
-    /// with a row between only where a button all but fills its row (`card_gap`).
-    fn confirm_button_row(&self) -> u16 {
-        3 + self.card_gap()
+    /// with a row between only where a button all but fills its row (`card_gap`). A detail
+    /// that doesn't fit one row wraps, and the buttons stand under its last line.
+    fn confirm_button_row(&self, confirm: &Confirm) -> u16 {
+        let width = CONFIRM_WIDTH.min(self.size.0);
+        2 + self.confirm_lines(confirm, width).len() as u16 + self.card_gap()
+    }
+
+    /// The dialog's detail in the lines it takes in the dialog's width, a row each.
+    fn confirm_lines(&self, confirm: &Confirm, width: u16) -> Vec<String> {
+        let room = f32::from(width.saturating_sub(4));
+        self.wrap(&confirm.detail, room)
     }
 
     /// The rows a dialog has from its buttons' row to its foot: that row alone where a row
@@ -7890,7 +7910,7 @@ impl App {
 
     /// Each button as (cells, x), laid out from the right edge.
     fn confirm_buttons(&self, confirm: &Confirm) -> Vec<(String, u16)> {
-        let area = self.confirm_area();
+        let area = self.confirm_area(confirm);
         let mut x = area.right().saturating_sub(2);
         let mut placed = Vec::new();
         for (label, _) in confirm.buttons.iter().rev() {
@@ -7906,7 +7926,7 @@ impl App {
 
     fn draw_confirm(&self, grid: &mut Grid, confirm: &Confirm) {
         let theme = &self.theme;
-        let area = self.confirm_area();
+        let area = self.confirm_area(confirm);
         popup(grid, area, theme);
         let (lift, raise) = measures::dialog_lifts(measures::DialogLast::Words, &*self.measure);
         let words = grid.painted_so_far();
@@ -7931,16 +7951,18 @@ impl App {
             strong,
             area.right().saturating_sub(1),
         );
-        grid.label(
-            area.x + 2,
-            area.y + 2,
-            &confirm.detail,
-            dim,
-            area.right().saturating_sub(1),
-        );
+        for (i, line) in self.confirm_lines(confirm, area.w).iter().enumerate() {
+            grid.label(
+                area.x + 2,
+                area.y + 2 + i as u16,
+                line,
+                dim,
+                area.right().saturating_sub(1),
+            );
+        }
         grid.lift_since(words, lift);
         let buttons = grid.painted_so_far();
-        let y = area.y + self.confirm_button_row();
+        let y = area.y + self.confirm_button_row(confirm);
         for (i, (cells, x)) in self.confirm_buttons(confirm).iter().enumerate() {
             let on = i == confirm.selected;
             let width = cells.chars().count() as u16;
@@ -13552,6 +13574,7 @@ impl App {
             selected: None,
             validate: Some(&self.checks.validate),
             polish: Some(&self.checks.polish),
+            bulk: self.bulk_shown(),
         }
     }
 
@@ -14260,6 +14283,13 @@ impl App {
             ThreadHit::CopyWords(id, reply) => self.copy_remote(id, reply),
             ThreadHit::Polish(id) => self.polish_comment(id),
             ThreadHit::Validate(id) => self.validate_comment(id),
+            ThreadHit::ValidateAll => {
+                self.start_bulk(checks::BulkJob::Check(checks::Job::Validate))
+            }
+            ThreadHit::PolishAll => self.start_bulk(checks::BulkJob::Check(checks::Job::Polish)),
+            // Asked first: nothing posts till Post is pressed on the question.
+            ThreadHit::PostAll => self.ask_post_all(),
+            ThreadHit::StopAll => self.stop_bulk(),
             ThreadHit::DismissValidation(id) => self.dismiss_validation(id),
             ThreadHit::UsePolish(id) => self.use_polish(id),
             ThreadHit::KeepMine(id) => self.keep_mine(id),
@@ -17243,7 +17273,7 @@ impl App {
                 self.overlay = Overlay::Prompt(prompt);
             }
             Overlay::Confirm(confirm) => {
-                let y = self.confirm_area().y + self.confirm_button_row();
+                let y = self.confirm_area(&confirm).y + self.confirm_button_row(&confirm);
                 let spots = self.confirm_buttons(&confirm);
                 let width = |cells: &String| cells.chars().count() as u16;
                 // Where it's painted, raised in its row.
@@ -36124,9 +36154,12 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert_eq!(app.threads.len(), 1);
         let (x, y) = find(&screen(&app), "Delete");
         app.handle(mouse(MouseKind::Left, x, y));
-        // The dialog's own Delete, on its row of buttons.
+        // The dialog's own Delete, on its row of buttons, under its wrapped words.
         let grid = screen(&app);
-        let buttons = find(&grid, "Delete this comment?").1 + 3;
+        let (_, asked) = find(&grid, "Delete this comment?");
+        let buttons = (asked + 1..grid.height())
+            .find(|y| grid.row_text(*y).contains("Cancel"))
+            .expect("the dialog's buttons");
         let row = grid.row_text(buttons);
         let at = row.find("Delete").expect("the dialog's Delete");
         let x = row[..at].chars().count() as u16 + 1;

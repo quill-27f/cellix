@@ -1594,7 +1594,7 @@ def remote_scenes(scratch):
     system = "/usr/bin:/bin:/usr/sbin:/sbin"
     # The doc as a read leaves it, with three comments: Priya's with Sam's reply, the
     # reviewer's draft and the reviewer's posted one.
-    def seed(state, extra=None):
+    def seed(state, extra=None, more=()):
         folder = f"{ROOT}/.cellix/remote/queue-launch"
         os.makedirs(folder, exist_ok=True)
         with open(f"{folder}/doc.md", "w") as f:
@@ -1623,6 +1623,7 @@ def remote_scenes(scratch):
              "text": "A third over 42k, or over the 3x estimate?",
              "remote": {"id": "c7", "state": posted}},
         ]
+        threads.extend(more)
         with open(f"{ROOT}/.cellix/threads.json", "w") as f:
             json.dump(threads, f)
     comments = [["until", "From team-docs"], *command("Show Comments"), ["until", "Others: 1"], ["wait", 0.8]]
@@ -1641,7 +1642,29 @@ def remote_scenes(scratch):
         ("r5-remote-failed", comments, "fail",
          {"is": "failed", "why": "The doc tool asked to sign in again. Sign in (your security key), then Retry."}),
         ("r6-remote-validated", comments, "ok", {"is": "draft"}),
+        # Validate All under way, its runs held, two at a time: "Validating 2 of 5" and Stop.
+        ("r7-remote-validating", [*comments, ["click", *ON("Validate A")], ["until", "Validating"],
+                                  ["wait", 0.8]], "hang", {"is": "draft"}),
+        ("r7-remote-validating-light", [*comments, ["click", *ON("Validate A")],
+                                        ["until", "Validating"], ["wait", 0.8]], "hang", {"is": "draft"}),
+        # Post All Drafts asks first.
+        ("r8-remote-post-all", [*comments, ["click", *ON("Post All")],
+                                ["until", "comments to the doc?"], ["wait", 0.6]], "ok", {"is": "draft"}),
+        ("r8-remote-post-all-light", [*comments, ["click", *ON("Post All")],
+                                      ["until", "comments to the doc?"], ["wait", 0.6]], "ok", {"is": "draft"}),
     ]
+    doc_file = ".cellix/remote/queue-launch/doc.md"
+    more_drafts = [
+        {"id": 6 + n, "file": doc_file, "line": 5, "placed": True, "at": now - 400 + n,
+         "quote": quote, "text": text, "remote": {"state": {"is": "draft"}}}
+        for n, (quote, text) in enumerate([
+            ("first holiday week", "Which week is the first holiday week?"),
+            ("order events", "All order events, or only new ones?"),
+            ("retry queue", "How big can the retry queue get?"),
+        ])]
+    mores = {name: more_drafts for name in
+             ("r7-remote-validating", "r8-remote-post-all",
+              "r7-remote-validating-light", "r8-remote-post-all-light")}
     # The draft with what Validate said of it and Polish's words, kept with it.
     draft_words = ("I think this is a problem because if one consumer gets slow for whatever reason "
                    "then all of the events behind it are going to wait, and the doc doesn't say what "
@@ -1654,7 +1677,7 @@ def remote_scenes(scratch):
     for name, steps, kind, state in scenes:
         shutil.rmtree(f"{ROOT}/.cellix", ignore_errors=True)
         if state is not None:
-            seed(state, extras.get(name))
+            seed(state, extras.get(name), mores.get(name, ()))
         cache = tempfile.mkdtemp(prefix="cx", dir="/tmp")
         env = {"XDG_CACHE_HOME": cache, "PATH": f"{tools[kind]}:{system}"}
         extra = {"background": "eff1f5"} if name.endswith("-light") else {}
@@ -2219,6 +2242,8 @@ with tempfile.TemporaryDirectory() as made:
         json.dump(validated, f)
     shoot("50-comment-validated", mentioned, NOTE_FILE, size="150x44", cellix=True,
           expect="Holds up")
+    shoot("50-comment-validated-light", mentioned, NOTE_FILE, size="150x44", cellix=True,
+          expect="Holds up", background="eff1f5")
     # A comment with the reviewer's reply and an agent's: the pointer on the reviewer's shows
     # its Edit and Delete at the end of the line over it, and on the agent's only Delete. Then
     # the reviewer's being changed, in the box replies are written in.

@@ -1155,3 +1155,384 @@ fn the_same_buttons_stand_on_both_and_polish_works_on_a_page() {
     );
     assert_eq!(runs(dir.path()), 2, "one polish, one read: nothing posted");
 }
+
+/// A stand-in `claude` that holds every run till a file named `go` is there, and keeps count
+/// of how many ran at once, the most in `claude.most`. Each run answers `answer`.
+fn holding_stand_in(dir: &Path, answer: &str) {
+    let bin = dir.join("bin");
+    let record = bin.join("claude");
+    let live = bin.join("live");
+    fs::create_dir_all(&live).unwrap();
+    let out = bin.join("claude.held");
+    fs::write(&out, printed(answer).join("\n") + "\n").unwrap();
+    let script = format!(
+        "#!/bin/sh\n\
+         n=1; while ! /bin/mkdir '{rec}.run.'$n 2>/dev/null; do n=$((n + 1)); done\n\
+         /bin/cat > '{rec}.prompt.'$n\n\
+         : > '{live}/'$n\n\
+         now=$(/bin/ls '{live}' | /usr/bin/wc -l | /usr/bin/tr -d ' ')\n\
+         most=$(/bin/cat '{rec}.most' 2>/dev/null || echo 0)\n\
+         if [ \"$now\" -gt \"$most\" ]; then echo $now > '{rec}.most'; fi\n\
+         while [ ! -e '{go}' ]; do /bin/sleep 0.05; done\n\
+         /bin/rm -f '{live}/'$n\n\
+         while IFS= read -r line; do printf '%s\\n' \"$line\"; done < '{out}'\n",
+        rec = record.display(),
+        live = live.display(),
+        go = dir.join("go").display(),
+        out = out.display(),
+    );
+    fs::write(&record, script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&record, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// How many runs the holding stand-in has had: a folder each, made whole or not at all, as
+/// two runs at once would both read one count and write the same next one.
+fn held_runs(dir: &Path) -> usize {
+    fs::read_dir(dir.join("bin"))
+        .unwrap()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("claude.run."))
+        .count()
+}
+
+fn most_at_once(dir: &Path) -> usize {
+    fs::read_to_string(dir.join("bin").join("claude.most"))
+        .ok()
+        .and_then(|n| n.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+/// Validate All, at the top of the Comments pane, validates every comment of the reviewer's
+/// that has nothing from Validate yet, two at a time, the pane's head saying "Validating 2 of
+/// 5" with a Stop; Stop lets the two under way finish and starts none of the rest. Pressed
+/// again it takes the rest, never more than two at once, and none twice.
+#[test]
+fn validate_all_runs_two_at_a_time_and_stop_cancels_the_rest() {
+    let (dir, mut app) = project();
+    let path = dir.path().join("plan.md");
+    fs::write(&path, DOC).unwrap();
+    app.open(&path).unwrap();
+    for (words, text) in [
+        ("At launch", "Which launch?"),
+        ("order events", "All of them?"),
+        ("three times", "Three times what?"),
+        ("holiday week", "Which week?"),
+        ("slow consumer", "How slow?"),
+    ] {
+        comment(&mut app, words, text);
+    }
+    app.dock.open = true;
+    app.dock.show_comments();
+    holding_stand_in(dir.path(), "Holds up (Clarity): It's vague.");
+    let (x, y) = find(&screen(&app), "Validate All");
+    click(&mut app, x + 1, y);
+    until(&mut app, "two started", |_| held_runs(dir.path()) == 2);
+    for _ in 0..20 {
+        app.poll();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(held_runs(dir.path()), 2, "two at a time");
+    let text = screen(&app).text();
+    assert!(text.contains("Validating 2 of 5"), "{text}");
+    let (x, y) = find(&screen(&app), "Stop");
+    click(&mut app, x + 1, y);
+    fs::write(dir.path().join("go"), "").unwrap();
+    until(&mut app, "the two finished", |app| {
+        app.threads
+            .iter()
+            .filter(|t| t.validation.is_some())
+            .count()
+            == 2
+    });
+    for _ in 0..20 {
+        app.poll();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(held_runs(dir.path()), 2, "Stop started none of the rest");
+    let text = screen(&app).text();
+    assert!(!text.contains("Validating"), "{text}");
+    assert!(
+        text.contains("Validate All"),
+        "three still have none: {text}"
+    );
+
+    // Again: the three left, each once, never more than two at once.
+    fs::remove_file(dir.path().join("go")).unwrap();
+    let (x, y) = find(&screen(&app), "Validate All");
+    click(&mut app, x + 1, y);
+    until(&mut app, "two started again", |_| {
+        held_runs(dir.path()) == 4
+    });
+    assert!(screen(&app).text().contains("Validating 2 of 3"));
+    fs::write(dir.path().join("go"), "").unwrap();
+    until(&mut app, "all validated", |app| {
+        app.threads.iter().all(|t| t.validation.is_some())
+    });
+    assert_eq!(held_runs(dir.path()), 5, "none twice");
+    assert_eq!(most_at_once(dir.path()), 2);
+    let prompts: Vec<String> = (1..=5).map(|n| given(dir.path(), n).1).collect();
+    for text in [
+        "Which launch?",
+        "All of them?",
+        "Three times what?",
+        "Which week?",
+        "How slow?",
+    ] {
+        let told = prompts.iter().filter(|p| p.contains(text)).count();
+        assert_eq!(told, 1, "{text:?} validated once");
+    }
+    assert!(
+        !screen(&app).text().contains("Validate All"),
+        "none left to validate"
+    );
+}
+
+/// Post All Drafts asks first, saying how many, and posts nothing till Post is pressed; then
+/// posts each draft once, one at a time, each card saying where it stands. One the doc tool
+/// refuses says why on its card, and the rest still go.
+#[test]
+fn post_all_drafts_asks_first_and_posts_each_once_one_at_a_time() {
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    read_doc(dir.path(), &mut app);
+    let drafts = [
+        ("slow consumer", "How slow is slow?"),
+        ("holiday week", "Which week exactly?"),
+        ("order events", "All the order events?"),
+    ];
+    for (words, text) in drafts {
+        comment(&mut app, words, text);
+    }
+    let (x, y) = find(&screen(&app), "Post All Drafts");
+    click(&mut app, x + 1, y);
+    let text = screen(&app).text();
+    assert!(text.contains("Post 3 comments to the doc?"), "{text}");
+    assert_eq!(runs(dir.path()), 1, "nothing posted while it asks");
+    let (x, y) = find(&screen(&app), "Cancel");
+    click(&mut app, x + 1, y);
+    for _ in 0..10 {
+        app.poll();
+    }
+    assert_eq!(runs(dir.path()), 1, "Cancel posts nothing");
+
+    answers(dir.path(), 2, &printed(r#"{"id": "c-1"}"#));
+    answers(
+        dir.path(),
+        3,
+        &printed(r#"{"error": "The doc is locked for comments."}"#),
+    );
+    answers(dir.path(), 4, &printed(r#"{"id": "c-3"}"#));
+    let (x, y) = find(&screen(&app), "Post All Drafts");
+    click(&mut app, x + 1, y);
+    // The question's buttons, on the row under it that has Cancel.
+    let grid = screen(&app);
+    let (_, asked) = find(&grid, "Post 3 comments to the doc?");
+    let y = (asked + 1..grid.height())
+        .find(|y| grid.row_text(*y).contains("Cancel"))
+        .expect("the question's buttons");
+    let row = grid.row_text(y);
+    let x = row[..row.find("Post").expect("its Post")].chars().count() as u16;
+    click(&mut app, x + 1, y);
+    // One at a time: never two posts under way, each card saying where it stands.
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        assert!(app.remote.posts.len() <= 1, "one post at a time");
+        let tried = drafts.iter().all(|(_, text)| {
+            matches!(
+                state_of(&app, text),
+                Some(Sent::Posted { .. } | Sent::Failed { .. })
+            )
+        });
+        if tried && app.remote.posts.is_empty() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "never all tried");
+        app.poll();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(runs(dir.path()), 4, "each posted once");
+    let prompts: Vec<String> = (2..=4).map(|run| given(dir.path(), run).1).collect();
+    for (_, text) in drafts {
+        let told = prompts.iter().filter(|p| p.contains(text)).count();
+        assert_eq!(told, 1, "{text:?} posted once");
+    }
+    for prompt in &prompts {
+        assert!(prompt.contains("Add only this comment, once"), "{prompt}");
+    }
+    // The second post failed, and the third went all the same.
+    let second = drafts
+        .iter()
+        .find(|(_, text)| prompts[1].contains(text))
+        .map(|(_, text)| *text)
+        .unwrap();
+    for (_, text) in drafts {
+        let state = state_of(&app, text);
+        if text == second {
+            assert!(matches!(state, Some(Sent::Failed { .. })), "{state:?}");
+        } else {
+            assert!(
+                matches!(state, Some(Sent::Posted { .. })),
+                "{text}: {state:?}"
+            );
+        }
+    }
+    let text = screen(&app).text();
+    assert!(text.contains("locked"), "why on its card: {text}");
+    for _ in 0..20 {
+        app.poll();
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(runs(dir.path()), 4);
+}
+
+/// The bulk row's buttons flow to another row where the pane's head has no room, as a
+/// card's buttons do, each whole, never cut short; a press on one that flowed works as
+/// one that fit would.
+#[test]
+fn bulk_buttons_flow_where_the_narrow_pane_has_no_room() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let home = dir.path().join("home");
+    fs::create_dir(&home).unwrap();
+    fs::write(
+        home.join(".claude.json"),
+        r#"{"mcpServers":{"team-docs":{"command":"docs-mcp"}}}"#,
+    )
+    .unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (64, 40));
+    app.side_path = Some(bin.into_os_string());
+    app.remote.env = Some(HashMap::from([(
+        "HOME".to_string(),
+        home.display().to_string(),
+    )]));
+    // The doc read, as the read would leave it (the read's own wait can't run in a window
+    // this narrow, whose strip has no room for its words): its files written, its pane open.
+    let slug = "queue-launch";
+    let folder = remote::folder(dir.path(), slug);
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join("doc.md"), DOC).unwrap();
+    let doc_file = format!(".cellix/remote/{slug}/doc.md");
+    app.remote.docs.insert(
+        slug.to_string(),
+        remote::Meta {
+            title: "Queue service launch".to_string(),
+            link: LINK.to_string(),
+            version: "12".to_string(),
+            server: SERVER.to_string(),
+            synced: cellix_review::threads::now(),
+            others: 0,
+        },
+    );
+    // The drafts, made as the doc read's comments are: at 64 columns the doc page's words
+    // can't be selected, so they're put in place of a comment made on them.
+    let at = cellix_review::threads::now();
+    for (n, (quote, text)) in [
+        ("slow consumer", "How slow is slow?"),
+        ("holiday week", "Which week exactly?"),
+        ("order events", "All of them?"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        app.threads.push(cellix_review::Thread {
+            id: 6 + n as u32,
+            file: doc_file.clone(),
+            line: 5,
+            quote: quote.to_string(),
+            text: text.to_string(),
+            placed: true,
+            at: at + n as u64,
+            remote: Some(cellix_review::threads::Remote::draft()),
+            ..Default::default()
+        });
+    }
+    app.open(&dir.path().join(&doc_file)).unwrap();
+    app.dock.open = true;
+    app.dock.show_comments();
+    let text = screen(&app).text();
+    assert!(text.contains("Validate All"), "{text}");
+    assert!(text.contains("Polish All"), "{text}");
+    assert!(
+        text.contains("Post All Drafts"),
+        "whole, never cut short: {text}"
+    );
+    // A press on one that flowed asks as the wide pane's does, and posts nothing till Post.
+    let (x, y) = find(&screen(&app), "Post All Drafts");
+    click(&mut app, x + 1, y);
+    let text = screen(&app).text();
+    assert!(text.contains("Post 3 comments to the doc?"), "{text}");
+    assert_eq!(runs(dir.path()), 0, "nothing posted while it asks");
+    let (x, y) = find(&screen(&app), "Cancel");
+    click(&mut app, x + 1, y);
+    for _ in 0..10 {
+        app.poll();
+    }
+    assert_eq!(runs(dir.path()), 0, "Cancel posts nothing");
+    for text in ["How slow is slow?", "Which week exactly?", "All of them?"] {
+        assert!(matches!(state_of(&app, text), Some(Sent::Draft)), "{text}");
+    }
+}
+
+/// A press on a kind's pill lists only that kind, and Validate All then takes only what's
+/// listed: the pane's row acts on what the pane shows.
+#[test]
+fn validate_all_takes_only_the_kind_the_pill_lists() {
+    let (dir, mut app) = project();
+    let path = dir.path().join("plan.md");
+    fs::write(&path, DOC).unwrap();
+    app.open(&path).unwrap();
+    for (words, text) in [
+        ("At launch", "Which launch?"),
+        ("order events", "All of them?"),
+        ("three times", "Three times what?"),
+    ] {
+        comment(&mut app, words, text);
+    }
+    app.threads[0].kind = "Clarity".into();
+    app.threads[1].kind = "Evidence".into();
+    app.threads[2].kind = "Clarity".into();
+    app.dock.open = true;
+    app.dock.show_comments();
+    holding_stand_in(dir.path(), "Holds up (Clarity): It's vague.");
+    let (x, y) = find(&screen(&app), "Clarity 2");
+    click(&mut app, x + 1, y);
+    let text = screen(&app).text();
+    assert!(
+        !text.contains("All of them?"),
+        "the other kind isn't listed: {text}"
+    );
+    let (x, y) = find(&screen(&app), "Validate All");
+    click(&mut app, x + 1, y);
+    until(&mut app, "the two listed started", |_| {
+        held_runs(dir.path()) == 2
+    });
+    fs::write(dir.path().join("go"), "").unwrap();
+    until(&mut app, "both validated", |app| {
+        app.threads
+            .iter()
+            .filter(|t| t.validation.is_some())
+            .count()
+            == 2
+    });
+    for _ in 0..20 {
+        app.poll();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(held_runs(dir.path()), 2, "only the kind listed");
+    let prompts: Vec<String> = (1..=2).map(|n| given(dir.path(), n).1).collect();
+    for text in ["Which launch?", "Three times what?"] {
+        let told = prompts.iter().filter(|p| p.contains(text)).count();
+        assert_eq!(told, 1, "{text:?} told once");
+    }
+    assert!(
+        !prompts.iter().any(|p| p.contains("All of them?")),
+        "not the kind not listed: {prompts:?}"
+    );
+    let text = screen(&app).text();
+    assert_eq!(text.matches("Holds up").count(), 2, "{text}");
+}

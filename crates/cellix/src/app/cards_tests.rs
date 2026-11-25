@@ -538,7 +538,7 @@ fn a_cards_buttons_say_what_the_palette_calls_them() {
     // The card's buttons, over the rows they flow on, Validate first and Resolve last.
     let buttons: String = (0..grid.height())
         .map(|y| grid.row_text(y))
-        .skip_while(|row| !row.contains(" Validate "))
+        .skip_while(|row| !row.contains(" Validate ") || row.contains("Validate All"))
         .take_while(|row| !row.trim().is_empty())
         .collect();
     assert!(buttons.contains("Resolve"), "{buttons}");

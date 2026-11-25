@@ -805,17 +805,20 @@ fn a_narrow_panes_cards_are_short_until_one_is_lit() {
     assert!(text.contains("2 replies"), "{text}");
     assert!(!text.contains("entirely here"), "cut short: {text}");
     assert!(!text.contains("It saves a read"), "{text}");
+    // (The pane's head has Validate All and Polish All: the card's row is what's looked at.)
+    let (x, y) = find(&screen(&app), "2 replies");
+    let row = screen(&app).row_text(y);
     assert!(
-        !text.contains("Validate"),
+        !row.contains("Validate"),
         "no buttons till pointed at: {text}"
     );
     // Pointed at, its buttons stand in the row that said so: one row, what doesn't fit it
     // behind its "⋯".
-    let (x, y) = find(&screen(&app), "2 replies");
     app.handle(mouse(MouseKind::Move, x, y));
     let text = screen(&app).text();
+    let row = screen(&app).row_text(y);
     assert!(
-        text.contains("Validate") && !text.contains("2 replies"),
+        row.contains("Validate") && !text.contains("2 replies"),
         "{text}"
     );
     let row = screen(&app).row_text(y);

@@ -54,6 +54,8 @@ pub(super) struct Checks {
     /// Each comment's Validate and Polish while it runs, or once it failed, as its card says.
     pub validate: crate::threads::Pendings,
     pub polish: crate::threads::Pendings,
+    /// Validate All, Polish All or Post All Drafts, under way.
+    pub bulk: Option<Bulk>,
 }
 
 impl Checks {
@@ -206,7 +208,7 @@ impl App {
             let run = self.checks.running.remove(index);
             self.finish_check(run, result);
         }
-        changed
+        self.drive_bulk() || changed
     }
 
     /// A run's end: what it said kept with the comment, or why it said nothing on its card.
@@ -311,4 +313,200 @@ impl App {
 enum Kept {
     Validation(Validation),
     Polished(Polished),
+}
+
+/// What a press at the top of the Comments pane does to many comments at once.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BulkJob {
+    /// Validate All or Polish All, two at a time.
+    Check(Job),
+    /// Post All Drafts, one at a time, once the person has said Post.
+    Post,
+}
+
+/// How many runs of Validate All or Polish All go at once.
+const AT_ONCE: usize = 2;
+
+/// One of those under way: the comments it takes, in the order they're listed, those not
+/// started yet, and how many it has started.
+pub(super) struct Bulk {
+    pub job: BulkJob,
+    pub ids: Vec<u32>,
+    pub queue: std::collections::VecDeque<u32>,
+    pub started: usize,
+    pub stopped: bool,
+}
+
+impl App {
+    /// The comments listed in the pane that a bulk press takes: those of the reviewer's with
+    /// nothing from Validate, or Polish, yet; or the drafts of the remote doc in view. A kind
+    /// picked on a page lists only it, and the press takes what the pane shows.
+    fn bulk_ids(&self, job: BulkJob) -> Vec<u32> {
+        let (listed, _) = self.shown_threads();
+        listed
+            .iter()
+            .filter(|t| !t.resolved)
+            .filter(|t| self.comment_kind.is_none_or(|kind| t.kind == kind))
+            .filter(|t| match job {
+                BulkJob::Check(Job::Validate) => {
+                    crate::threads::wants_validation(t) && !self.checks.busy(t.id, Job::Validate)
+                }
+                BulkJob::Check(Job::Polish) => {
+                    crate::threads::wants_polish(t) && !self.checks.busy(t.id, Job::Polish)
+                }
+                BulkJob::Post => t.unposted(),
+            })
+            .map(|t| t.id)
+            .collect()
+    }
+
+    /// Validate All, Polish All, or Post All Drafts once the person has said Post: every
+    /// comment it takes, queued, and the first started.
+    pub(super) fn start_bulk(&mut self, job: BulkJob) {
+        if self.checks.bulk.is_some() {
+            return;
+        }
+        let ids = self.bulk_ids(job);
+        if ids.is_empty() {
+            return;
+        }
+        self.checks.bulk = Some(Bulk {
+            job,
+            queue: ids.iter().copied().collect(),
+            ids,
+            started: 0,
+            stopped: false,
+        });
+        self.drive_bulk();
+    }
+
+    /// Asks before Post All Drafts posts anything: how many, Post or Cancel.
+    pub(super) fn ask_post_all(&mut self) {
+        let count = self.bulk_ids(BulkJob::Post).len();
+        if count == 0 {
+            return;
+        }
+        let title = match count {
+            1 => "Post 1 comment to the doc?".to_string(),
+            n => format!("Post {n} comments to the doc?"),
+        };
+        self.overlay = Overlay::Confirm(Confirm {
+            title,
+            detail: "Each is posted on its own, one at a time, as its Post to Doc posts it. A \
+                     comment the doc tool refuses says why on its card, and the rest still go."
+                .to_string(),
+            buttons: vec![("Post", Choice::PostAll), ("Cancel", Choice::Cancel)],
+            selected: 1,
+        });
+    }
+
+    /// Stop: what's under way finishes, and nothing more starts.
+    pub(super) fn stop_bulk(&mut self) {
+        if let Some(bulk) = self.checks.bulk.as_mut() {
+            bulk.queue.clear();
+            bulk.stopped = true;
+        }
+        self.say("Stopped: what's under way finishes, and nothing more starts");
+        self.drive_bulk();
+    }
+
+    /// Starts what the bulk press has room for: two of Validate or Polish at a time, one post
+    /// at a time. When nothing's left to start and nothing it started is running, it's done.
+    pub(super) fn drive_bulk(&mut self) -> bool {
+        let Some(bulk) = self.checks.bulk.as_ref() else {
+            return false;
+        };
+        let (job, ids) = (bulk.job, bulk.ids.clone());
+        let running = |app: &App| match job {
+            BulkJob::Check(job) => app
+                .checks
+                .running
+                .iter()
+                .filter(|r| r.job == job && ids.contains(&r.thread))
+                .count(),
+            BulkJob::Post => app
+                .remote
+                .posts
+                .iter()
+                .filter(|p| p.reply.is_none() && ids.contains(&p.thread))
+                .count(),
+        };
+        let room = match job {
+            BulkJob::Check(_) => AT_ONCE,
+            BulkJob::Post => 1,
+        };
+        let mut changed = false;
+        while running(self) < room {
+            let Some(id) = self.checks.bulk.as_mut().and_then(|b| b.queue.pop_front()) else {
+                break;
+            };
+            let started = match job {
+                BulkJob::Check(job) => self.start_check(id, job),
+                BulkJob::Post => {
+                    self.post_remote(id, None);
+                    self.remote.posts.iter().any(|p| p.thread == id)
+                }
+            };
+            if let Some(bulk) = self.checks.bulk.as_mut() {
+                if started {
+                    bulk.started += 1;
+                } else if self.checks.running.is_empty() && self.remote.posts.is_empty() {
+                    // No agent to run: the rest would fail the same way, as the bar says.
+                    bulk.queue.clear();
+                }
+            }
+            changed = true;
+        }
+        let done = self
+            .checks
+            .bulk
+            .as_ref()
+            .is_some_and(|b| b.queue.is_empty())
+            && running(self) == 0;
+        if done && let Some(bulk) = self.checks.bulk.take() {
+            let what = match job {
+                BulkJob::Check(Job::Validate) => "Validated",
+                BulkJob::Check(Job::Polish) => "Polished",
+                BulkJob::Post => "Posted",
+            };
+            // What it says of: for posts, those that made it, since a refused one says why
+            // on its card and counts nowhere.
+            let n = match job {
+                BulkJob::Post => self
+                    .threads
+                    .iter()
+                    .filter(|t| {
+                        ids.contains(&t.id)
+                            && t.remote.as_ref().is_some_and(|r| {
+                                matches!(r.state, cellix_review::threads::Sent::Posted { .. })
+                            })
+                    })
+                    .count(),
+                BulkJob::Check(_) => bulk.started,
+            };
+            if n > 0 {
+                self.say(format!(
+                    "{what} {n} {}",
+                    if n == 1 { "comment" } else { "comments" }
+                ));
+            }
+            changed = true;
+        }
+        changed
+    }
+
+    /// What the pane's head says of the bulk press under way.
+    pub(super) fn bulk_shown(&self) -> Option<(&'static str, usize, usize, bool)> {
+        let bulk = self.checks.bulk.as_ref()?;
+        let doing = match bulk.job {
+            BulkJob::Check(job) => job.doing(),
+            BulkJob::Post => "Posting",
+        };
+        let total = if bulk.stopped {
+            bulk.started
+        } else {
+            bulk.ids.len()
+        };
+        Some((doing, bulk.started, total, !bulk.stopped))
+    }
 }
