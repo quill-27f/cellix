@@ -2010,14 +2010,7 @@ with tempfile.TemporaryDirectory() as made:
     # scene before reads and none after keeps (each scene starts with no `.cellix`).
     os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
     workspace_settings = f"{ROOT}/.cellix/settings.json"
-    kept_off = {}
-    with open(workspace_settings, "w") as f:
-        json.dump({**kept_off, "disabled_agents": ["codex", "gemini"]}, f)
-    shoot("17b-agents-switches",
-          [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 12], ["wait", 0.8]],
-          CODE_FILE, cellix=True)
-    # One of the person's own runners (a stand-in; never the machine's real one), in the
-    # Default agent row and the Your agents card.
+    # One of the person's own runners (a stand-in; never the machine's real one).
     custom_tools = f"{scratch}/custom-tools"
     os.makedirs(custom_tools, exist_ok=True)
     ds = f"{custom_tools}/claude-ds"
@@ -2026,12 +2019,21 @@ with tempfile.TemporaryDirectory() as made:
     os.chmod(ds, 0o755)
     with open(workspace_settings, "w") as f:
         json.dump(
-            {"agents": [{"name": "Claude (DeepSeek)", "command": "claude-ds", "like": "claude"}]},
+            {"disabled_agents": ["codex", "gemini"],
+             "agents": [{"name": "Claude (DeepSeek)", "command": "claude-ds", "like": "claude"}]},
             f,
         )
-    shoot("17c-your-agents",
-          [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 10], ["wait", 0.8]],
+    # The page at its top: with Codex and Gemini off, the Default agent row offers only Auto,
+    # Claude and the person's runner.
+    shoot("17b-top-agents-off",
+          [*settings, ["click", *ON("Integrations")], ["wait", 1.2]],
           CODE_FILE, env={"PATH": f"{custom_tools}:{os.environ['PATH']}"}, cellix=True)
+    shoot("17b-agents-switches",
+          [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 12], ["wait", 0.8]],
+          CODE_FILE, env={"PATH": f"{custom_tools}:{os.environ['PATH']}"}, cellix=True)
+    shoot("17b-agents-switches-light",
+          [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 12], ["wait", 0.8]],
+          CODE_FILE, env={"PATH": f"{custom_tools}:{os.environ['PATH']}"}, cellix=True, background="eff1f5")
     shoot("18-settings-keyboard", [*settings, ["click", *ON("Keyboard")]], CODE_FILE)
     shoot("19-dialog", [["keys", "x"], ["keys", CTRL("q")]], CODE_FILE)
     # Workflow: tasks, Open Recent, and Settings' Editor and Keyboard sections, reached through

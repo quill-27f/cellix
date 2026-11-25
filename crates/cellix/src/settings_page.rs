@@ -1240,8 +1240,8 @@ impl SettingsPage {
                 let card = self.agents_card_row();
                 for (index, row) in self.agent_rows().iter().enumerate() {
                     let y = self.integration_row(page, card + index as u16 * BLOCK_STEP, 3);
-                    let toggle = TOGGLE_WIDTH.ceil() as u16;
-                    let right = page.right().saturating_sub(toggle + 2);
+                    let toggle = TOGGLE_WIDTH.ceil() as u16 + 2;
+                    let right = page.right().saturating_sub(toggle);
                     spots.push((
                         place(y, right, (toggle, 2)),
                         Control::ToggleAgent(row.toggle.0.clone()),
@@ -1952,7 +1952,15 @@ impl SettingsPage {
                         Tone::Quiet => theme.gutter.fg,
                     };
                     let text = (block.name, block.state, colour);
-                    draw_block(grid, page, (y, measure), text, block.detail, theme);
+                    draw_block(
+                        grid,
+                        page,
+                        (y, measure),
+                        text,
+                        block.detail,
+                        page.right(),
+                        theme,
+                    );
                     if let Some((label, _, control)) = &block.action
                         && let Some((rect, _)) =
                             spots.iter().find(|(r, c)| *c == *control && r.y == y)
@@ -2532,7 +2540,15 @@ impl SettingsPage {
             let Some(top) = self.integration_row(page, Self::block_row(index), 3) else {
                 continue;
             };
-            draw_block(grid, page, (top, measure), text, block.detail, theme);
+            draw_block(
+                grid,
+                page,
+                (top, measure),
+                text,
+                block.detail,
+                page.right(),
+                theme,
+            );
             if let Some((label, _, control)) = &block.action {
                 let spot = buttons.iter().find(|(_, c)| *c == *control);
                 if let Some((rect, _)) = spot {
@@ -2551,12 +2567,19 @@ impl SettingsPage {
                 Tone::Good => theme.git_added,
                 Tone::Quiet => theme.gutter.fg,
             };
+            let stop = buttons
+                .iter()
+                .filter(|(rect, _)| rect.y == top && rect.x > page.x)
+                .map(|(rect, _)| rect.x)
+                .min()
+                .unwrap_or(page.right());
             draw_block(
                 grid,
                 page,
                 (top, measure),
                 (&row.name, &row.badge, color),
                 &row.detail,
+                stop,
                 theme,
             );
             let buttons = self.controls_at(page);
@@ -2570,7 +2593,14 @@ impl SettingsPage {
                     Some(theme.popup),
                     None,
                 );
-                draw_switch_knob(grid, page, rect.y, row.toggle.1, (theme, measure));
+                draw_switch_knob(
+                    grid,
+                    page,
+                    rect.y,
+                    page.right().saturating_sub(2),
+                    row.toggle.1,
+                    (theme, measure),
+                );
             }
             if !row.main.0.is_empty() {
                 if let Some((rect, _)) = buttons.iter().find(|(_, c)| *c == row.main.1) {
@@ -2623,8 +2653,8 @@ impl SettingsPage {
             let Some(y) = self.integration_row(page, card + index as u16 * BLOCK_STEP, 3) else {
                 continue;
             };
-            let toggle = TOGGLE_WIDTH.ceil() as u16;
-            let right = page.right().saturating_sub(toggle + 2);
+            let toggle = TOGGLE_WIDTH.ceil() as u16 + 2;
+            let right = page.right().saturating_sub(toggle);
             out.push((
                 Rect::new(right, y, toggle, 2),
                 Control::ToggleAgent(row.toggle.0.clone()),
@@ -2814,19 +2844,21 @@ fn draw_toggle(
     grid.hairline(above, theme.border);
     let room = page.right().saturating_sub(TOGGLE_WIDTH.ceil() as u16 + 2);
     draw_text(grid, page, (y, room), text, theme);
-    draw_switch_knob(grid, page, y, on, (theme, measure));
+    draw_switch_knob(grid, page, y, page.right(), on, (theme, measure));
 }
 
-/// A switch's track and knob alone, at the page's right: what the rows of the Your agents
-/// card carry, whose words are their own.
+/// A switch's track and knob alone, its right edge at `right` cells: what the rows of the
+/// Your agents card carry, whose words are their own, and whose switch stands at its hit
+/// place, not the page's edge.
 fn draw_switch_knob(
     grid: &mut Grid,
-    page: Rect,
+    _page: Rect,
     y: u16,
+    right: u16,
     on: bool,
     (theme, measure): (&Theme, &dyn Measure),
 ) {
-    let right = page.right() as f32;
+    let right = right as f32;
     let ((left, top, width, height, radius), knob) = switch_shape(measure);
     let x = right - left;
     let track = if on { theme.button } else { theme.popup_border };
@@ -2847,8 +2879,8 @@ fn draw_switch_knob(
         ..theme.text
     };
     let word = if on { "[on]" } else { "[off]" };
-    let cell = page.right().saturating_sub(word.len() as u16);
-    grid.put_str(cell, y, word, hidden, page.right());
+    let cell = (right as u16).saturating_sub(word.len() as u16);
+    grid.put_str(cell, y, word, hidden, right as u16);
 }
 
 /// The colours of a theme, as a tiny window.
@@ -2948,6 +2980,7 @@ fn draw_block(
     (top, measure): (u16, &dyn Measure),
     (name, word, color): (&str, &str, Rgb),
     detail: &str,
+    stop: u16,
     theme: &Theme,
 ) {
     let surface = Bounds::cells(page.x as f32, top as f32 - 0.4, page.w as f32, 2.8);
@@ -2969,7 +3002,9 @@ fn draw_block(
     } else {
         x as f32 + measure.width(name, bold) + STATUS_GAP
     };
-    badge(grid, at, top, word, color, theme);
+    // The badge is cut short of what the row's controls take, never run under them.
+    let word = crate::context::elide(word, f32::from(stop.saturating_sub(at as u16 + 1)), measure);
+    badge(grid, at, top, &word, color, theme);
     let quiet = Style {
         fg: theme.popup_dim,
         bg: theme.popup,
