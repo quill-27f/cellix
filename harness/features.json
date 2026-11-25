@@ -7747,5 +7747,19 @@
     "title": "On a remote doc's cards authors' names stand bold in the text colour, the MCP server menu lights the row under the pointer and the keys' first, and Post to Doc and Copy carry their send and copy marks",
     "test": "a_remote_cards_names_menu_and_marks_stand_as_the_board_has_them",
     "passes": true
+  },
+  {
+    "id": "stopped-session-host-lets-go",
+    "milestone": 15,
+    "title": "A held session stopped on purpose, as quitting or closing a workspace stops it, lets its host go once the program ends with nobody left listening, and one that ignores the hang-up is killed after a moment",
+    "test": "a_program_stopped_with_nobody_left_to_hear_it_leaves_nothing_behind",
+    "passes": true
+  },
+  {
+    "id": "closed-workspace-stays-closed",
+    "milestone": 15,
+    "title": "A new Cellix opens a folder by itself only when it was an open workspace or has something running; one with only a stopped session stays closed and is offered to resume",
+    "test": "only_an_open_workspace_or_running_work_opens_again_by_itself",
+    "passes": true
   }
 ]

@@ -35,6 +35,15 @@ fn attach(held: &Held) -> (Receiver<Vec<u8>>, Receiver<()>) {
     (seen, over)
 }
 
+/// Waits until the host's socket answers, so it's running what it was given.
+fn wait_running(folder: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while hold::left_running(folder).is_empty() {
+        assert!(Instant::now() < deadline, "the host never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn read_until(seen: &Receiver<Vec<u8>>, wanted: &str) -> String {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut text = String::new();
@@ -342,4 +351,90 @@ fn the_host_names_the_program_in_front_of_a_shell() {
     let again = Held::connect(&held.socket).unwrap();
     let _kept = attach(&again);
     until("sleep", &again);
+}
+
+/// A session stopped on purpose, as closing its workspace or quitting stops it, with nobody left
+/// to hear it end. Its host waited to tell a viewer the program had exited, and none came: it
+/// kept its socket, the next Cellix counted it as still running, and the workspace closed from
+/// its tile opened again (the user's report of 25 Nov). Asked to stop, the host lets go once the
+/// program ends, and leaves nothing to resume.
+#[test]
+fn a_program_stopped_with_nobody_left_to_hear_it_leaves_nothing_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("held");
+    let held = start(&folder, &job("Shell", "echo up; sleep 60", dir.path()));
+    // Nobody listening, as when Cellix quits: it asks for the stop and is gone a moment
+    // later. A viewer still attached would hear the program end and let the host go anyway.
+    wait_running(&folder);
+    held.kill();
+    drop(held);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while std::fs::read_dir(&folder)
+        .unwrap()
+        .flatten()
+        .any(|e| e.path().is_file())
+    {
+        assert!(
+            Instant::now() < deadline,
+            "the host should have let go: {:?}",
+            std::fs::read_dir(&folder)
+                .unwrap()
+                .flatten()
+                .map(|e| e.file_name())
+                .collect::<Vec<_>>()
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(hold::left_running(&folder).is_empty());
+    assert!(hold::stopped(&folder).is_empty());
+}
+
+/// A program that doesn't end on a hang-up is still ended when it's stopped on purpose.
+#[test]
+fn a_program_that_ignores_the_hang_up_is_still_stopped() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("held");
+    let script = "trap '' HUP; echo up; while :; do sleep 1; done";
+    let held = start(&folder, &job("Stubborn", script, dir.path()));
+    wait_running(&folder);
+    // Long enough for the shell to have set its trap.
+    std::thread::sleep(Duration::from_millis(300));
+    held.kill();
+    drop(held);
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while std::fs::read_dir(&folder)
+        .unwrap()
+        .flatten()
+        .any(|e| e.path().is_file())
+    {
+        assert!(Instant::now() < deadline, "the host should have ended it");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(hold::left_running(&folder).is_empty());
+}
+
+/// A new Cellix opens a folder that was an open workspace or has something running in it, and
+/// leaves one where something only stopped: that is offered to resume, not opened. A workspace
+/// closed from its tile with a session that had stopped in it came back every time.
+#[test]
+fn only_an_open_workspace_or_running_work_opens_again_by_itself() {
+    let named = |items: &[&str]| items.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    let open = hold::Activity {
+        open: true,
+        ..Default::default()
+    };
+    let running = hold::Activity {
+        running: named(&["Claude Code"]),
+        ..Default::default()
+    };
+    let stopped = hold::Activity {
+        stopped: named(&["Terminal"]),
+        ..Default::default()
+    };
+    assert!(open.reopens() && running.reopens());
+    assert!(
+        !stopped.reopens(),
+        "a folder closed on purpose stays closed"
+    );
+    assert!(!stopped.is_empty(), "and is still offered to resume");
 }

@@ -311,11 +311,12 @@ impl Workspaces {
         self.list.len() - 1
     }
 
-    /// Opens each folder with work running on this machine that no other Cellix has open,
-    /// behind the ones already here.
+    /// Opens each folder that was an open workspace or has work running on this machine and
+    /// that no other Cellix has open, behind the ones already here. One with only something
+    /// stopped in it stays closed, as it was left.
     pub fn open_running(&mut self) {
-        for (root, _) in crate::hold::projects_with_activity() {
-            if !open_elsewhere(&root) {
+        for (root, activity) in crate::hold::projects_with_activity() {
+            if activity.reopens() && !open_elsewhere(&root) {
                 self.open(root);
             }
         }

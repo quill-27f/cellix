@@ -244,6 +244,14 @@ impl Activity {
     pub fn is_empty(&self) -> bool {
         self.running.is_empty() && self.stopped.is_empty() && !self.open
     }
+
+    /// Whether a new Cellix opens the folder on its own: it was an open workspace, or
+    /// something is running in it. What only stopped there is offered (the folder picker,
+    /// `cellix ls`), not opened: a workspace closed from its tile with a session that had
+    /// stopped in it came back every time Cellix started.
+    pub fn reopens(&self) -> bool {
+        self.open || !self.running.is_empty()
+    }
 }
 
 /// What's running, or waiting to be resumed, for a project.

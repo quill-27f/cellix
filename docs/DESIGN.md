@@ -2768,9 +2768,14 @@ A bar on the bottom row, shown even with one folder so opening another is always
 the terminal's own colour like the status bar, so the window padding shows no seam. It has a tile
 per folder that says what its agent is doing, a labelled New Workspace button to open
 a folder, Resume for everything that stopped, and the machine's name. Each folder's sessions folder
-names its project, so a new Cellix opens every folder on the machine with something running or
-stopped that no other Cellix has open, and Cellix started at home with nothing named offers them
-first. That first screen can be left as any other: Quit beside Open, the button at the end of its foot, or the key
+names its project, so a new Cellix opens every folder on the machine with something running in
+it, or marked open (below), that no other Cellix has open, and Cellix started at home with nothing
+named offers them first. A folder where something only stopped (the machine restarted under it) is
+offered to resume, in the folder picker and `cellix ls`, but not opened by itself: until 0.15.1 it
+was, so a workspace closed from its tile came back at every start. A session stopped on purpose,
+as Quit or closing a tile stops it, leaves nothing: its host lets go once the program ends, with
+nobody left to tell, and ends one that ignores the hang-up three seconds later. It used to wait
+for a viewer to hear that the program had exited, and the next Cellix took it for one running. That first screen can be left as any other: Quit beside Open, the button at the end of its foot, or the key
 that quits, and every folder stays as it is for next time, with nothing asked. Every folder is marked `open` there too from when it's opened as a workspace, so it comes
 back with nothing running in it, as an editor brings back its windows, however the Cellix that
 had it ended; closing its tile lets it go. Until 0.10.1 the mark was made as Cellix quit or

@@ -158,21 +158,8 @@ impl Screen {
         if !env.iter().any(|(name, _)| *name == "SHELL") {
             command.env("SHELL", "/bin/sh");
         }
-        // Never the real cache: what one Cellix leaves there, such as the workspaces it had
-        // open, would reach every other test's Cellix and the person's own. One cache per
-        // project, so a Cellix started again in it finds what the last one left. Short, since a
-        // socket's path has to fit in about a hundred bytes.
         if !env.iter().any(|(name, _)| *name == "XDG_CACHE_HOME") {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            dir.hash(&mut hasher);
-            // Under the run's own cache when harness/x gave it one, so what's left there goes
-            // when the run ends.
-            let base = std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| "/tmp".to_string());
-            command.env(
-                "XDG_CACHE_HOME",
-                format!("{base}/cxt-{:x}", hasher.finish()),
-            );
+            command.env("XDG_CACHE_HOME", test_cache(dir));
         }
         let child = pty.slave.spawn_command(command).unwrap();
         let reader = pty.master.try_clone_reader().unwrap();
@@ -571,6 +558,21 @@ fn a_links_copy_reaches_the_terminals_clipboard() {
     screen.wait_exit();
 }
 
+/// A test's Cellix keeps its sessions here, never in the real cache: what one leaves there, such
+/// as the workspaces it had open, would reach every other test's Cellix and the person's own.
+/// Three tests that built their command by hand took the person's, and every run left their
+/// projects marked open in it. One cache per project, so a Cellix started again in it finds what
+/// the last one left. Short, since a socket's path has to fit in about a hundred bytes.
+fn test_cache(dir: &Path) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    dir.hash(&mut hasher);
+    // Under the run's own cache when harness/x gave it one, so what's left there goes when the
+    // run ends.
+    let base = std::env::var("XDG_CACHE_HOME").unwrap_or_else(|_| "/tmp".to_string());
+    format!("{base}/cxt-{:x}", hasher.finish())
+}
+
 fn project() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("hello.txt"), "hello from a file\n").unwrap();
@@ -746,6 +748,7 @@ fn expect_tiles(pixels: (u16, u16), reply: &[u8], tile_marker: &[u8]) {
         .unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
     command.env("SHELL", "/bin/sh");
+    command.env("XDG_CACHE_HOME", test_cache(dir.path()));
     command.cwd(dir.path());
     command.arg("hello.txt");
     let mut child = pty.slave.spawn_command(command).unwrap();
@@ -827,6 +830,7 @@ fn pty_a_press_in_pixels_lands_on_its_line_after_a_resize() {
     let pty = native_pty_system().openpty(size(30)).unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
     command.env("SHELL", "/bin/sh");
+    command.env("XDG_CACHE_HOME", test_cache(dir.path()));
     command.cwd(dir.path());
     command.arg("lines.txt");
     let mut child = pty.slave.spawn_command(command).unwrap();
@@ -943,6 +947,7 @@ fn pty_follows_a_resize() {
         .unwrap();
     let mut command = CommandBuilder::new(env!("CARGO_BIN_EXE_cellix"));
     command.env("SHELL", "/bin/sh");
+    command.env("XDG_CACHE_HOME", test_cache(dir.path()));
     command.cwd(dir.path());
     let mut child = pty.slave.spawn_command(command).unwrap();
     let reader = pty.master.try_clone_reader().unwrap();

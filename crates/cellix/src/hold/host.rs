@@ -341,6 +341,11 @@ struct Shared {
     clock: Clock,
     /// Whether the program asked to hear of focus, which a viewer joining is told again.
     focus: Focus,
+    /// Whether a viewer asked for it to stop, as closing a workspace or quitting does. Then
+    /// its end was wanted and nobody has to hear of it: the one who asked has already gone,
+    /// and a host that waited for a viewer kept its socket for ever, so the next Cellix took
+    /// the folder for one with something running and opened it again.
+    stopping: bool,
 }
 
 /// Follows whether the program has asked to hear of focus (focus reporting, DECSET 1004)
@@ -615,12 +620,25 @@ fn serve_client(
                 }
             }
             KILL => {
+                if let Ok(mut shared) = shared.lock() {
+                    shared.stopping = true;
+                }
                 if let Some(pid) = pid {
                     // SAFETY: only signals the process this host started, and its group.
                     unsafe {
                         libc::kill(-(pid as i32), libc::SIGHUP);
                         libc::kill(pid as i32, libc::SIGHUP);
                     }
+                    // One that doesn't end on a hang-up, a shell that traps it or a program
+                    // that ignores it, is ended all the same a moment later.
+                    std::thread::spawn(move || {
+                        std::thread::sleep(STOP_GRACE);
+                        // SAFETY: as above; a group that has already gone is no one's.
+                        unsafe {
+                            libc::kill(-(pid as i32), libc::SIGKILL);
+                            libc::kill(pid as i32, libc::SIGKILL);
+                        }
+                    });
                 }
             }
             _ => {}
@@ -727,9 +745,10 @@ pub fn serve(socket: &Path) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(100));
         if let Ok(mut shared) = ended.lock() {
             shared.exited = true;
-            // Only someone who really heard it lets the host go. Otherwise it waits to say so.
+            // Only someone who really heard it lets the host go, or the one who asked for it
+            // to stop. Otherwise it waits to say so.
             shared.tell(EXITED, &[]);
-            if shared.heard() {
+            if shared.stopping || shared.heard() {
                 finish(&place);
             }
         }
@@ -779,6 +798,9 @@ pub fn serve(socket: &Path) -> io::Result<()> {
     }
     Ok(())
 }
+
+/// How long a program asked to stop has to end on its hang-up before it's killed.
+const STOP_GRACE: Duration = Duration::from_secs(3);
 
 /// The program is over and someone knows: nothing is left to hold.
 fn finish(socket: &Path) -> ! {

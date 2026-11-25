@@ -8,6 +8,10 @@ use std::time::{Duration, Instant};
 
 struct Tmux {
     socket: String,
+    /// The server's own cache, where Cellix keeps its sessions and marks its open
+    /// workspaces. It took the person's: every run left its temporary project there, marked
+    /// open, for their next Cellix to look at.
+    cache: tempfile::TempDir,
 }
 
 impl Tmux {
@@ -19,6 +23,7 @@ impl Tmux {
     fn start_with(dir: &Path, name: &str, options: &[&[&str]]) -> Self {
         let tmux = Self {
             socket: format!("cellix-test-{}-{name}", std::process::id()),
+            cache: tempfile::tempdir().unwrap(),
         };
         let cellix = env!("CARGO_BIN_EXE_cellix");
         let mut args = vec!["start-server"];
@@ -54,6 +59,7 @@ impl Tmux {
             // A server's panes run its `SHELL`: never the person's own, with their startup
             // files, and Cellix's Terminal inside takes it from there too.
             .env("SHELL", "/bin/sh")
+            .env("XDG_CACHE_HOME", self.cache.path())
             .args(args)
             .output()
             .expect("tmux must be installed");
