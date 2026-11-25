@@ -7831,5 +7831,12 @@
     "title": "The Default agent row offers the person's runners after the built-ins, and a press keeps the runner's name as ask_agent",
     "test": "the_default_agent_row_offers_a_runner_and_keeps_its_name",
     "passes": true
+  },
+  {
+    "id": "your-agents-card",
+    "milestone": 15,
+    "title": "Settings' Your agents card lists the person's runners with Edit and Remove, offers runners found on the PATH with Add as their agent (names and the executable bit only, nothing added by itself), and Add Agent opens a form that keeps them in the agents setting",
+    "test": "the_your_agents_card_lists_adds_edits_and_removes_runners",
+    "passes": true
   }
 ]

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::install::{Release, Way};
 
@@ -93,7 +93,7 @@ pub struct Settings {
 /// agent, and `like` says which of Cellix's agents it works like, so it gets that one's
 /// marks, flags and treatment. The command is a name on the PATH or a path; Cellix never
 /// reads the runner itself, only runs it.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct CustomAgent {
     pub name: String,

@@ -1385,3 +1385,110 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         assert!(agents_in(OUTPUT, Path::new("/work/proj")).is_empty());
     }
 }
+
+/// Runners found on `path` that nothing has added: executables named like an agent's
+/// command (`claude-*`, `codex-*` and the rest), never the agents' own programs or ones
+/// already added. Only each name and its executable bit are read, never a runner's
+/// contents. Each comes with the agent its name's prefix says it wraps.
+pub fn found_runners(
+    path: &std::ffi::OsString,
+    added: &[crate::settings::CustomAgent],
+) -> Vec<(String, &'static str)> {
+    let prefixes: [(&str, &'static str); 6] = [
+        ("claude-", "claude"),
+        ("codex-", "codex"),
+        ("gemini-", "gemini"),
+        ("opencode-", "opencode"),
+        ("copilot-", "copilot"),
+        ("kiro-cli-", "kiro-cli"),
+    ];
+    let taken = |name: &str| {
+        AGENTS.iter().any(|(_, program)| *program == name)
+            || added.iter().any(|agent| agent.command == name)
+    };
+    let executable = |entry: &std::fs::DirEntry| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            entry
+                .metadata()
+                .is_ok_and(|m| m.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(not(unix))]
+        {
+            entry.metadata().map_or(false, |m| m.is_file())
+        }
+    };
+    let mut found = Vec::new();
+    for dir in std::env::split_paths(path) {
+        let Ok(read) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in read.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some((_, like)) = prefixes.iter().find(|(prefix, _)| name.starts_with(prefix))
+            else {
+                continue;
+            };
+            if taken(&name) || !executable(&entry) {
+                continue;
+            }
+            found.push((name, *like));
+        }
+    }
+    found.sort();
+    found.dedup();
+    found
+}
+
+#[cfg(test)]
+mod found_tests {
+    use super::*;
+    use std::fs;
+
+    /// The scan reads only names and the executable bit: executables named like an agent's
+    /// command, never the agents' own programs or ones already added, never a file's
+    /// contents.
+    #[test]
+    fn the_found_runners_are_names_that_run_and_nothing_adds_itself() {
+        let dir = tempfile::tempdir().unwrap();
+        let bin = dir.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        for name in ["claude-ds", "codex-fast", "gemini-2", "claude-zz"] {
+            fs::write(bin.join(name), "#!/bin/sh\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        // A runner's file that can't run, and one already added: neither is offered.
+        fs::write(bin.join("opencode-frozen"), "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(
+                bin.join("opencode-frozen"),
+                fs::Permissions::from_mode(0o644),
+            )
+            .unwrap();
+        }
+        let added = vec![crate::settings::CustomAgent {
+            name: "Mine".to_string(),
+            command: "gemini-2".to_string(),
+            like: "gemini".to_string(),
+        }];
+        let path = std::ffi::OsString::from(bin.to_string_lossy().into_owned());
+        let mut found = found_runners(&path, &added);
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                ("claude-ds".to_string(), "claude"),
+                ("claude-zz".to_string(), "claude"),
+                ("codex-fast".to_string(), "codex"),
+            ],
+        );
+        // The scan never reads what a runner is: nothing of the stand-ins' contents.
+    }
+}

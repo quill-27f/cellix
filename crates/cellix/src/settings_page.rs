@@ -229,6 +229,14 @@ pub enum Control {
     DefaultAgent(&'static str),
     /// One of the person's own runners, by its place in `Values::custom_agents`.
     DefaultCustom(usize),
+    /// Edit the runner at this place in the Your agents card.
+    EditAgent(usize),
+    /// Remove the runner at this place, after asking.
+    RemoveAgent(usize),
+    /// Add the found runner at this place, as the agent its name's prefix says.
+    AddFound(usize),
+    /// The form to add a runner of the person's own.
+    AddAgent,
 }
 
 /// The settings as they stand, passed in so the page holds no second copy.
@@ -502,6 +510,20 @@ impl Found {
     }
 }
 
+/// One row of the Your agents card on Integrations.
+pub struct AgentRow {
+    pub name: String,
+    /// The short state in its badge.
+    pub badge: String,
+    /// The line under the name: its command, or what it wraps.
+    pub detail: String,
+    pub tone: Tone,
+    /// What its main button says and does.
+    pub main: (String, Control),
+    /// A second, quiet button beside it, where there's one.
+    pub quiet: Option<(String, Control)>,
+}
+
 /// One card on the Integrations page.
 struct Block {
     name: &'static str,
@@ -514,7 +536,7 @@ struct Block {
 }
 
 #[derive(Clone, Copy)]
-enum Tone {
+pub enum Tone {
     Good,
     Quiet,
 }
@@ -524,6 +546,12 @@ pub struct SettingsPage {
     /// The person's own runners that work, by name: the Default agent row offers each after
     /// the built-ins, and the app keeps this in step with what it starts.
     pub custom_agents: Vec<String>,
+    /// The person's own runners, for the Your agents card, as `agents` keeps them.
+    pub agents: Vec<crate::settings::CustomAgent>,
+    /// Runners found on the PATH that nothing has added, each with the agent it wraps.
+    pub runners: Vec<(String, &'static str)>,
+    /// The runners whose command isn't there, by name: the card says so.
+    pub missing: Vec<String>,
     pub section: Section,
     /// The control the keyboard is on, as an index into `controls`.
     pub focus: Option<usize>,
@@ -566,6 +594,9 @@ impl SettingsPage {
     pub fn new(found: Found) -> Self {
         Self {
             custom_agents: Vec::new(),
+            agents: Vec::new(),
+            runners: Vec::new(),
+            missing: Vec::new(),
             section: Section::Appearance,
             focus: None,
             found,
@@ -790,9 +821,61 @@ impl SettingsPage {
     }
 
     /// The rows Integrations takes: its heading and Default agent, a card every `BLOCK_STEP`
-    /// rows, and the row under them that says what a press did.
+    /// rows, the Your agents card's rows, and the row under them that says what a press did.
     fn integration_rows(&self) -> u16 {
-        BLOCKS_ROW + self.blocks().len() as u16 * BLOCK_STEP + 1
+        BLOCKS_ROW + self.blocks().len() as u16 * BLOCK_STEP + self.agent_rows_len() + 1
+    }
+
+    /// Where the Your agents card starts, after the agents' cards.
+    fn agents_card_row(&self) -> u16 {
+        BLOCKS_ROW + self.blocks().len() as u16 * BLOCK_STEP
+    }
+
+    /// How many rows the Your agents card takes: one per runner and one per found runner,
+    /// and a row for Add Agent.
+    fn agent_rows_len(&self) -> u16 {
+        (self.agents.len() + self.runners.len() + 1) as u16 * BLOCK_STEP
+    }
+
+    /// The card's rows: the person's own runners, each with Edit and Remove; runners found
+    /// on the PATH, each with Add; and Add Agent at the foot.
+    fn agent_rows(&self) -> Vec<AgentRow> {
+        let mut rows = Vec::new();
+        for (index, agent) in self.agents.iter().enumerate() {
+            let known = crate::agents::AGENTS.iter().any(|(_, p)| *p == agent.like);
+            let there = !self.missing.contains(&agent.command);
+            let (tone, badge) = if !known {
+                (
+                    Tone::Quiet,
+                    format!("isn't an agent Cellix knows: {}", agent.like),
+                )
+            } else if !there {
+                (Tone::Quiet, "command not on the PATH".to_string())
+            } else {
+                let like = crate::agents::display_name(&agent.like);
+                (Tone::Good, format!("works like {like}"))
+            };
+            rows.push(AgentRow {
+                name: agent.name.clone(),
+                badge,
+                detail: agent.command.clone(),
+                tone,
+                main: ("Edit".to_string(), Control::EditAgent(index)),
+                quiet: Some(("Remove".to_string(), Control::RemoveAgent(index))),
+            });
+        }
+        for (index, (command, like)) in self.runners.iter().enumerate() {
+            let name = crate::agents::display_name(like);
+            rows.push(AgentRow {
+                name: command.clone(),
+                badge: "found on the PATH".to_string(),
+                detail: format!("wraps {name}"),
+                tone: Tone::Quiet,
+                main: (format!("Add as {name}"), Control::AddFound(index)),
+                quiet: None,
+            });
+        }
+        rows
     }
 
     /// Where a card on Integrations starts, down the page.
@@ -1100,6 +1183,22 @@ impl SettingsPage {
                         spots.push((place(y, x, (BUTTON_WIDTH, 2)), control));
                     }
                 }
+                let card = self.agents_card_row();
+                for (index, row) in self.agent_rows().iter().enumerate() {
+                    let y = self.integration_row(page, card + index as u16 * BLOCK_STEP, 3);
+                    let main_wide = BUTTON_WIDTH.max(row.main.0.chars().count() as u16 + 2);
+                    let x = page.right().saturating_sub(main_wide + 2);
+                    spots.push((place(y, x, (main_wide, 2)), row.main.1));
+                    if let Some((label, control)) = &row.quiet {
+                        let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
+                        let x = x.saturating_sub(wide + 1);
+                        spots.push((place(y, x, (wide, 2)), *control));
+                    }
+                }
+                let y = self.integration_row(page, card + self.agent_rows_len() - BLOCK_STEP, 1);
+                let wide = BUTTON_WIDTH.max("Add Agent".chars().count() as u16 + 2);
+                let x = page.right().saturating_sub(wide + 2);
+                spots.push((place(y, x, (wide, 1)), Control::AddAgent));
             }
             Section::Keyboard => {
                 let start = page.right().saturating_sub(SEGMENT_WIDTH * 3);
@@ -2367,7 +2466,43 @@ impl SettingsPage {
                 }
             }
         }
-        let below = Self::block_row(blocks.len());
+        // The Your agents card: each of the person's runners with Edit and Remove, each
+        // found on the PATH with Add, and Add Agent at the foot.
+        let card = self.agents_card_row();
+        for (index, row) in self.agent_rows().iter().enumerate() {
+            let Some(top) = self.integration_row(page, card + index as u16 * BLOCK_STEP, 3) else {
+                continue;
+            };
+            let color = match row.tone {
+                Tone::Good => theme.git_added,
+                Tone::Quiet => theme.gutter.fg,
+            };
+            draw_block(
+                grid,
+                page,
+                (top, measure),
+                (&row.name, &row.badge, color),
+                &row.detail,
+                theme,
+            );
+            let buttons = self.controls_at(page);
+            if let Some((rect, _)) = buttons.iter().find(|(_, c)| *c == row.main.1) {
+                draw_button(grid, *rect, &row.main.0, false, (hover, measure), theme);
+            }
+            if let Some((label, control)) = &row.quiet
+                && let Some((rect, _)) = buttons.iter().find(|(_, c)| c == control)
+            {
+                draw_button(grid, *rect, label, false, (hover, measure), theme);
+            }
+        }
+        let add_row = card + self.agent_rows_len() - BLOCK_STEP;
+        if let Some(_y) = self.integration_row(page, add_row, 1) {
+            let buttons = self.controls_at(page);
+            if let Some((rect, _)) = buttons.iter().find(|(_, c)| *c == Control::AddAgent) {
+                draw_button(grid, *rect, "Add Agent", false, (hover, measure), theme);
+            }
+        }
+        let below = card + self.agent_rows_len();
         if let Some(y) = self
             .integration_row(page, below, 1)
             .filter(|_| !self.note.is_empty())
@@ -2386,7 +2521,7 @@ impl SettingsPage {
     fn controls_at(&self, page: Rect) -> Vec<(Rect, Control)> {
         let blocks = self.blocks();
         let placed = blocks.iter().enumerate();
-        placed
+        let mut out: Vec<(Rect, Control)> = placed
             .filter_map(|(index, block)| {
                 let (label, _, control) = block.action?;
                 let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
@@ -2394,7 +2529,27 @@ impl SettingsPage {
                 let y = self.integration_row(page, Self::block_row(index), 3)?;
                 Some((Rect::new(x, y, wide, 2), control))
             })
-            .collect()
+            .collect();
+        let card = self.agents_card_row();
+        for (index, row) in self.agent_rows().iter().enumerate() {
+            let Some(y) = self.integration_row(page, card + index as u16 * BLOCK_STEP, 3) else {
+                continue;
+            };
+            let main_wide = BUTTON_WIDTH.max(row.main.0.chars().count() as u16 + 2);
+            let x = page.right().saturating_sub(main_wide + 2);
+            out.push((Rect::new(x, y, main_wide, 2), row.main.1));
+            if let Some((label, control)) = &row.quiet {
+                let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
+                let x = x.saturating_sub(wide + 1);
+                out.push((Rect::new(x, y, wide, 2), *control));
+            }
+        }
+        if let Some(y) = self.integration_row(page, card + self.agent_rows_len() - BLOCK_STEP, 1) {
+            let wide = BUTTON_WIDTH.max("Add Agent".chars().count() as u16 + 2);
+            let x = page.right().saturating_sub(wide + 2);
+            out.push((Rect::new(x, y, wide, 1), Control::AddAgent));
+        }
+        out
     }
 }
 fn heading(grid: &mut Grid, page: Rect, title: &str, note: &str, theme: &Theme) {

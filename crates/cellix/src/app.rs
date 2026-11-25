@@ -703,6 +703,21 @@ enum Overlay {
     Emoji(crate::emoji::Picker),
     /// A branch's name and the agent to start in it, for a worktree beside the project.
     NewWorktree(NewWorktree),
+    /// A runner of the person's own: its name, command and the agent it works like.
+    AgentForm(AgentForm),
+}
+
+/// The Add Agent form, which also edits: a runner's name, its command, and the agent it
+/// works like, picked among `AGENTS`. `editing` says which of `settings.agents` it edits.
+#[derive(Default)]
+pub struct AgentForm {
+    pub name: TextBox,
+    pub command: TextBox,
+    /// Whether the keyboard is on the command's field rather than the name's.
+    pub cycle: bool,
+    pub like: usize,
+    pub editing: Option<usize>,
+    pub error: Option<String>,
 }
 
 /// What's left to do after a choice about unsaved changes.
@@ -743,6 +758,8 @@ enum Choice {
     DeleteComment(u32),
     /// Post All Drafts, the person having said Post.
     PostAll,
+    /// Take a runner out of the `agents` setting, the person having said Remove.
+    RemoveAgent(usize),
     /// Removes a reply: its comment, and its place among the replies.
     DeleteReply(u32, usize),
     /// Write the review over the file there.
@@ -5250,6 +5267,12 @@ impl App {
                 self.new_worktree_paste(text);
                 return;
             }
+            Overlay::AgentForm(_) => {
+                if let Some(field) = self.focused_box_mut() {
+                    field.insert(text.lines().next().unwrap_or_default());
+                }
+                return;
+            }
             Overlay::Prompt(prompt) => {
                 prompt.input.insert(text);
                 return;
@@ -5654,6 +5677,13 @@ impl App {
             Overlay::Prompt(prompt) => return Some(&prompt.input),
             Overlay::Find(find) => return Some(find.field()),
             Overlay::NewWorktree(form) => return Some(&form.branch),
+            Overlay::AgentForm(form) => {
+                return Some(if form.cycle {
+                    &form.command
+                } else {
+                    &form.name
+                });
+            }
             Overlay::Emoji(picker) => return Some(&picker.query),
             Overlay::None => {}
             _ => return None,
@@ -5697,6 +5727,11 @@ impl App {
                 Overlay::Prompt(prompt) => Some(&mut prompt.input),
                 Overlay::Find(find) => Some(find.field_mut()),
                 Overlay::NewWorktree(form) => Some(&mut form.branch),
+                Overlay::AgentForm(form) => Some(if form.cycle {
+                    &mut form.command
+                } else {
+                    &mut form.name
+                }),
                 Overlay::Emoji(picker) => Some(&mut picker.query),
                 _ => None,
             };
@@ -7812,6 +7847,24 @@ impl App {
                 }
             }
             Choice::PostAll => self.start_bulk(checks::BulkJob::Post),
+            Choice::RemoveAgent(index) => {
+                if index < self.settings.agents.len() {
+                    let removed = self.settings.agents.remove(index);
+                    self.settings
+                        .disabled_agents
+                        .retain(|name| *name != removed.name);
+                    let _ = crate::settings::Settings::store(
+                        "agents",
+                        serde_json::to_value(&self.settings.agents).unwrap_or_default(),
+                    );
+                    let _ = crate::settings::Settings::store(
+                        "disabled_agents",
+                        serde_json::to_value(&self.settings.disabled_agents).unwrap_or_default(),
+                    );
+                    self.refresh_settings_agents();
+                    self.say(format!("{} removed from your agents", removed.name));
+                }
+            }
             Choice::DeleteComment(id) => {
                 if let Some(at) = self.threads.iter().position(|t| t.id == id) {
                     let thread = self.threads.remove(at);
@@ -8061,6 +8114,7 @@ impl App {
             Overlay::Find(find) => self.find_key(find, key),
             Overlay::Confirm(confirm) => self.confirm_key(confirm, key),
             Overlay::NewWorktree(form) => self.new_worktree_key(form, key),
+            Overlay::AgentForm(form) => self.agent_form_key(form, key),
             Overlay::TablePicker(mut picker) => match key.key {
                 Key::Esc => {}
                 Key::Enter => self.insert_table(picker.size),
@@ -9945,16 +9999,9 @@ impl App {
                 }
                 self.settings_page =
                     (!closing).then(|| SettingsPage::new(Found::look(&self.machine)));
-                // The Default agent row's own runners, kept in step with what's offered.
-                if let Some(page) = self.settings_page.as_mut() {
-                    page.custom_agents = self
-                        .agents
-                        .installed_agents()
-                        .iter()
-                        .filter(|o| o.custom)
-                        .map(|o| o.name.clone())
-                        .collect();
-                }
+                // The Default agent row's and the Your agents card's runners, kept in step
+                // with what's offered and what's on the PATH.
+                self.refresh_settings_agents();
                 self.refresh_shortcuts();
                 if !closing {
                     self.review = None;
@@ -17302,6 +17349,7 @@ impl App {
                 }
             }
             Overlay::NewWorktree(form) => self.new_worktree_click(form, mouse.at()),
+            Overlay::AgentForm(form) => self.agent_form_click(form, mouse.at()),
             // A press in its box puts the caret at the letter pressed, as in any text box.
             Overlay::Prompt(mut prompt) => {
                 let (_, line) = self.prompt_area();
@@ -18184,6 +18232,32 @@ impl App {
                     note = store("ask_agent", name.into());
                 }
             }
+            // The Your agents card: Edit opens the form filled, Remove asks first, Add Found
+            // adds the runner as the agent its name's prefix says, and Add Agent opens the
+            // form empty.
+            Control::EditAgent(index) => self.open_agent_form(Some(index)),
+            Control::RemoveAgent(index) => self.ask_remove_agent(index),
+            Control::AddFound(index) => {
+                if let Some((command, like)) = self
+                    .settings_page
+                    .as_ref()
+                    .and_then(|page| page.runners.get(index))
+                    .cloned()
+                {
+                    let agent = crate::settings::CustomAgent {
+                        name: command.clone(),
+                        command,
+                        like: like.to_string(),
+                    };
+                    self.settings.agents.push(agent);
+                    note = store(
+                        "agents",
+                        serde_json::to_value(&self.settings.agents).unwrap_or_default(),
+                    );
+                    self.refresh_settings_agents();
+                }
+            }
+            Control::AddAgent => self.open_agent_form(None),
             Control::Keymap(name) => {
                 (self.vim, self.neovim) = keymap_engines(Some(name));
                 if name == "neovim" && self.neovim.is_none() {
@@ -19978,6 +20052,7 @@ impl App {
             // menu's colour as any other.
             Overlay::Emoji(picker) => picker.draw(grid, self.hover, &*self.measure, theme),
             Overlay::NewWorktree(form) => self.draw_new_worktree(grid, form),
+            Overlay::AgentForm(form) => self.draw_agent_form(grid, form),
             Overlay::None => {}
         }
     }
@@ -22929,6 +23004,344 @@ mod view_tests;
 #[cfg(test)]
 mod waits_tests;
 
+impl App {
+    /// Opens the form to add a runner, or to edit the one at `editing`, filled with what it
+    /// is.
+    pub(super) fn open_agent_form(&mut self, editing: Option<usize>) {
+        let mut form = AgentForm::default();
+        if let Some(index) = editing
+            && let Some(agent) = self.settings.agents.get(index)
+        {
+            form.name = TextBox::new(&agent.name);
+            form.command = TextBox::new(&agent.command);
+            form.like = crate::agents::AGENTS
+                .iter()
+                .position(|(_, program)| *program == agent.like)
+                .unwrap_or(0);
+            form.editing = Some(index);
+        }
+        self.overlay = Overlay::AgentForm(form);
+    }
+
+    /// The Add Agent dialog's place on screen.
+    fn agent_form_area(&self, form: &AgentForm) -> Rect {
+        let screen = Rect::new(0, 0, self.size.0, self.size.1);
+        let width = 56.min(screen.w);
+        let height = self.agent_form_button_row(form) + self.dialog_foot();
+        let y = (screen.h / 4).min(screen.h.saturating_sub(height));
+        Rect::new(screen.x + (screen.w - width) / 2, y, width, height)
+    }
+
+    /// The dialog's buttons' row, from its top: a title, two labelled fields, the works-like
+    /// row, then the buttons, as a card's are, a row lower where what went wrong is said.
+    fn agent_form_button_row(&self, form: &AgentForm) -> u16 {
+        let error = u16::from(form.error.is_some());
+        9 + error + self.card_gap()
+    }
+
+    /// Where each of the two fields stands, as its line and the field itself, shown as a box
+    /// like any other.
+    fn agent_form_field<'a>(&self, form: &'a AgentForm, which: u8) -> (Rect, Input<'a>) {
+        let area = self.agent_form_area(form);
+        let y = area.y + 3 + 2 * u16::from(which);
+        let line = Rect::new(area.x + 2, y, area.w.saturating_sub(4), 1);
+        let (field, hint) = if which == 0 {
+            (&form.name, "Name")
+        } else {
+            (&form.command, "Command")
+        };
+        let input = Input::of(field, hint, form.cycle == (which == 1), self.theme.popup);
+        (line, input)
+    }
+
+    /// The works-like segments: each of `AGENTS`, two rows, each as wide as its words.
+    fn agent_form_segments(&self, form: &AgentForm) -> Vec<(Rect, &'static str)> {
+        let area = self.agent_form_area(form);
+        let left = area.x + 2;
+        let y = area.y + 7;
+        let mut out = Vec::new();
+        let mut x = left;
+        let mut row = 0u16;
+        for (_, program) in crate::agents::AGENTS.iter() {
+            let wide = program.chars().count() as u16 + 2;
+            if x + wide > area.right().saturating_sub(2) {
+                x = left;
+                row += 1;
+            }
+            out.push((Rect::new(x, y + row, wide, 1), *program));
+            x += wide;
+        }
+        out
+    }
+
+    /// The form's Add (or Save), and Cancel, as (cells, x) from the dialog's right edge.
+    fn agent_form_buttons(&self, form: &AgentForm) -> Vec<(String, u16)> {
+        let area = self.agent_form_area(form);
+        let mut x = area.right().saturating_sub(2);
+        let mut placed = Vec::new();
+        let labels: [&str; 2] = [
+            if form.editing.is_some() {
+                "Save"
+            } else {
+                "Add"
+            },
+            "Cancel",
+        ];
+        for label in labels.into_iter().rev() {
+            let cells = measures::button_cells(label, &*self.measure);
+            x = x.saturating_sub(cells.chars().count() as u16);
+            placed.push((cells, x));
+            x = x.saturating_sub(BUTTON_GAP);
+        }
+        placed.reverse();
+        placed
+    }
+
+    /// What Add (or Save) does: the runner kept in `agents`, machine-wide, and everything
+    /// that offers it brought up to date. What's wrong is said under the form, which stays.
+    fn add_agent_from_form(&mut self, mut form: AgentForm) {
+        let name = form.name.text().trim().to_string();
+        let command = form.command.text().trim().to_string();
+        let like = crate::agents::AGENTS[form.like].1.to_string();
+        let clashing = crate::agents::AGENTS
+            .iter()
+            .any(|(_, program)| *program == command);
+        let taken = self
+            .settings
+            .agents
+            .iter()
+            .enumerate()
+            .any(|(index, agent)| agent.command == command && Some(index) != form.editing);
+        let refused = if name.is_empty() {
+            Some("Name the runner".to_string())
+        } else if command.is_empty() {
+            Some("Say what command runs it".to_string())
+        } else if clashing {
+            Some(format!("{command} is one of Cellix's own agents"))
+        } else if taken {
+            Some(format!("{command} is already one of your agents"))
+        } else {
+            None
+        };
+        if let Some(error) = refused {
+            form.error = Some(error);
+            self.overlay = Overlay::AgentForm(form);
+            return;
+        }
+        let agent = crate::settings::CustomAgent {
+            name,
+            command,
+            like,
+        };
+        match form.editing {
+            Some(index) if self.settings.agents.get(index).is_some() => {
+                self.settings.agents[index] = agent;
+            }
+            _ => self.settings.agents.push(agent),
+        }
+        let _ = crate::settings::Settings::store(
+            "agents",
+            serde_json::to_value(&self.settings.agents).unwrap_or_default(),
+        );
+        self.refresh_settings_agents();
+        self.overlay = Overlay::None;
+        self.say("Your agents kept: Settings › Integrations lists them");
+    }
+
+    /// Removes the runner at `index`, after the person has said Remove.
+    fn ask_remove_agent(&mut self, index: usize) {
+        let Some(agent) = self.settings.agents.get(index) else {
+            return;
+        };
+        self.overlay = Overlay::Confirm(Confirm {
+            title: format!("Remove {}?", agent.name),
+            detail: "It isn't offered anywhere after this. What's already running of it \
+                      keeps its tab."
+                .to_string(),
+            buttons: vec![
+                ("Remove", Choice::RemoveAgent(index)),
+                ("Cancel", Choice::Cancel),
+            ],
+            selected: 1,
+        });
+    }
+
+    /// Brings the page's Your agents card and the Default agent row up to date with what
+    /// `agents` holds and what's on the PATH.
+    fn refresh_settings_agents(&mut self) {
+        self.refresh_agents();
+        let mut page = self.settings_page.take();
+        if let Some(page) = page.as_mut() {
+            page.custom_agents = self
+                .agents
+                .installed_agents()
+                .iter()
+                .filter(|o| o.custom)
+                .map(|o| o.name.clone())
+                .collect();
+            page.agents = self.settings.agents.clone();
+            page.runners = crate::agents::found_runners(&self.side_path(), &self.settings.agents);
+            page.missing = self
+                .settings
+                .agents
+                .iter()
+                .filter(|agent| {
+                    crate::ask::find(&agent.command, &self.side_path()).is_none()
+                        && !Path::new(&agent.command).is_file()
+                })
+                .map(|agent| agent.command.clone())
+                .collect();
+        }
+        self.settings_page = page;
+    }
+
+    /// What the Add Agent form's keys do: typing in its fields, Tab between them, Esc to
+    /// close, Enter to add or save.
+    fn agent_form_key(&mut self, mut form: AgentForm, key: KeyEvent) {
+        if key.key == Key::Esc {
+            self.overlay = Overlay::None;
+            return;
+        }
+        if key.key == Key::Enter && (key.mods.shift || key.mods.alt) {
+            // A newline doesn't belong in a one-line name; Enter adds as it is.
+            self.add_agent_from_form(form);
+            return;
+        }
+        if key.key == Key::Tab {
+            form.cycle = !form.cycle;
+            self.overlay = Overlay::AgentForm(form);
+            return;
+        }
+        if key.key == Key::Enter {
+            self.add_agent_from_form(form);
+            return;
+        }
+        let field = if form.cycle {
+            &mut form.command
+        } else {
+            &mut form.name
+        };
+        field.key(key);
+        self.overlay = Overlay::AgentForm(form);
+    }
+
+    /// What a press in the Add Agent form does: puts the caret in a field, picks the
+    /// works-like agent, or presses Add and Cancel.
+    fn agent_form_click(&mut self, mut form: AgentForm, at: (f32, f32)) {
+        let (x, fine) = at;
+        let y = (fine + 0.5) as u16;
+        let x = x as u16;
+        let area = self.agent_form_area(&form);
+        for which in 0..2u8 {
+            let (line, _) = self.agent_form_field(&form, which);
+            if line.contains(x, y) {
+                form.cycle = which == 1;
+                self.overlay = Overlay::AgentForm(form);
+                return;
+            }
+        }
+        for (rect, program) in self.agent_form_segments(&form) {
+            if rect.contains(x, y) {
+                form.like = crate::agents::AGENTS
+                    .iter()
+                    .position(|(_, p)| *p == program)
+                    .unwrap_or(form.like);
+                self.overlay = Overlay::AgentForm(form);
+                return;
+            }
+        }
+        let buttons = self.agent_form_buttons(&form);
+        let buttons_y = area.y + self.agent_form_button_row(&form);
+        for (index, (cells, bx)) in buttons.iter().enumerate() {
+            let width = cells.chars().count() as u16;
+            if y == buttons_y && x >= *bx && x < bx + width {
+                if index == 0 {
+                    self.add_agent_from_form(form);
+                } else {
+                    self.overlay = Overlay::None;
+                }
+                return;
+            }
+        }
+        self.overlay = Overlay::AgentForm(form);
+    }
+
+    /// Draws the Add Agent dialog: a title, the two fields, the works-like pick and the
+    /// buttons.
+    pub(super) fn draw_agent_form(&self, grid: &mut Grid, form: &AgentForm) {
+        let theme = &self.theme;
+        let area = self.agent_form_area(form);
+        popup(grid, area, theme);
+        let base = Style {
+            fg: theme.text.fg,
+            bg: theme.popup,
+            ..theme.bar
+        };
+        let strong = Style {
+            bold: true,
+            fg: theme.heading,
+            ..base
+        };
+        let dim = Style {
+            fg: theme.popup_dim,
+            ..base
+        };
+        let (left, right) = (area.x + 2, area.right().saturating_sub(2));
+        let title = if form.editing.is_some() {
+            "Edit Agent"
+        } else {
+            "Add Agent"
+        };
+        grid.label(left, area.y + 1, title, strong, right);
+        grid.label(left, area.y + 2, "Name", dim, right);
+        let (line, field) = self.agent_form_field(form, 0);
+        crate::palette::input(grid, line, &field, &*self.measure, theme);
+        grid.label(left, area.y + 4, "Command", dim, right);
+        let (line, field) = self.agent_form_field(form, 1);
+        crate::palette::input(grid, line, &field, &*self.measure, theme);
+        grid.label(left, area.y + 6, "Works like", dim, right);
+        for (rect, program) in self.agent_form_segments(form) {
+            let picked = crate::agents::AGENTS[form.like].1 == program;
+            let (on, _) = (picked, false);
+            let ground = Bounds::cells(rect.x as f32, rect.y as f32, rect.w as f32, 1.0);
+            let fill = if on { theme.pick } else { theme.popup };
+            grid.panel(ground, 12, Some(fill), None);
+            grid.button_words(
+                f32::from(rect.x) + f32::from(rect.w) / 2.0,
+                rect.y,
+                program,
+                theme.text.fg,
+            );
+        }
+        if let Some(error) = &form.error {
+            let style = Style {
+                fg: theme.error,
+                ..base
+            };
+            grid.label(left, area.y + 9, error, style, right);
+        }
+        let labels = if form.editing.is_some() {
+            ["Save", "Cancel"]
+        } else {
+            ["Add", "Cancel"]
+        };
+        let y = area.y + self.agent_form_button_row(form);
+        for (index, (cells, x)) in self.agent_form_buttons(form).iter().enumerate() {
+            let on = index == 0;
+            let fill = if on {
+                theme.button
+            } else {
+                theme.quiet_button(theme.popup)
+            };
+            let style = Style {
+                fg: if on { theme.button_text } else { theme.text.fg },
+                bg: fill,
+                ..base
+            };
+            grid.large_button(*x, y, cells, labels[index], fill, style);
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;

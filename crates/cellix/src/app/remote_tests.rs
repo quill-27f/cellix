@@ -1578,3 +1578,94 @@ fn the_default_agent_row_offers_a_runner_and_keeps_its_name() {
     click(&mut app, x + 1, y);
     assert_eq!(app.settings.ask_agent.as_deref(), Some("Claude (DeepSeek)"));
 }
+
+/// Settings › Integrations has a Your agents card: each of the person's runners with Edit
+/// and Remove, each runner found on the PATH with Add as its agent, and Add Agent, which
+/// opens a form. A press on Add as Claude Code adds the found runner; Edit opens the form
+/// filled; Remove asks first and takes it out of every offer.
+#[test]
+fn the_your_agents_card_lists_adds_edits_and_removes_runners() {
+    let (dir, mut app) = project();
+    for name in ["claude-ds", "codex-fast"] {
+        fs::write(
+            dir.path().join(format!("bin/{name}")),
+            "#!/bin/sh\nexec sleep 30\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(
+                dir.path().join(format!("bin/{name}")),
+                fs::Permissions::from_mode(0o755),
+            )
+            .unwrap();
+        }
+    }
+    app.settings.agents.push(crate::settings::CustomAgent {
+        name: "Claude (DeepSeek)".to_string(),
+        command: "claude-ds".to_string(),
+        like: "claude".to_string(),
+    });
+    app.run(Command::OpenSettings);
+    let integrations = {
+        let page = app.settings_page.as_ref().unwrap();
+        let spots = page.controls(app.sheet_area());
+        let section = crate::settings_page::Section::Integrations;
+        let tab = spots
+            .iter()
+            .find(|(_, c)| *c == crate::settings_page::Control::Section(section));
+        tab.unwrap().0
+    };
+    click(&mut app, integrations.x + 1, integrations.y);
+    let grid = screen(&app);
+    let text = grid.text();
+    // The added runner, its command and what it works like; the found one, offered, added
+    // by nothing yet.
+    assert!(text.contains("Claude (DeepSeek)"), "{text}");
+    assert!(text.contains("works like Claude Code"), "{text}");
+    assert!(text.contains("claude-ds"), "{text}");
+    assert!(text.contains("codex-fast"), "found, never added: {text}");
+    assert_eq!(app.settings.agents.len(), 1, "nothing adds itself");
+    // A press on Add as Codex adds it, as the agent its name's prefix says.
+    let (x, y) = on_row_of(&grid, "codex-fast", "Add as Codex");
+    click(&mut app, x + 1, y);
+    assert_eq!(app.settings.agents.len(), 2);
+    assert_eq!(app.settings.agents[1].command, "codex-fast");
+    assert_eq!(app.settings.agents[1].like, "codex");
+    // The card is below the agents' cards: the page scrolls whole.
+    let area = app.sheet_area();
+    if let Some(page) = app.settings_page.as_mut() {
+        page.scroll_by(20, area);
+    }
+    // Edit opens the form filled with what it is.
+    let grid = screen(&app);
+    let (x, y) = on_row_of(&grid, "codex-fast", "Edit");
+    click(&mut app, x + 1, y);
+    let text = screen(&app).text();
+    assert!(text.contains("Edit Agent"), "{text}");
+    assert!(text.contains("codex-fast"), "{text}");
+    key(&mut app, Key::Esc);
+    // Remove asks first, and takes it out.
+    let grid = screen(&app);
+    let (x, y) = on_row_of(&grid, "codex-fast", "Remove");
+    click(&mut app, x + 1, y);
+    assert!(screen(&app).text().contains("Remove codex-fast?"));
+    // The dialog's own Remove, on its buttons' row.
+    let grid = screen(&app);
+    let (_, asked) = find(&grid, "Remove codex-fast?");
+    let buttons = (asked + 1..grid.height())
+        .find(|y| grid.row_text(*y).contains("Cancel"))
+        .expect("the dialog's buttons");
+    let row = grid.row_text(buttons);
+    let at = row.find("Remove").expect("the dialog's Remove");
+    let x = row[..at].chars().count() as u16 + 1;
+    click(&mut app, x, buttons);
+    assert_eq!(app.settings.agents.len(), 1);
+    assert!(
+        !app.settings
+            .agents
+            .iter()
+            .any(|a| a.command == "codex-fast")
+    );
+}
