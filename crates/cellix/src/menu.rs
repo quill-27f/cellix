@@ -120,11 +120,11 @@ pub enum Action {
     /// Lists what can be started in the side pane, as its + does.
     PaneNew,
     /// Starts a program in the side pane: an agent, or a terminal (`agents::SHELL.1`).
-    Start(&'static str),
+    Start(String),
     /// Starts an agent with a role's prompt as its first.
     StartRole(&'static str, String),
     /// Starts this agent reviewing the changes.
-    ReviewWith(&'static str),
+    ReviewWith(String),
     /// Opens Settings at Integrations, where agents are set up.
     SetUpAgents,
     /// Reviews what changed in a worktree, as a click on its row does.
@@ -1283,20 +1283,20 @@ mod tests {
             Item::new("Terminal", Action::PaneNew)
                 .icon(Icon::Terminal, color)
                 .key(('t', "T")),
-            Item::new("Codex", Action::Start("codex"))
+            Item::new("Codex", Action::Start("codex".to_string()))
                 .key(('1', "1"))
                 .after_rule(),
-            Item::new("Claude Code", Action::Start("claude"))
+            Item::new("Claude Code", Action::Start("claude".to_string()))
                 .note("not installed")
                 .when(false),
             Item::heading("Roles").after_rule(),
-            Item::new("Tester", Action::Start("codex")).detail("runs the tests"),
+            Item::new("Tester", Action::Start("codex".to_string())).detail("runs the tests"),
         ];
         let measure = cellix_render::FontMeasure::new(17, 37);
         let mut menu = Menu::new((1, 1), items, &measure, SCREEN);
         assert_eq!(
             menu.key(Key::Char('1')),
-            Outcome::Chose(Action::Start("codex"))
+            Outcome::Chose(Action::Start("codex".to_string()))
         );
         assert_eq!(menu.key(Key::Char('T')), Outcome::Chose(Action::PaneNew));
         assert_eq!(menu.key(Key::Char('x')), Outcome::Stay);
@@ -1349,8 +1349,8 @@ mod tests {
         let measure = cellix_render::FontMeasure::new(17, 37);
         for theme in [Theme::default(), Theme::named(Some("light"))] {
             let items = vec![
-                Item::new("Codex", Action::Start("codex")),
-                Item::new("Claude Code", Action::Start("claude"))
+                Item::new("Codex", Action::Start("codex".to_string())),
+                Item::new("Claude Code", Action::Start("claude".to_string()))
                     .note("not installed")
                     .when(false),
             ];

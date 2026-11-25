@@ -2404,7 +2404,7 @@ type Shown<'a> = (
 /// chosen read as more text boxes (the design review of 0.11.0).
 pub(crate) fn draw_segments(
     grid: &mut Grid,
-    segments: &[(Rect, &str, bool)],
+    segments: &[(Rect, impl AsRef<str>, bool)],
     (hover, ground, cells): (Option<(u16, u16)>, Rgb, bool),
     theme: &Theme,
 ) {
@@ -2443,6 +2443,7 @@ pub(crate) fn draw_segments(
             painted: true,
             ..theme.text
         };
+        let label = label.as_ref();
         let words = format!("{label:^width$}", width = rect.w as usize);
         grid.put_str(rect.x, rect.y, &words, style, rect.right());
         if let Some(fill) = fill {

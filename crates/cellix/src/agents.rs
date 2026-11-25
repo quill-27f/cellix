@@ -190,8 +190,8 @@ pub fn mark(program: &str, theme: &Theme) -> (Icon, Rgb) {
 /// What a click in the panel lands on.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hit {
-    /// The program of an agent to start.
-    Start(&'static str),
+    /// The command of an agent to start.
+    Start(String),
     Worktree(PathBuf),
     /// An agent's row, by its session's id.
     Agent(String),
@@ -346,6 +346,45 @@ enum Line {
     Rule,
 }
 
+/// An agent Cellix offers to start: one of `AGENTS`, or the person's own runner from the
+/// `agents` setting, treated everywhere as the agent its `like` names (that one's marks,
+/// flags and treatment). Cellix only ever runs the command; it never reads the runner.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Offered {
+    /// What the panel and every list calls it: the built-in's name, or the name given.
+    pub name: String,
+    /// The command that runs it: a built-in's program, or the runner's command, a name on
+    /// the PATH or a path.
+    pub program: String,
+    /// The program of `AGENTS` it works like: a built-in's own, a custom runner's `like`.
+    /// Empty where the like isn't an agent Cellix knows, which is offered nowhere but
+    /// Settings, which says what's wrong.
+    pub like: String,
+    /// One the person added, as against a built-in.
+    pub custom: bool,
+}
+
+impl Offered {
+    /// One of `AGENTS`, by its table row.
+    pub fn built_in(name: &'static str, program: &'static str) -> Self {
+        Self {
+            name: name.to_string(),
+            program: program.to_string(),
+            like: program.to_string(),
+            custom: false,
+        }
+    }
+}
+
+/// The program of the agent an `Offered` works like, for the parts keyed by program.
+pub fn like_of(offered: &Offered) -> &str {
+    if offered.like.is_empty() {
+        &offered.program
+    } else {
+        &offered.like
+    }
+}
+
 /// The Agents panel: who's running, who needs you, and where work is happening.
 #[derive(Default)]
 pub struct Agents {
@@ -353,8 +392,8 @@ pub struct Agents {
     pub worktrees: Vec<Worktree>,
     /// Agents found running in this folder that haven't reported through a plugin.
     seen: Arc<Mutex<Vec<String>>>,
-    /// The agents installed here.
-    installed: Vec<(&'static str, &'static str)>,
+    /// The agents offered here, built-ins installed and the person's own runners, in order.
+    installed: Vec<Offered>,
     /// Tests say which agents are installed, rather than whatever this machine has.
     #[cfg(test)]
     pretend: Option<Vec<&'static str>>,
@@ -568,7 +607,7 @@ impl Agents {
         if !self.installed.is_empty() {
             lines.push(Line::Gap);
             lines.push(Line::Section("START"));
-            let shell = |(_, (_, program)): &(usize, &(&str, &str))| *program == SHELL.1;
+            let shell = |(_, offered): &(usize, &Offered)| offered.program == SHELL.1;
             let (terminal, agents): (Vec<_>, Vec<_>) =
                 self.installed.iter().enumerate().partition(shell);
             lines.extend(terminal.iter().map(|(index, _)| Line::Start(*index)));
@@ -612,7 +651,7 @@ impl Agents {
             let rows = self.height(&line, &order);
             if y >= top && y < top + rows {
                 return match line {
-                    Line::Start(index) => Some(Hit::Start(self.installed[index].1)),
+                    Line::Start(index) => Some(Hit::Start(self.installed[index].program.clone())),
                     Line::Tree(index) => Some(Hit::Worktree(self.worktrees[index].path.clone())),
                     Line::Agent(at) => Some(Hit::Agent(order[at].0.session.clone())),
                     _ => None,
@@ -746,11 +785,15 @@ impl Agents {
                     }
                     // As the + menu has it: the program's own mark, its name, and what it
                     // runs at the end of its one row.
-                    let (label, program) = self.installed[index];
-                    let (icon, color) = mark(program, theme);
+                    let offered = &self.installed[index];
+                    let (icon, color) = mark(&offered.like, theme);
                     let fallback = crate::toolbar::fallback(icon);
                     grid.glyph(side as f32, y, icon, color, fallback, theme.sidebar);
-                    let shown = if program == SHELL.1 { "shell" } else { program };
+                    let shown = if offered.program == SHELL.1 {
+                        "shell"
+                    } else {
+                        &offered.program
+                    };
                     let right = area.right().saturating_sub(2);
                     let font = Font {
                         size: DETAIL_SIZE,
@@ -758,7 +801,7 @@ impl Agents {
                     };
                     let wide = measure.width(shown, font).ceil() as u16;
                     let stop = right.saturating_sub(wide + 1).max(side + 3);
-                    grid.label(side + 2, y, label, theme.sidebar, stop);
+                    grid.label(side + 2, y, &offered.name, theme.sidebar, stop);
                     grid.label_right_at(end, right, y, shown, dim, DETAIL_SIZE);
                 }
                 Line::Rule => {
@@ -854,37 +897,55 @@ impl Agents {
         !self.installed.is_empty()
     }
 
-    /// Finds which agents can be started, which only changes when the panel opens.
-    pub fn look_for_agents(&mut self) {
+    /// Finds which agents can be started, which only changes when the panel opens: the
+    /// built-ins installed here, and the person's own runners whose command is there, each
+    /// with the agent its `like` names; the terminal last. `disabled` turns agents off,
+    /// a built-in's by its command, a runner's by its name.
+    pub fn look_for_agents(&mut self, added: &[crate::settings::CustomAgent], disabled: &[String]) {
         let var = |name: &str| std::env::var(name).ok();
         #[cfg(test)]
         let pretend = self.pretend.clone();
-        let found = |program: &'static str| {
+        let found = |program: &str| {
             #[cfg(test)]
             if let Some(pretend) = &pretend {
                 return pretend.contains(&program);
             }
-            integrations::on_path(program, var)
+            integrations::on_path(program, var) || Path::new(program).is_file()
         };
+        let like_known = |like: &str| AGENTS.iter().any(|(_, program)| *program == like);
+        let off = |name: &str| disabled.iter().any(|d| d == name);
         self.installed = AGENTS
             .iter()
             .copied()
-            .filter(|(_, program)| found(program))
-            .chain([SHELL])
+            .filter(|(_, program)| found(program) && !off(program))
+            .map(|(name, program)| Offered::built_in(name, program))
+            .chain(added.iter().filter_map(|agent| {
+                let known = like_known(&agent.like) && found(&agent.command) && !off(&agent.name);
+                known.then(|| Offered {
+                    name: if agent.name.is_empty() {
+                        agent.command.clone()
+                    } else {
+                        agent.name.clone()
+                    },
+                    program: agent.command.clone(),
+                    like: agent.like.clone(),
+                    custom: true,
+                })
+            }))
+            .chain([Offered::built_in(SHELL.0, SHELL.1)])
             .collect();
     }
 
-    /// The programs of the agents installed here, as last looked for; not a terminal's.
-    pub fn installed_programs(&self) -> Vec<&'static str> {
-        let agents = self.installed.iter().map(|(_, program)| *program);
-        agents.filter(|program| *program != SHELL.1).collect()
+    /// The agents offered here, as last looked for, with the terminal last.
+    pub fn installed_agents(&self) -> &[Offered] {
+        &self.installed
     }
 
     /// Says which agents count as installed from now on, whatever this machine has.
     #[cfg(test)]
     pub fn pretend_installed(&mut self, programs: &[&'static str]) {
         self.pretend = Some(programs.to_vec());
-        self.look_for_agents();
+        self.look_for_agents(&[], &[]);
     }
 }
 
@@ -1128,7 +1189,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
     #[test]
     fn a_click_finds_the_agent_to_start_below_the_worktrees() {
         let agents = Agents {
-            installed: vec![("Codex", "codex")],
+            installed: vec![Offered::built_in("Codex", "codex")],
             worktrees: vec![Worktree {
                 path: PathBuf::from("/work"),
                 branch: "main".to_string(),
@@ -1138,7 +1199,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
         };
         let area = Rect::new(0, 0, 30, 40);
         let at = |hit: &Hit| (0..40).find(|y| agents.hit(area, *y, 0, &[]).as_ref() == Some(hit));
-        let start = at(&Hit::Start("codex")).unwrap();
+        let start = at(&Hit::Start("codex".to_string())).unwrap();
         let tree = at(&Hit::Worktree(PathBuf::from("/work"))).unwrap();
         assert!(
             start < tree,
@@ -1150,7 +1211,10 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
     #[test]
     fn starting_an_agent_stays_in_reach_beside_many_worktrees() {
         let agents = Agents {
-            installed: vec![("Claude Code", "claude"), SHELL],
+            installed: vec![
+                Offered::built_in("Claude Code", "claude"),
+                Offered::built_in(SHELL.0, SHELL.1),
+            ],
             worktrees: (0..11)
                 .map(|i| Worktree {
                     path: PathBuf::from(format!("/work/tree-{i}")),
@@ -1174,8 +1238,8 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
                 parent: None,
             })
             .collect();
-        let found =
-            (0..area.h).find(|y| agents.hit(area, *y, 0, &rows) == Some(Hit::Start("claude")));
+        let found = (0..area.h)
+            .find(|y| agents.hit(area, *y, 0, &rows) == Some(Hit::Start("claude".to_string())));
         assert!(found.is_some(), "Claude Code can be started");
         let theme = Theme::default();
         let look: (&dyn Measure, &Theme) = (&cellix_render::CellMeasure, &theme);
@@ -1203,7 +1267,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
     #[test]
     fn names_read_as_rows_that_do_something() {
         let agents = Agents {
-            installed: vec![SHELL],
+            installed: vec![Offered::built_in(SHELL.0, SHELL.1)],
             ..Agents::default()
         };
         let row = |name: &str, urgency, parent: Option<&str>| Row {
@@ -1245,12 +1309,16 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
     #[test]
     fn the_terminal_stands_apart_from_the_agents() {
         let agents = Agents {
-            installed: vec![("Claude Code", "claude"), ("Codex", "codex"), SHELL],
+            installed: vec![
+                Offered::built_in("Claude Code", "claude"),
+                Offered::built_in("Codex", "codex"),
+                Offered::built_in(SHELL.0, SHELL.1),
+            ],
             ..Agents::default()
         };
         let area = Rect::new(0, 0, 40, 30);
-        let rows = |program: &'static str| -> Vec<u16> {
-            let hit = Some(Hit::Start(program));
+        let rows = |program: &str| -> Vec<u16> {
+            let hit = Some(Hit::Start(program.to_string()));
             (0..area.h)
                 .filter(|y| agents.hit(area, *y, 0, &[]) == hit)
                 .collect()
@@ -1290,7 +1358,7 @@ p3\nccodex\nfcwd\nn/work/project/sub\n";
 
         // With no agent installed there's nothing to stand apart from.
         let alone = Agents {
-            installed: vec![SHELL],
+            installed: vec![Offered::built_in(SHELL.0, SHELL.1)],
             ..Agents::default()
         };
         let theme = Theme::default();

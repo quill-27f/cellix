@@ -4,8 +4,6 @@
 
 use super::*;
 
-use crate::agents::AGENTS;
-
 /// The dialog's measures: its width in columns and its rows (an edge, the title, the box,
 /// where it goes, which agent, the buttons, an edge). A row of air before the agents as well
 /// left four pieces floating, the inner gaps as wide as the edges.
@@ -27,9 +25,8 @@ pub(super) struct NewWorktree {
     from: (String, String),
     /// The project's own checkout, beside which the folder goes.
     main: PathBuf,
-    /// The agents that can be started in it, by program; the one after the last is
-    /// Nothing.
-    agents: Vec<&'static str>,
+    /// The agents that can be started in it; the one after the last is Nothing.
+    agents: Vec<crate::agents::Offered>,
     pub picked: usize,
     /// What went wrong the last time Create was pressed.
     error: Option<String>,
@@ -68,20 +65,15 @@ impl NewWorktree {
         shown.display().to_string()
     }
 
-    fn choices(&self) -> Vec<&'static str> {
-        let mut names: Vec<&'static str> = self
-            .agents
-            .iter()
-            .copied()
-            .map(crate::agents::display_name)
-            .collect();
-        names.push(NOTHING);
+    fn choices(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.agents.iter().map(|o| o.name.clone()).collect();
+        names.push(NOTHING.to_string());
         names
     }
 
-    /// The agent to start in it, by program.
-    pub fn agent(&self) -> Option<&'static str> {
-        self.agents.get(self.picked).copied()
+    /// The agent to start in it, by its command.
+    pub fn agent(&self) -> Option<String> {
+        self.agents.get(self.picked).map(|o| o.program.clone())
     }
 }
 
@@ -93,12 +85,14 @@ impl App {
             self.say("A worktree needs a git repository");
             return;
         };
-        self.agents.look_for_agents();
-        let installed = self.agents.installed_programs();
-        let agents: Vec<&'static str> = AGENTS
+        self.agents
+            .look_for_agents(&self.settings.agents, &self.settings.disabled_agents);
+        let agents: Vec<crate::agents::Offered> = self
+            .agents
+            .installed_agents()
             .iter()
-            .map(|(_, program)| *program)
-            .filter(|program| installed.contains(program))
+            .filter(|o| o.program != crate::agents::SHELL.1)
+            .cloned()
             .collect();
         let branch = cellix_review::current_branch(&root).unwrap_or_else(|| "HEAD".into());
         let commit = cellix_review::head(&root).unwrap_or_default();
@@ -198,17 +192,16 @@ impl App {
 
     /// The choices of agent, each as the columns it takes on its row, at the dialog's right:
     /// all as wide as the widest, as Settings' are.
-    fn worktree_segments(&self, form: &NewWorktree) -> Vec<(Rect, &'static str)> {
+    fn worktree_segments(&self, form: &NewWorktree) -> Vec<(Rect, String)> {
         let area = self.new_worktree_area();
         let choices = form.choices();
-        let cells = |c: &&str| measures::button_cells(c, &*self.measure).chars().count() as u16;
+        let cells = |c: &String| measures::button_cells(c, &*self.measure).chars().count() as u16;
         let width = choices.iter().map(cells).max().unwrap_or(0);
         let count = choices.len() as u16;
         let start = area.right().saturating_sub(2 + width * count);
         let y = area.y + AGENT_ROW;
-        let place = |(i, name): (usize, &'static str)| {
-            (Rect::new(start + width * i as u16, y, width, 1), name)
-        };
+        let place =
+            |(i, name): (usize, String)| (Rect::new(start + width * i as u16, y, width, 1), name);
         choices.into_iter().enumerate().map(place).collect()
     }
 
@@ -338,7 +331,7 @@ impl App {
             90,
         );
         grid.label(left, area.y + AGENT_ROW, "Start in it", base, right);
-        let segments: Vec<(Rect, &str, bool)> = self
+        let segments: Vec<(Rect, String, bool)> = self
             .worktree_segments(form)
             .into_iter()
             .enumerate()
@@ -644,7 +637,7 @@ mod tests {
                     Overlay::NewWorktree(form) => form,
                     _ => panic!("the dialog"),
                 });
-                let (rect, name) = segments[1];
+                let (rect, name) = &segments[1];
                 let (lift, _) = app.worktree_lifts();
                 let painted = f32::from(rect.y) - lift + 0.3;
                 app.handle(Event::Mouse(MouseEvent {
@@ -658,7 +651,7 @@ mod tests {
                 let Overlay::NewWorktree(form) = &app.overlay else {
                     panic!("still open");
                 };
-                assert_eq!(form.choices()[form.picked], name);
+                assert_eq!(&form.choices()[form.picked], name);
             }
             app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
 
@@ -836,7 +829,10 @@ mod tests {
         assert!(git(&root, &["worktree", "list"]).contains("fix-pop-order"));
         assert_eq!(
             app.workspace_request,
-            Some(WorkspaceRequest::OpenAndStart(folder.clone(), "gemini")),
+            Some(WorkspaceRequest::OpenAndStart(
+                folder.clone(),
+                "gemini".into()
+            )),
             "opened as a workspace, with the agent picked"
         );
         // The same name again is refused under the box, which stays.

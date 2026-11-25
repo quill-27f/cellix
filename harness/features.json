@@ -7817,5 +7817,12 @@
     "title": "Validate All acts on what the pane shows: with a kind's pill picked, only that kind's comments",
     "test": "validate_all_takes_only_the_kind_the_pill_lists",
     "passes": true
+  },
+  {
+    "id": "custom-agents",
+    "milestone": 15,
+    "title": "A runner the person added (the agents setting: name, command, like) is offered and starts in the side pane as its like agent: its own command, that agent's treatment, named as given",
+    "test": "a_custom_runner_starts_in_the_side_pane_as_its_like_agent",
+    "passes": true
   }
 ]

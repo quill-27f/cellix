@@ -81,6 +81,24 @@ pub struct Settings {
     /// The MCP server, among those Claude Code knows, that a remote doc is read and posted
     /// through: its tools are the only ones the agent is allowed. Unset, the first review asks.
     pub remote_docs_mcp: Option<String>,
+    /// The person's own agent runners: a command like `claude-ds` that wraps an agent's CLI,
+    /// treated everywhere as the agent `like` names.
+    pub agents: Vec<CustomAgent>,
+    /// Agents turned off, so they're offered nowhere: a built-in's by its command, a custom
+    /// one's by the name given it.
+    pub disabled_agents: Vec<String>,
+}
+
+/// One of the person's own agent runners, from the `agents` setting: `command` runs the
+/// agent, and `like` says which of Cellix's agents it works like, so it gets that one's
+/// marks, flags and treatment. The command is a name on the PATH or a path; Cellix never
+/// reads the runner itself, only runs it.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct CustomAgent {
+    pub name: String,
+    pub command: String,
+    pub like: String,
 }
 
 /// The agent choices `ask_agent` can name, in the order Settings shows them.
@@ -154,6 +172,8 @@ impl Settings {
         self.comment_sort = other.comment_sort.or(self.comment_sort.take());
         self.ask_agent = other.ask_agent.or(self.ask_agent.take());
         self.remote_docs_mcp = other.remote_docs_mcp.or(self.remote_docs_mcp.take());
+        self.agents.extend(other.agents);
+        self.disabled_agents.extend(other.disabled_agents);
     }
 
     /// The words the user has said are right.

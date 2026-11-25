@@ -712,13 +712,7 @@ fn every_program_has_one_mark_and_none_is_a_box_to_tick() {
         (Icon::AgentCursor, "Cursor CLI"),
         (Icon::AgentKiro, "Kiro CLI"),
     ] {
-        if menu.contains(name)
-            && !app
-                .agents
-                .installed_programs()
-                .iter()
-                .any(|p| crate::agents::display_name(p) == name)
-        {
+        if menu.contains(name) && !app.agents.installed_agents().iter().any(|o| o.name == name) {
             assert!(dimmed(icon), "{name} not installed: its own mark, dimmed");
         }
     }
@@ -2309,4 +2303,49 @@ fn a_terminal_and_claude_code_keep_the_button() {
         let air = button_air(&app, &grid, row);
         assert!(air >= 8, "{air} px from the button to the icons: {room}");
     }
+}
+
+/// A runner the person added — a `claude-ds` that wraps `claude` — is offered by the side
+/// pane under the name given it, with Claude Code's mark and its own command at the row's
+/// end, and starts as Claude Code does: the runner's command, that agent's treatment (the
+/// plugin, where claude isn't installed, and the hook's name). The stand-in proves what ran;
+/// Cellix never reads the runner's contents.
+#[test]
+fn a_custom_runner_starts_in_the_side_pane_as_its_like_agent() {
+    let (dir, mut app) = project((150, 40));
+    let bin = dir.path().join("bin");
+    fs::create_dir(&bin).unwrap();
+    let script = "#!/bin/sh\nprintf '%s' \"$*\" > started.args\nprintf '%s' \"$CELLIX_AGENT\" > started.agent\nprintf '\\033]0;ds agent\\007'\nexec sleep 30\n";
+    fs::write(bin.join("claude-ds"), script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(bin.join("claude-ds"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    app.side_path = Some(bin.into_os_string());
+    app.settings.agents.push(crate::settings::CustomAgent {
+        name: "Claude (DeepSeek)".to_string(),
+        command: "claude-ds".to_string(),
+        like: "claude".to_string(),
+    });
+    app.run(Command::ListAgents);
+    let text = screen(&app).text();
+    assert!(text.contains("Claude (DeepSeek)"), "{text}");
+    assert!(text.contains("claude-ds"), "what it runs: {text}");
+    app.open_agent("claude-ds");
+    let index = app.dock.sessions.len() - 1;
+    assert_eq!(
+        app.dock.sessions[index].name, "Claude (DeepSeek)",
+        "its tab is called by the name given it"
+    );
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !dir.path().join("started.args").exists() {
+        assert!(Instant::now() < deadline, "the runner never started");
+        app.poll();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let args = fs::read_to_string(dir.path().join("started.args")).unwrap();
+    assert!(args.contains("--plugin-dir"), "claude's treatment: {args}");
+    let agent = fs::read_to_string(dir.path().join("started.agent")).unwrap();
+    assert_eq!(agent, "Claude (DeepSeek)", "the hook's name");
 }

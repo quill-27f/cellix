@@ -17,7 +17,8 @@ const NOT_INSTALLED: &str = "not installed";
 impl App {
     /// Opens what the + starts, dropping from it at `at`.
     pub(super) fn show_start_menu(&mut self, at: (u16, u16)) {
-        self.agents.look_for_agents();
+        self.agents
+            .look_for_agents(&self.settings.agents, &self.settings.disabled_agents);
         let home = if cfg!(test) {
             None
         } else {
@@ -38,22 +39,23 @@ impl App {
         self.overlay = Overlay::Menu(menu);
     }
 
-    /// The menu's rows: Terminal; every agent Cellix starts, those not installed dimmed;
-    /// the roles; and a new worktree.
+    /// The menu's rows: Terminal; every agent Cellix starts, those not installed dimmed, the
+    /// person's own runners among them by name; the roles; and a new worktree.
     fn start_items(&self, roles: &[Role]) -> Vec<MenuItem> {
         let theme = &self.theme;
-        let installed = self.agents.installed_programs();
+        let installed = self.agents.installed_agents();
+        let has = |program: &str| installed.iter().any(|o| o.program == program);
         let (icon, color) = crate::agents::mark(SHELL.1, theme);
         let mut items = vec![
-            MenuItem::new(SHELL.0, MenuAction::Start(SHELL.1))
+            MenuItem::new(SHELL.0, MenuAction::Start(SHELL.1.to_string()))
                 .icon(icon, color)
                 .key(TERMINAL_KEY),
         ];
         let mut keys = AGENT_KEYS.iter().zip("123456789".chars());
         for (index, (name, program)) in AGENTS.iter().enumerate() {
             let (icon, color) = crate::agents::mark(program, theme);
-            let item = MenuItem::new(*name, MenuAction::Start(program));
-            let item = if installed.contains(program) {
+            let item = MenuItem::new(*name, MenuAction::Start(program.to_string()));
+            let item = if has(program) {
                 let item = item.icon(icon, color);
                 match keys.next() {
                     Some((shown, key)) => item.key((key, *shown)),
@@ -66,12 +68,36 @@ impl App {
             };
             items.push(if index == 0 { item.after_rule() } else { item });
         }
+        // The person's own runners, after the built-ins, each as its like agent's mark.
+        for offered in installed.iter().filter(|o| o.custom) {
+            let (icon, color) = crate::agents::mark(&offered.like, theme);
+            let item = MenuItem::new(
+                offered.name.clone(),
+                MenuAction::Start(offered.program.clone()),
+            )
+            .icon(icon, color);
+            items.push(match keys.next() {
+                Some((shown, key)) => item.key((key, *shown)),
+                None => item,
+            });
+        }
         if !roles.is_empty() {
             items.push(MenuItem::heading("Roles").after_rule());
         }
+        // Roles are for the agents the role names, which are Cellix's own.
+        let programs: Vec<&'static str> = installed
+            .iter()
+            .filter(|o| !o.custom)
+            .filter_map(|o| {
+                AGENTS
+                    .iter()
+                    .find(|(_, p)| *p == o.program)
+                    .map(|(_, p)| *p)
+            })
+            .collect();
         for role in roles {
-            let program = role.program(&AGENTS, &installed);
-            let usable = program.is_some_and(|p| installed.contains(&p));
+            let program = role.program(&AGENTS, &programs);
+            let usable = program.is_some_and(has);
             let (icon, color) = program.map_or((Icon::File, theme.disabled), |p| {
                 crate::agents::mark(p, theme)
             });
@@ -95,12 +121,21 @@ impl App {
 
     /// Starts a role: its agent, given the role's prompt as its first. The agent takes it
     /// once it's ready, after whatever it asks first, such as whether to trust the folder,
-    /// which is the person's to answer.
-    pub(super) fn start_role(&mut self, program: &'static str, prompt: &str) {
+    /// which is the person's to answer. A runner takes its `like` agent's way of a prompt.
+    pub(super) fn start_role(&mut self, program: &str, prompt: &str) {
         let root = self.workspace.root().to_path_buf();
         let (env, mut launch) = self.agent_launch(program);
-        let name = crate::agents::display_name(program);
-        match crate::agents::first_prompt(program, prompt) {
+        let offered = self
+            .agents
+            .installed_agents()
+            .iter()
+            .find(|o| o.program == program)
+            .cloned();
+        let name = offered
+            .as_ref()
+            .map_or_else(|| crate::agents::display_name(program), |o| o.name.as_str());
+        let like = offered.as_ref().map_or(program, crate::agents::like_of);
+        match crate::agents::first_prompt(like, prompt) {
             Some(args) => launch.extend(args),
             None => {
                 self.clipboard = prompt.to_string();

@@ -537,7 +537,7 @@ impl Workspaces {
             Some(WorkspaceRequest::OpenAndStart(root, program)) => {
                 let index = self.open(root);
                 self.switch(index);
-                self.list[index].app.open_agent(program);
+                self.list[index].app.open_agent(&program);
             }
             Some(WorkspaceRequest::Next) => {
                 let next = (self.active + 1) % self.list.len();
@@ -2114,7 +2114,7 @@ mod tests {
         });
         let mut spaces = Workspaces::new((100, 30), "dev-box".to_string(), start);
         spaces.open(first.clone());
-        let request = WorkspaceRequest::OpenAndStart(second.clone(), "codex");
+        let request = WorkspaceRequest::OpenAndStart(second.clone(), "codex".into());
         spaces.app_mut().workspace_request = Some(request);
         spaces.settle();
         assert_eq!(spaces.list.len(), 2);

@@ -10220,21 +10220,36 @@ impl App {
     /// The environment and command that start an agent. For Claude Code they connect it to
     /// this Cellix and load the plugin, with `cellix` on the path for the plugin's hooks.
     fn agent_launch(&self, agent: &str) -> (Vec<String>, Vec<String>) {
+        // A runner's own command starts it; its `like` says whose treatment it gets: that
+        // agent's flags, hooks, plugin and IDE env. Cellix never reads the runner itself.
+        let offered = self
+            .agents
+            .installed_agents()
+            .iter()
+            .find(|o| o.program == agent);
+        let like = offered.map_or(agent, crate::agents::like_of);
         let mut launch = vec![agent.to_string()];
         #[cfg(test)]
         if let Some(program) = &self.agent_program {
             launch[0] = program.clone();
         }
+        // A runner's bare command is found as agents' programs are, on the same PATH: it may
+        // live only there, a wrapper in the person's ~/.local/bin. A path command stays as it
+        // is.
+        if let (true, Some(found)) = (
+            offered.is_some_and(|o| o.custom) && !Path::new(agent).is_file(),
+            crate::ask::find(agent, &self.side_path()),
+        ) {
+            launch[0] = found.display().to_string();
+        }
         launch.extend(
-            crate::agents::launch_args(agent)
+            crate::agents::launch_args(like)
                 .iter()
                 .map(|w| w.to_string()),
         );
         // Any agent can answer a comment with `cellix reply`, under its own name.
-        let mut env = vec![format!(
-            "CELLIX_AGENT={}",
-            crate::agents::display_name(agent)
-        )];
+        let named = offered.map_or_else(|| crate::agents::display_name(agent), |o| o.name.as_str());
+        let mut env = vec![format!("CELLIX_AGENT={named}")];
         let own_folder = std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(Path::to_path_buf));
@@ -10243,7 +10258,7 @@ impl App {
         {
             env.push(format!("PATH={path}"));
         }
-        if agent != "claude" {
+        if like != "claude" {
             return (env, launch);
         }
         if let Some(ide) = &self.ide {
@@ -10310,12 +10325,20 @@ impl App {
         let root = self.workspace.root().to_path_buf();
         let shell = crate::agents::shell();
         let (name, env, launch) = if agent == crate::agents::SHELL.1 {
-            (crate::agents::SHELL.0, Vec::new(), vec![shell])
+            (crate::agents::SHELL.0.to_string(), Vec::new(), vec![shell])
         } else {
             let (env, launch) = self.agent_launch(agent);
-            (crate::agents::display_name(agent), env, launch)
+            // A runner is called by the name given it, and carries its like agent's mark.
+            let name = self
+                .agents
+                .installed_agents()
+                .iter()
+                .find(|o| o.program == agent)
+                .map(|o| o.name.clone())
+                .unwrap_or_else(|| crate::agents::display_name(agent).to_string());
+            (name, env, launch)
         };
-        self.start_session(name, &launch, &env, &root);
+        self.start_session(&name, &launch, &env, &root);
     }
 
     /// The first time something starts, says how the two sides work together.
@@ -11827,7 +11850,8 @@ impl App {
     /// Finds out what can be started and what's running.
     fn refresh_agents(&mut self) {
         self.agents.worktrees = worktrees(self.workspace.root());
-        self.agents.look_for_agents();
+        self.agents
+            .look_for_agents(&self.settings.agents, &self.settings.disabled_agents);
         self.agents.scan(self.workspace.root());
     }
 
@@ -12169,7 +12193,7 @@ impl App {
                 let top = self.dock.tops.of(Front::Agents);
                 let rows = self.agent_rows();
                 match self.agents.hit(screen, y, top, &rows) {
-                    Some(AgentHit::Start(program)) => self.open_agent(program),
+                    Some(AgentHit::Start(program)) => self.open_agent(&program),
                     Some(AgentHit::Worktree(path)) => {
                         self.review = Some(self.new_review(path));
                     }
@@ -17749,14 +17773,14 @@ impl App {
                     self.show_start_menu((self.dock.tabs_start(title), title.y + 1));
                 }
             }
-            MenuAction::Start(program) => self.open_agent(program),
+            MenuAction::Start(program) => self.open_agent(&program),
             MenuAction::RemoteServer(server) => self.picked_remote_server(server),
             MenuAction::PickRemoteServer => self.pick_remote_server((self.main_area().x + 2, 2)),
             MenuAction::EndReview(slug) => self.ask_end_review(slug),
             MenuAction::ReviewWorktree(path) => self.review = Some(self.new_review(path)),
             MenuAction::RemoveWorktree(path) => self.ask_remove_worktree(path),
             MenuAction::StartRole(program, prompt) => self.start_role(program, &prompt),
-            MenuAction::ReviewWith(program) => self.review_with(program),
+            MenuAction::ReviewWith(program) => self.review_with(&program),
             MenuAction::SetUpAgents => {
                 if self.settings_page.is_none() {
                     self.run(Command::OpenSettings);
@@ -22653,8 +22677,8 @@ fn test_summary(run: &TestRun) -> (String, String) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkspaceRequest {
     Open(PathBuf),
-    /// Open the folder and start this agent in its side pane, by its program.
-    OpenAndStart(PathBuf, &'static str),
+    /// Open the folder and start this agent in its side pane, by its command.
+    OpenAndStart(PathBuf, String),
     Next,
     Previous,
     /// Go to the workspace at this folder and open what waits there under this key.

@@ -5,7 +5,6 @@
 
 use super::*;
 
-use crate::agents::AGENTS;
 use crate::review::{Review, Suggested};
 use crate::roles;
 
@@ -20,15 +19,21 @@ impl App {
     /// what a press acts on: four of its six rows were agents not installed, dimmed, that did
     /// nothing (0.11.0's review of `next`, 175). From the button, it stands 8 px under it.
     pub(super) fn show_review_with_menu(&mut self, (at, button): ((u16, u16), bool)) {
-        self.agents.look_for_agents();
-        let installed = self.agents.installed_programs();
+        self.agents
+            .look_for_agents(&self.settings.agents, &self.settings.disabled_agents);
         let theme = &self.theme;
-        let mut items: Vec<MenuItem> = AGENTS
+        let mut items: Vec<MenuItem> = self
+            .agents
+            .installed_agents()
             .iter()
-            .filter(|(_, program)| installed.contains(program))
-            .map(|(name, program)| {
-                let (icon, color) = crate::agents::mark(program, theme);
-                MenuItem::new(*name, MenuAction::ReviewWith(program)).icon(icon, color)
+            .filter(|o| o.program != crate::agents::SHELL.1)
+            .map(|offered| {
+                let (icon, color) = crate::agents::mark(&offered.like, theme);
+                MenuItem::new(
+                    offered.name.clone(),
+                    MenuAction::ReviewWith(offered.program.clone()),
+                )
+                .icon(icon, color)
             })
             .collect();
         let more = MenuItem::new(SET_UP_AGENTS, MenuAction::SetUpAgents)
@@ -67,7 +72,7 @@ impl App {
     /// Starts `program` reviewing the changes Review compares, or those since the last
     /// commit with Review closed: the Reviewer role's prompt, its first line saying which
     /// changes, as the agent called reviewer.
-    pub(super) fn review_with(&mut self, program: &'static str) {
+    pub(super) fn review_with(&mut self, program: &str) {
         let home = if cfg!(test) {
             None
         } else {
@@ -82,7 +87,12 @@ impl App {
         self.team.wanted.replace(Some(REVIEWER.to_string()));
         self.start_role(program, &prompt);
         self.team.wanted.replace(None);
-        let name = crate::agents::display_name(program);
+        let name = self
+            .agents
+            .installed_agents()
+            .iter()
+            .find(|o| o.program == program)
+            .map_or_else(|| crate::agents::display_name(program), |o| o.name.as_str());
         self.say(format!(
             "{name} is reviewing: what it finds shows in Review, to keep or dismiss"
         ));
