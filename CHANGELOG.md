@@ -2,6 +2,14 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.15.1] - 2026-11-25
+
+A workspace you close stays closed.
+
+### Fixed
+- A workspace closed from its tile, with nothing running in it, opened again the next time Cellix started. A terminal or agent stopped on Quit or on closing its workspace kept its host waiting to tell a viewer that it had ended, and with Cellix gone nobody heard, so the next Cellix took it for something still running. The host now lets go once the program ends, and ends one that ignores the hang-up a few seconds later. A folder where something only stopped, as when the machine restarted, is now offered to resume (the folder picker, `cellix ls`) rather than opened by itself.
+- Cellix's own tests left folders in your `~/.cache/cellix/sessions` each time they ran. They keep to a cache of their own now. Cellix skips the old ones, as their projects are gone; `rm -rf ~/.cache/cellix/sessions` clears them, along with the tabs each project had open.
+
 ## [0.15.0] - 2026-11-25
 
 Review a doc that lives in another tool, commenting one paragraph at a time.

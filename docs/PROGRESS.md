@@ -4671,3 +4671,8 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - Tests: `a_program_stopped_with_nobody_left_to_hear_it_leaves_nothing_behind` and `a_program_that_ignores_the_hang_up_is_still_stopped` (the real host, stopped and left with no listener, as Cellix quitting leaves it; both fail without the fix), `only_an_open_workspace_or_running_work_opens_again_by_itself`.
 - Also found: tests filled the person's own `~/.cache/cellix/sessions` (748 folders on this Mac, the newest from 0.15.0's release check). Three PTY tests built their command by hand and took the real cache, and each run marked its temporary project open there. They now take a cache of their own as the others do (`test_cache` in `tests/pty.rs`), and the tmux tests' server gets one too. Checked by running them with HOME on an empty folder: its cache stayed empty. The old folders are harmless (their projects are gone, so they're skipped) and are left for the user to clear.
 - Unverified: the user's Linux machine, where the workspace came back.
+
+## Release 0.15.1 (2026-11-25)
+
+- On the user's word: "yes go ahead". 0.15.1 is `40ac4e5` (entry above): a workspace closed from its tile stays closed, and tests keep out of the person's cache. README describes opening workspaces in words that still hold, so it's unchanged.
+- Before this: a pass of every test with no agent on the PATH, and Linux's input path (crossterm's `use-dev-tty`) on macOS.
