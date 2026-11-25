@@ -1536,3 +1536,45 @@ fn validate_all_takes_only_the_kind_the_pill_lists() {
     let text = screen(&app).text();
     assert_eq!(text.matches("Holds up").count(), 2, "{text}");
 }
+
+/// A runner that works stands in the Default agent row after the built-ins, and a press
+/// picks it for Ask, Polish and Validate: `ask_agent` keeps its name, as it keeps a
+/// built-in's command.
+#[test]
+fn the_default_agent_row_offers_a_runner_and_keeps_its_name() {
+    let (dir, mut app) = project();
+    let script = "#!/bin/sh\nexec sleep 30\n";
+    fs::write(dir.path().join("bin/claude-ds"), script).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            dir.path().join("bin/claude-ds"),
+            fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
+    }
+    app.settings.agents.push(crate::settings::CustomAgent {
+        name: "Claude (DeepSeek)".to_string(),
+        command: "claude-ds".to_string(),
+        like: "claude".to_string(),
+    });
+    app.run(Command::OpenSettings);
+    let integrations = {
+        let page = app.settings_page.as_ref().unwrap();
+        let spots = page.controls(app.sheet_area());
+        let section = crate::settings_page::Section::Integrations;
+        let tab = spots
+            .iter()
+            .find(|(_, c)| *c == crate::settings_page::Control::Section(section));
+        tab.unwrap().0
+    };
+    click(&mut app, integrations.x + 1, integrations.y);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("Claude (DeepSeek)"), "{text}");
+    // A press on it picks it.
+    let (x, y) = on_row_of(&grid, "Default agent", "Claude (DeepSeek)");
+    click(&mut app, x + 1, y);
+    assert_eq!(app.settings.ask_agent.as_deref(), Some("Claude (DeepSeek)"));
+}

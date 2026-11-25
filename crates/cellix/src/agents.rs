@@ -901,7 +901,12 @@ impl Agents {
     /// built-ins installed here, and the person's own runners whose command is there, each
     /// with the agent its `like` names; the terminal last. `disabled` turns agents off,
     /// a built-in's by its command, a runner's by its name.
-    pub fn look_for_agents(&mut self, added: &[crate::settings::CustomAgent], disabled: &[String]) {
+    pub fn look_for_agents(
+        &mut self,
+        added: &[crate::settings::CustomAgent],
+        disabled: &[String],
+        path: &std::ffi::OsString,
+    ) {
         let var = |name: &str| std::env::var(name).ok();
         #[cfg(test)]
         let pretend = self.pretend.clone();
@@ -910,7 +915,10 @@ impl Agents {
             if let Some(pretend) = &pretend {
                 return pretend.contains(&program);
             }
-            integrations::on_path(program, var) || Path::new(program).is_file()
+            integrations::on_path(program, var)
+        };
+        let custom_found = |command: &str| {
+            crate::ask::find(command, path).is_some() || Path::new(command).is_file()
         };
         let like_known = |like: &str| AGENTS.iter().any(|(_, program)| *program == like);
         let off = |name: &str| disabled.iter().any(|d| d == name);
@@ -920,7 +928,8 @@ impl Agents {
             .filter(|(_, program)| found(program) && !off(program))
             .map(|(name, program)| Offered::built_in(name, program))
             .chain(added.iter().filter_map(|agent| {
-                let known = like_known(&agent.like) && found(&agent.command) && !off(&agent.name);
+                let known =
+                    like_known(&agent.like) && custom_found(&agent.command) && !off(&agent.name);
                 known.then(|| Offered {
                     name: if agent.name.is_empty() {
                         agent.command.clone()
@@ -945,7 +954,7 @@ impl Agents {
     #[cfg(test)]
     pub fn pretend_installed(&mut self, programs: &[&'static str]) {
         self.pretend = Some(programs.to_vec());
-        self.look_for_agents(&[], &[]);
+        self.look_for_agents(&[], &[], &std::ffi::OsString::new());
     }
 }
 

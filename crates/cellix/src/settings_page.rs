@@ -35,6 +35,14 @@ const AUTO_SAVES: [(&str, &str); 3] = [
 const DEFAULT_AGENT: (&str, &str) = ("Default agent", "Answers Ask, Polish and Validate.");
 /// Wide enough for "Gemini" with a cell either side, four to a track.
 const AGENT_WIDTH: u16 = 9;
+/// A runner's segment in the Default agent row is as wide as its name and its air; the
+/// built-ins' stay `AGENT_WIDTH`, so the row's title keeps its room.
+fn custom_agent_width(name: &str) -> u16 {
+    name.chars().count() as u16 + 2
+}
+fn default_agent_total(customs: &[String]) -> u16 {
+    AGENT_WIDTH * 4 + customs.iter().map(|n| custom_agent_width(n)).sum::<u16>()
+}
 /// Where the Default agent row and the integration cards start on Integrations, which
 /// scrolls whole where the window is short of room for every card.
 const AGENT_ROW: u16 = 3;
@@ -219,6 +227,8 @@ pub enum Control {
     /// Which agent's command line answers Ask, Polish and Validate, by the `ask_agent`
     /// setting's word for it, `auto` for the side pane's.
     DefaultAgent(&'static str),
+    /// One of the person's own runners, by its place in `Values::custom_agents`.
+    DefaultCustom(usize),
 }
 
 /// The settings as they stand, passed in so the page holds no second copy.
@@ -237,6 +247,10 @@ pub struct Values<'a> {
     pub auto_save: &'a str,
     pub notify: bool,
     pub default_agent: &'a str,
+    /// The person's own runners that work (their `like` known and their command there), by
+    /// name, in the order they were added: the Default agent row offers each after the
+    /// built-ins.
+    pub custom_agents: &'a [&'a str],
 }
 
 /// How code is laid out and coloured, each a switch in Appearance.
@@ -507,6 +521,9 @@ enum Tone {
 
 /// The Settings page, which stands where the file would.
 pub struct SettingsPage {
+    /// The person's own runners that work, by name: the Default agent row offers each after
+    /// the built-ins, and the app keeps this in step with what it starts.
+    pub custom_agents: Vec<String>,
     pub section: Section,
     /// The control the keyboard is on, as an index into `controls`.
     pub focus: Option<usize>,
@@ -548,6 +565,7 @@ struct FilterShown {
 impl SettingsPage {
     pub fn new(found: Found) -> Self {
         Self {
+            custom_agents: Vec::new(),
             section: Section::Appearance,
             focus: None,
             found,
@@ -1062,10 +1080,18 @@ impl SettingsPage {
                     None => Rect::new(x, page.bottom(), w, 0),
                 };
                 let y = self.integration_row(page, AGENT_ROW, 2);
-                let start = page.right().saturating_sub(AGENT_WIDTH * 4);
+                let start = page
+                    .right()
+                    .saturating_sub(default_agent_total(&self.custom_agents));
                 for (i, (name, _)) in DEFAULT_AGENTS.iter().enumerate() {
                     let x = start + i as u16 * AGENT_WIDTH;
                     spots.push((place(y, x, (AGENT_WIDTH, 1)), Control::DefaultAgent(name)));
+                }
+                let mut x = start + AGENT_WIDTH * 4;
+                for (i, name) in self.custom_agents.iter().enumerate() {
+                    let wide = custom_agent_width(name);
+                    spots.push((place(y, x, (wide, 1)), Control::DefaultCustom(i)));
+                    x += wide;
                 }
                 let x = page.right().saturating_sub(BUTTON_WIDTH + 2);
                 for (index, block) in self.blocks().iter().enumerate() {
@@ -1127,10 +1153,19 @@ impl SettingsPage {
                     segments(y, SEGMENT_WIDTH, spots, of);
                 }
                 Row::DefaultAgent => {
-                    let start = page.right().saturating_sub(AGENT_WIDTH * 4);
+                    let start = page
+                        .right()
+                        .saturating_sub(default_agent_total(&self.custom_agents));
                     for (i, (name, _)) in DEFAULT_AGENTS.iter().enumerate() {
                         let rect = Rect::new(start + i as u16 * AGENT_WIDTH, y, AGENT_WIDTH, 1);
                         spots.push((rect, Control::DefaultAgent(name)));
+                    }
+                    let mut x = start + AGENT_WIDTH * 4;
+                    for (i, name) in self.custom_agents.iter().enumerate() {
+                        let wide = custom_agent_width(name);
+                        let rect = Rect::new(x, y, wide, 1);
+                        spots.push((rect, Control::DefaultCustom(i)));
+                        x += wide;
                     }
                 }
                 Row::Server(index) => {
@@ -1624,8 +1659,8 @@ impl SettingsPage {
             grid.hairline(above, theme.border);
         };
         let segments =
-            |grid: &mut Grid, y: u16, label: &dyn Fn(Control) -> Option<(&'static str, bool)>| {
-                let row: Vec<(Rect, &str, bool)> = spots
+            |grid: &mut Grid, y: u16, label: &dyn Fn(Control) -> Option<(String, bool)>| {
+                let row: Vec<(Rect, String, bool)> = spots
                     .iter()
                     .filter(|(r, _)| r.y == y && r.h == 1)
                     .filter_map(|(rect, control)| {
@@ -1652,7 +1687,7 @@ impl SettingsPage {
                     segments(grid, y, &|control| match control {
                         Control::Theme(name) => {
                             let word = THEME_SHORT.iter().find(|t| t.0 == name)?.1;
-                            Some((word, values.theme == name))
+                            Some((word.to_string(), values.theme == name))
                         }
                         _ => None,
                     });
@@ -1679,7 +1714,7 @@ impl SettingsPage {
                     segments(grid, y, &|control| match control {
                         Control::AutoSave(name) => {
                             let word = AUTO_SAVES.iter().find(|a| a.0 == name)?.1;
-                            Some((word, values.auto_save == name))
+                            Some((word.to_string(), values.auto_save == name))
                         }
                         _ => None,
                     });
@@ -1692,7 +1727,7 @@ impl SettingsPage {
                     segments(grid, y, &|control| match control {
                         Control::RowHeight(name) => {
                             let word = ROW_HEIGHTS.iter().find(|r| r.0 == name)?.1;
-                            Some((word, values.row_height == name))
+                            Some((word.to_string(), values.row_height == name))
                         }
                         _ => None,
                     });
@@ -1705,21 +1740,27 @@ impl SettingsPage {
                     segments(grid, y, &|control| match control {
                         Control::Keymap(name) => {
                             let word = KEYMAPS.iter().find(|k| k.0 == name)?.1;
-                            Some((word, values.keymap == name))
+                            Some((word.to_string(), values.keymap == name))
                         }
                         _ => None,
                     });
                 }
                 Row::DefaultAgent => {
                     rule(grid, y);
-                    let room = page.right().saturating_sub(AGENT_WIDTH * 4 + 1);
+                    let room = page
+                        .right()
+                        .saturating_sub(default_agent_total(&self.custom_agents) + 1);
                     draw_text(grid, page, (y, room), DEFAULT_AGENT, theme);
                     tag(grid, (DEFAULT_AGENT.0, bold), (y, room), row);
                     segments(grid, y, &|control| match control {
                         Control::DefaultAgent(name) => {
                             let word = DEFAULT_AGENTS.iter().find(|a| a.0 == name)?.1;
-                            Some((word, values.default_agent == name))
+                            Some((word.to_string(), values.default_agent == name))
                         }
+                        Control::DefaultCustom(i) => values
+                            .custom_agents
+                            .get(i)
+                            .map(|name| (name.to_string(), values.default_agent == *name)),
                         _ => None,
                     });
                 }
@@ -2285,6 +2326,10 @@ impl SettingsPage {
                     let label = DEFAULT_AGENTS.iter().find(|a| a.0 == *name)?.1;
                     Some((*rect, label, values.default_agent == *name))
                 }
+                Control::DefaultCustom(i) => values
+                    .custom_agents
+                    .get(*i)
+                    .map(|name| (*rect, *name, values.default_agent == *name)),
                 _ => None,
             })
             .collect();
@@ -2828,6 +2873,7 @@ mod tests {
             auto_save: "off",
             notify: false,
             default_agent: "auto",
+            custom_agents: &[],
         };
         let mut grid = Grid::new(AREA.w, AREA.h, theme.text);
         settings.draw(&mut grid, AREA, &values, (None, &measure), &theme);

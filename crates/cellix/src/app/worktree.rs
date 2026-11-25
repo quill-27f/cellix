@@ -85,8 +85,11 @@ impl App {
             self.say("A worktree needs a git repository");
             return;
         };
-        self.agents
-            .look_for_agents(&self.settings.agents, &self.settings.disabled_agents);
+        self.agents.look_for_agents(
+            &self.settings.agents,
+            &self.settings.disabled_agents,
+            &self.side_path(),
+        );
         let agents: Vec<crate::agents::Offered> = self
             .agents
             .installed_agents()

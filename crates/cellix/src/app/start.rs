@@ -17,8 +17,11 @@ const NOT_INSTALLED: &str = "not installed";
 impl App {
     /// Opens what the + starts, dropping from it at `at`.
     pub(super) fn show_start_menu(&mut self, at: (u16, u16)) {
-        self.agents
-            .look_for_agents(&self.settings.agents, &self.settings.disabled_agents);
+        self.agents.look_for_agents(
+            &self.settings.agents,
+            &self.settings.disabled_agents,
+            &self.side_path(),
+        );
         let home = if cfg!(test) {
             None
         } else {

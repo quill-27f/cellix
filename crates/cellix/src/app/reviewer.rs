@@ -19,8 +19,11 @@ impl App {
     /// what a press acts on: four of its six rows were agents not installed, dimmed, that did
     /// nothing (0.11.0's review of `next`, 175). From the button, it stands 8 px under it.
     pub(super) fn show_review_with_menu(&mut self, (at, button): ((u16, u16), bool)) {
-        self.agents
-            .look_for_agents(&self.settings.agents, &self.settings.disabled_agents);
+        self.agents.look_for_agents(
+            &self.settings.agents,
+            &self.settings.disabled_agents,
+            &self.side_path(),
+        );
         let theme = &self.theme;
         let mut items: Vec<MenuItem> = self
             .agents

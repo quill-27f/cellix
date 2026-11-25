@@ -9940,8 +9940,21 @@ impl App {
             Command::MaximizeEditor => self.toggle_maximized(Maximized::Editor),
             Command::OpenSettings => {
                 let closing = self.settings_page.is_some();
+                if !closing {
+                    self.refresh_agents();
+                }
                 self.settings_page =
                     (!closing).then(|| SettingsPage::new(Found::look(&self.machine)));
+                // The Default agent row's own runners, kept in step with what's offered.
+                if let Some(page) = self.settings_page.as_mut() {
+                    page.custom_agents = self
+                        .agents
+                        .installed_agents()
+                        .iter()
+                        .filter(|o| o.custom)
+                        .map(|o| o.name.clone())
+                        .collect();
+                }
                 self.refresh_shortcuts();
                 if !closing {
                     self.review = None;
@@ -11850,8 +11863,11 @@ impl App {
     /// Finds out what can be started and what's running.
     fn refresh_agents(&mut self) {
         self.agents.worktrees = worktrees(self.workspace.root());
-        self.agents
-            .look_for_agents(&self.settings.agents, &self.settings.disabled_agents);
+        self.agents.look_for_agents(
+            &self.settings.agents,
+            &self.settings.disabled_agents,
+            &self.side_path(),
+        );
         self.agents.scan(self.workspace.root());
     }
 
@@ -18153,6 +18169,21 @@ impl App {
                 self.settings.ask_agent = Some(name.to_string());
                 note = store("ask_agent", name.into());
             }
+            // One of the person's own runners, by its place in the row: its name is what
+            // `ask_agent` keeps, so Ask, Polish and Validate run it.
+            Control::DefaultCustom(i) => {
+                let name = self
+                    .agents
+                    .installed_agents()
+                    .iter()
+                    .filter(|o| o.custom)
+                    .nth(i)
+                    .map(|o| o.name.clone());
+                if let Some(name) = name {
+                    self.settings.ask_agent = Some(name.clone());
+                    note = store("ask_agent", name.into());
+                }
+            }
             Control::Keymap(name) => {
                 (self.vim, self.neovim) = keymap_engines(Some(name));
                 if name == "neovim" && self.neovim.is_none() {
@@ -18849,6 +18880,15 @@ impl App {
                 workflow::AutoSave::AfterDelay => "after_delay",
                 workflow::AutoSave::OnFocusChange => "on_focus_change",
             };
+            // The person's own runners that work, by name: the Default agent row offers
+            // each after the built-ins.
+            let custom_names: Vec<&str> = self
+                .agents
+                .installed_agents()
+                .iter()
+                .filter(|o| o.custom)
+                .map(|o| o.name.as_str())
+                .collect();
             let values = Values {
                 theme: &chosen,
                 row_height: crate::settings::row_height_name(self.settings.row_height.as_deref()),
@@ -18863,9 +18903,20 @@ impl App {
                 cursor_blink: self.settings.cursor_blink != Some(false),
                 auto_save,
                 notify: self.settings.notify != Some(false),
-                default_agent: crate::settings::default_agent_name(
-                    self.settings.ask_agent.as_deref(),
-                ),
+                default_agent: self
+                    .settings
+                    .ask_agent
+                    .as_deref()
+                    .filter(|set| {
+                        self.agents
+                            .installed_agents()
+                            .iter()
+                            .any(|o| o.custom && o.name == *set)
+                    })
+                    .unwrap_or(crate::settings::default_agent_name(
+                        self.settings.ask_agent.as_deref(),
+                    )),
+                custom_agents: &custom_names,
             };
             let area = self.sheet_area();
             page.draw(grid, area, &values, (self.hover, &*self.measure), theme);
