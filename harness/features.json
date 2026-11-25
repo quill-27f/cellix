@@ -7845,5 +7845,12 @@
     "title": "Ask, Polish, Validate and remote doc reads run a runner's own command where the Default agent names one (its like's treatment, its own name on the card), and a kept session of it resumes with its like agent's flags",
     "test": "polish_runs_a_runner_as_the_default_agent",
     "passes": true
+  },
+  {
+    "id": "agents-on-off",
+    "milestone": 15,
+    "title": "Every agent has an on/off switch in Settings' Your agents card, kept as disabled_agents: off, it's offered nowhere new (the + menu, Review with…, New Worktree, the Default agent row, which Auto answers for), what's running keeps its tab and resumes, and turning it back on offers it again",
+    "test": "agents_turned_off_are_offered_nowhere_new_and_back_when_on",
+    "passes": true
   }
 ]

@@ -40,8 +40,12 @@ const AGENT_WIDTH: u16 = 9;
 fn custom_agent_width(name: &str) -> u16 {
     name.chars().count() as u16 + 2
 }
-fn default_agent_total(customs: &[String]) -> u16 {
-    AGENT_WIDTH * 4 + customs.iter().map(|n| custom_agent_width(n)).sum::<u16>()
+fn default_agent_total(customs: &[String], disabled: &[String]) -> u16 {
+    let on = DEFAULT_AGENTS
+        .iter()
+        .filter(|(name, _)| !disabled.iter().any(|d| d == *name))
+        .count() as u16;
+    AGENT_WIDTH * on + customs.iter().map(|n| custom_agent_width(n)).sum::<u16>()
 }
 /// Where the Default agent row and the integration cards start on Integrations, which
 /// scrolls whole where the window is short of room for every card.
@@ -185,7 +189,7 @@ pub enum Section {
 }
 
 /// Anything on the page that takes a click.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Control {
     Section(Section),
     Theme(&'static str),
@@ -237,6 +241,8 @@ pub enum Control {
     AddFound(usize),
     /// The form to add a runner of the person's own.
     AddAgent,
+    /// Turn an agent on or off, by its command (a built-in) or its name (a runner).
+    ToggleAgent(String),
 }
 
 /// The settings as they stand, passed in so the page holds no second copy.
@@ -278,7 +284,7 @@ const VIEW_SWITCHES: [Control; 4] = [
 ];
 
 /// One row of what the filter found, whichever page it's from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Row {
     Theme,
     /// How tall a row is.
@@ -354,7 +360,7 @@ fn draw_category(
 }
 
 impl Row {
-    fn section(self) -> Section {
+    fn section(&self) -> Section {
         match self {
             Row::Theme | Row::Height => Section::Appearance,
             Row::Switch(Control::FormatOnSave | Control::ReadingWidth | Control::CursorBlink) => {
@@ -368,7 +374,7 @@ impl Row {
     }
 
     /// Rows it takes, with the air under it.
-    fn rows(self) -> u16 {
+    fn rows(&self) -> u16 {
         match self {
             Row::Server(_) | Row::Shortcut(_) => 1,
             Row::Block(_) => BLOCK_STEP,
@@ -443,6 +449,9 @@ pub struct Found {
     pub gemini_installed: bool,
     pub kiro: bool,
     pub kiro_installed: bool,
+    pub opencode: bool,
+    pub copilot: bool,
+    pub cursor: bool,
     /// Whether terminal-browser is on the path.
     pub browser: bool,
     /// Whether Ghostty keeps Cmd+D, when this is Ghostty.
@@ -465,6 +474,9 @@ impl Found {
             gemini_installed: integrations::gemini_installed(var),
             kiro: integrations::on_path("kiro-cli", var),
             kiro_installed: integrations::kiro_installed(var),
+            opencode: integrations::on_path("opencode", var),
+            copilot: integrations::on_path("copilot", var),
+            cursor: integrations::on_path("cursor-agent", var),
             browser: integrations::on_path("terminal-browser", var),
             ghostty_keeps_cmd_d: integrations::ghostty_keeps_cmd_d(var),
             // Where installs put them too, which the PATH may lack.
@@ -522,6 +534,8 @@ pub struct AgentRow {
     pub main: (String, Control),
     /// A second, quiet button beside it, where there's one.
     pub quiet: Option<(String, Control)>,
+    /// An on/off switch, by the command or name it turns off; the row's rightmost control.
+    pub toggle: (String, bool),
 }
 
 /// One card on the Integrations page.
@@ -552,6 +566,8 @@ pub struct SettingsPage {
     pub runners: Vec<(String, &'static str)>,
     /// The runners whose command isn't there, by name: the card says so.
     pub missing: Vec<String>,
+    /// Agents turned off, by command (a built-in) or name (a runner): their switches.
+    pub disabled: Vec<String>,
     pub section: Section,
     /// The control the keyboard is on, as an index into `controls`.
     pub focus: Option<usize>,
@@ -597,6 +613,7 @@ impl SettingsPage {
             agents: Vec::new(),
             runners: Vec::new(),
             missing: Vec::new(),
+            disabled: Vec::new(),
             section: Section::Appearance,
             focus: None,
             found,
@@ -646,8 +663,8 @@ impl SettingsPage {
         }
         let switches = |section: Section, rows: &mut Vec<Row>| {
             for (control, words) in SWITCHES {
-                if Row::Switch(control).section() == section && pair(words) {
-                    rows.push(Row::Switch(control));
+                if Row::Switch(control.clone()).section() == section && pair(words) {
+                    rows.push(Row::Switch(control.clone()));
                 }
             }
         };
@@ -706,15 +723,16 @@ impl SettingsPage {
         let mut y = page.y;
         let mut short = false;
         for row in self.found_rows().into_iter().skip(self.found_top) {
-            if short && row.rows() > 1 {
+            let rows = row.rows();
+            if short && rows > 1 {
                 y += 1;
             }
-            if y + row.rows().min(2) > page.bottom() {
+            if y + rows.min(2) > page.bottom() {
                 break;
             }
-            placed.push((row, y));
-            short = row.rows() == 1;
-            y += row.rows();
+            placed.push((row.clone(), y));
+            short = rows == 1;
+            y += rows;
         }
         placed
     }
@@ -831,16 +849,46 @@ impl SettingsPage {
         BLOCKS_ROW + self.blocks().len() as u16 * BLOCK_STEP
     }
 
-    /// How many rows the Your agents card takes: one per runner and one per found runner,
-    /// and a row for Add Agent.
+    /// How many rows the Your agents card takes: one per agent (built-ins and the person's
+    /// runners alike, each with its switch), one per found runner, and a row for Add Agent.
     fn agent_rows_len(&self) -> u16 {
-        (self.agents.len() + self.runners.len() + 1) as u16 * BLOCK_STEP
+        (crate::agents::AGENTS.len() + self.agents.len() + self.runners.len() + 1) as u16
+            * BLOCK_STEP
     }
 
-    /// The card's rows: the person's own runners, each with Edit and Remove; runners found
-    /// on the PATH, each with Add; and Add Agent at the foot.
+    /// The card's rows: every agent Cellix knows, installed or not, with an on/off switch;
+    /// the person's own runners with their switch and Edit and Remove; runners found on the
+    /// PATH, each with Add; and Add Agent at the foot.
     fn agent_rows(&self) -> Vec<AgentRow> {
         let mut rows = Vec::new();
+        let off = |name: &str| self.disabled.iter().any(|d| d == name);
+        let found = &self.found;
+        for (name, program) in crate::agents::AGENTS {
+            let on_path = match program {
+                "claude" => found.claude || found.claude_installed,
+                "codex" => found.codex || found.codex_installed,
+                "gemini" => found.gemini || found.gemini_installed,
+                "opencode" => found.opencode,
+                "copilot" => found.copilot,
+                "cursor-agent" => found.cursor,
+                "kiro-cli" => found.kiro || found.kiro_installed,
+                _ => false,
+            };
+            let (tone, badge) = if on_path {
+                (Tone::Good, "installed")
+            } else {
+                (Tone::Quiet, "not installed")
+            };
+            rows.push(AgentRow {
+                name: name.to_string(),
+                badge: badge.to_string(),
+                detail: program.to_string(),
+                tone,
+                main: ("".to_string(), Control::ToggleAgent(program.to_string())),
+                quiet: None,
+                toggle: (program.to_string(), !off(program)),
+            });
+        }
         for (index, agent) in self.agents.iter().enumerate() {
             let known = crate::agents::AGENTS.iter().any(|(_, p)| *p == agent.like);
             let there = !self.missing.contains(&agent.command);
@@ -862,6 +910,7 @@ impl SettingsPage {
                 tone,
                 main: ("Edit".to_string(), Control::EditAgent(index)),
                 quiet: Some(("Remove".to_string(), Control::RemoveAgent(index))),
+                toggle: (agent.name.clone(), !off(&agent.name)),
             });
         }
         for (index, (command, like)) in self.runners.iter().enumerate() {
@@ -873,6 +922,7 @@ impl SettingsPage {
                 tone: Tone::Quiet,
                 main: (format!("Add as {name}"), Control::AddFound(index)),
                 quiet: None,
+                toggle: (String::new(), true),
             });
         }
         rows
@@ -1165,10 +1215,14 @@ impl SettingsPage {
                 let y = self.integration_row(page, AGENT_ROW, 2);
                 let start = page
                     .right()
-                    .saturating_sub(default_agent_total(&self.custom_agents));
-                for (i, (name, _)) in DEFAULT_AGENTS.iter().enumerate() {
-                    let x = start + i as u16 * AGENT_WIDTH;
+                    .saturating_sub(default_agent_total(&self.custom_agents, &self.disabled));
+                let mut x = start;
+                for (name, _) in DEFAULT_AGENTS
+                    .iter()
+                    .filter(|(name, _)| !self.disabled.iter().any(|d| d == *name))
+                {
                     spots.push((place(y, x, (AGENT_WIDTH, 1)), Control::DefaultAgent(name)));
+                    x += AGENT_WIDTH;
                 }
                 let mut x = start + AGENT_WIDTH * 4;
                 for (i, name) in self.custom_agents.iter().enumerate() {
@@ -1178,21 +1232,29 @@ impl SettingsPage {
                 }
                 let x = page.right().saturating_sub(BUTTON_WIDTH + 2);
                 for (index, block) in self.blocks().iter().enumerate() {
-                    if let Some((_, _, control)) = block.action {
+                    if let Some((_, _, control)) = &block.action {
                         let y = self.integration_row(page, Self::block_row(index), 3);
-                        spots.push((place(y, x, (BUTTON_WIDTH, 2)), control));
+                        spots.push((place(y, x, (BUTTON_WIDTH, 2)), control.clone()));
                     }
                 }
                 let card = self.agents_card_row();
                 for (index, row) in self.agent_rows().iter().enumerate() {
                     let y = self.integration_row(page, card + index as u16 * BLOCK_STEP, 3);
-                    let main_wide = BUTTON_WIDTH.max(row.main.0.chars().count() as u16 + 2);
-                    let x = page.right().saturating_sub(main_wide + 2);
-                    spots.push((place(y, x, (main_wide, 2)), row.main.1));
-                    if let Some((label, control)) = &row.quiet {
-                        let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
-                        let x = x.saturating_sub(wide + 1);
-                        spots.push((place(y, x, (wide, 2)), *control));
+                    let toggle = TOGGLE_WIDTH.ceil() as u16;
+                    let right = page.right().saturating_sub(toggle + 2);
+                    spots.push((
+                        place(y, right, (toggle, 2)),
+                        Control::ToggleAgent(row.toggle.0.clone()),
+                    ));
+                    if !row.main.0.is_empty() {
+                        let main_wide = BUTTON_WIDTH.max(row.main.0.chars().count() as u16 + 2);
+                        let x = right.saturating_sub(main_wide + 1);
+                        spots.push((place(y, x, (main_wide, 2)), row.main.1.clone()));
+                        if let Some((label, control)) = &row.quiet {
+                            let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
+                            let x = x.saturating_sub(wide + 1);
+                            spots.push((place(y, x, (wide, 2)), control.clone()));
+                        }
                     }
                 }
                 let y = self.integration_row(page, card + self.agent_rows_len() - BLOCK_STEP, 1);
@@ -1254,10 +1316,15 @@ impl SettingsPage {
                 Row::DefaultAgent => {
                     let start = page
                         .right()
-                        .saturating_sub(default_agent_total(&self.custom_agents));
-                    for (i, (name, _)) in DEFAULT_AGENTS.iter().enumerate() {
-                        let rect = Rect::new(start + i as u16 * AGENT_WIDTH, y, AGENT_WIDTH, 1);
+                        .saturating_sub(default_agent_total(&self.custom_agents, &self.disabled));
+                    let mut x = start;
+                    for (name, _) in DEFAULT_AGENTS
+                        .iter()
+                        .filter(|(name, _)| !self.disabled.iter().any(|d| d == *name))
+                    {
+                        let rect = Rect::new(x, y, AGENT_WIDTH, 1);
                         spots.push((rect, Control::DefaultAgent(name)));
+                        x += AGENT_WIDTH;
                     }
                     let mut x = start + AGENT_WIDTH * 4;
                     for (i, name) in self.custom_agents.iter().enumerate() {
@@ -1274,9 +1341,9 @@ impl SettingsPage {
                     }
                 }
                 Row::Block(index) => {
-                    if let Some((_, _, control)) = blocks[index].action {
+                    if let Some((_, _, control)) = &blocks[index].action {
                         let x = page.right().saturating_sub(BUTTON_WIDTH + 2);
-                        spots.push((Rect::new(x, y, BUTTON_WIDTH, 2), control));
+                        spots.push((Rect::new(x, y, BUTTON_WIDTH, 2), control.clone()));
                     }
                 }
                 Row::Shortcut(index) => {
@@ -1353,7 +1420,7 @@ impl SettingsPage {
         spots
             .iter()
             .find(|(r, _)| r.contains(x, y))
-            .map(|(_, c)| *c)
+            .map(|(_, c)| c.clone())
     }
 
     pub fn step(&mut self, area: Rect, delta: isize) {
@@ -1404,7 +1471,7 @@ impl SettingsPage {
         let index = self
             .blocks()
             .iter()
-            .position(|b| b.action.is_some_and(|(_, _, c)| c == control))?;
+            .position(|b| b.action.as_ref().is_some_and(|(_, _, c)| *c == control))?;
         Some((Self::block_row(index), 3))
     }
 
@@ -1422,7 +1489,7 @@ impl SettingsPage {
     }
 
     pub fn focused(&self, area: Rect) -> Option<Control> {
-        Some(self.controls(area).get(self.focus?)?.1)
+        Some(self.controls(area).get(self.focus?)?.1.clone())
     }
 
     pub fn draw(
@@ -1441,7 +1508,7 @@ impl SettingsPage {
         };
         for (rect, control) in &spots {
             if let Control::Section(section) = control {
-                let state = (hovered(*control), measure.in_cells());
+                let state = (hovered(control.clone()), measure.in_cells());
                 self.draw_section_tab(grid, *rect, *section, state, theme);
             }
         }
@@ -1471,14 +1538,14 @@ impl SettingsPage {
                     match control {
                         Control::Theme(name) => {
                             let on = values.theme == *name;
-                            draw_card(grid, *rect, name, (on, hovered(*control)), theme);
+                            draw_card(grid, *rect, name, (on, hovered(control.clone())), theme);
                         }
                         // Drawn together, as one track, after this.
                         Control::RowHeight(_) => {}
                         _ => {
                             let words = SWITCHES.iter().find(|(switch, _)| switch == control);
                             if let Some((_, words)) = words {
-                                let on = switch_on(*control, values);
+                                let on = switch_on(control.clone(), values);
                                 draw_toggle(grid, page, rect.y, *words, on, (theme, measure));
                             }
                         }
@@ -1738,12 +1805,15 @@ impl SettingsPage {
             ..Font::default()
         };
         // The page a row is from, after its name, when there's room before what follows.
-        let tag = |grid: &mut Grid, (name, font): (&str, Font), (y, stop): (u16, u16), row: Row| {
+        let tag = |grid: &mut Grid,
+                   (name, font): (&str, Font),
+                   (y, stop): (u16, u16),
+                   section: Section| {
             let quiet = Style {
                 fg: theme.gutter.fg,
                 ..theme.text
             };
-            let word = section_name(row.section());
+            let word = section_name(section);
             let x = page.x as f32 + measure.width(name, font) + 1.0;
             let size = Font {
                 size: NOTE_SIZE,
@@ -1763,7 +1833,7 @@ impl SettingsPage {
                     .iter()
                     .filter(|(r, _)| r.y == y && r.h == 1)
                     .filter_map(|(rect, control)| {
-                        let (word, on) = label(*control)?;
+                        let (word, on) = label(control.clone())?;
                         Some((*rect, word, on))
                     })
                     .collect();
@@ -1777,12 +1847,13 @@ impl SettingsPage {
         let shared = keys::sharing(&self.shortcuts);
         let blocks = self.blocks();
         for (row, y) in placed {
+            let section = row.section();
             match row {
                 Row::Theme => {
                     rule(grid, y);
                     let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
                     draw_text(grid, page, (y, room), THEME, theme);
-                    tag(grid, (THEME.0, bold), (y, room), row);
+                    tag(grid, (THEME.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::Theme(name) => {
                             let word = THEME_SHORT.iter().find(|t| t.0 == name)?.1;
@@ -1803,13 +1874,13 @@ impl SettingsPage {
                         (theme, measure),
                     );
                     let stop = page.right().saturating_sub(TOGGLE_WIDTH.ceil() as u16 + 2);
-                    tag(grid, (words.0, bold), (y, stop), row);
+                    tag(grid, (words.0, bold), (y, stop), section);
                 }
                 Row::AutoSave => {
                     rule(grid, y);
                     let room = page.right().saturating_sub(AUTO_SAVE_WIDTH * 3 + 1);
                     draw_text(grid, page, (y, room), AUTO_SAVE, theme);
-                    tag(grid, (AUTO_SAVE.0, bold), (y, room), row);
+                    tag(grid, (AUTO_SAVE.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::AutoSave(name) => {
                             let word = AUTO_SAVES.iter().find(|a| a.0 == name)?.1;
@@ -1822,7 +1893,7 @@ impl SettingsPage {
                     rule(grid, y);
                     let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
                     draw_text(grid, page, (y, room), ROW_HEIGHT, theme);
-                    tag(grid, (ROW_HEIGHT.0, bold), (y, room), row);
+                    tag(grid, (ROW_HEIGHT.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::RowHeight(name) => {
                             let word = ROW_HEIGHTS.iter().find(|r| r.0 == name)?.1;
@@ -1835,7 +1906,7 @@ impl SettingsPage {
                     rule(grid, y);
                     let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
                     draw_text(grid, page, (y, room), KEYMAP, theme);
-                    tag(grid, (KEYMAP.0, bold), (y, room), row);
+                    tag(grid, (KEYMAP.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::Keymap(name) => {
                             let word = KEYMAPS.iter().find(|k| k.0 == name)?.1;
@@ -1846,11 +1917,11 @@ impl SettingsPage {
                 }
                 Row::DefaultAgent => {
                     rule(grid, y);
-                    let room = page
-                        .right()
-                        .saturating_sub(default_agent_total(&self.custom_agents) + 1);
+                    let room = page.right().saturating_sub(
+                        default_agent_total(&self.custom_agents, &self.disabled) + 1,
+                    );
                     draw_text(grid, page, (y, room), DEFAULT_AGENT, theme);
-                    tag(grid, (DEFAULT_AGENT.0, bold), (y, room), row);
+                    tag(grid, (DEFAULT_AGENT.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::DefaultAgent(name) => {
                             let word = DEFAULT_AGENTS.iter().find(|a| a.0 == name)?.1;
@@ -1871,7 +1942,7 @@ impl SettingsPage {
                         grid,
                         (name, Font::default()),
                         (y, page.x + SERVER_DETAIL.1 - 1),
-                        row,
+                        section,
                     );
                 }
                 Row::Block(index) => {
@@ -1882,9 +1953,9 @@ impl SettingsPage {
                     };
                     let text = (block.name, block.state, colour);
                     draw_block(grid, page, (y, measure), text, block.detail, theme);
-                    if let Some((label, _, control)) = block.action
+                    if let Some((label, _, control)) = &block.action
                         && let Some((rect, _)) =
-                            spots.iter().find(|(r, c)| *c == control && r.y == y)
+                            spots.iter().find(|(r, c)| *c == *control && r.y == y)
                     {
                         draw_button(grid, *rect, label, false, (hover, measure), theme);
                     }
@@ -1898,7 +1969,7 @@ impl SettingsPage {
                         grid,
                         (&name, Font::default()),
                         (y, keys_x.saturating_sub(2)),
-                        row,
+                        section,
                     );
                 }
             }
@@ -2453,14 +2524,17 @@ impl SettingsPage {
                 Tone::Quiet => theme.gutter.fg,
             };
             let text = (block.name, block.state, color);
-            let primary = block.action.is_some_and(|(_, primary, _)| primary);
+            let primary = block
+                .action
+                .as_ref()
+                .is_some_and(|(_, primary, _)| *primary);
             let primary = primary && std::mem::take(&mut primary_left);
             let Some(top) = self.integration_row(page, Self::block_row(index), 3) else {
                 continue;
             };
             draw_block(grid, page, (top, measure), text, block.detail, theme);
-            if let Some((label, _, control)) = block.action {
-                let spot = buttons.iter().find(|(_, c)| *c == control);
+            if let Some((label, _, control)) = &block.action {
+                let spot = buttons.iter().find(|(_, c)| *c == *control);
                 if let Some((rect, _)) = spot {
                     draw_button(grid, *rect, label, primary, (hover, measure), theme);
                 }
@@ -2486,13 +2560,27 @@ impl SettingsPage {
                 theme,
             );
             let buttons = self.controls_at(page);
-            if let Some((rect, _)) = buttons.iter().find(|(_, c)| *c == row.main.1) {
-                draw_button(grid, *rect, &row.main.0, false, (hover, measure), theme);
-            }
-            if let Some((label, control)) = &row.quiet
-                && let Some((rect, _)) = buttons.iter().find(|(_, c)| c == control)
+            if let Some((rect, _)) = buttons
+                .iter()
+                .find(|(_, c)| *c == Control::ToggleAgent(row.toggle.0.clone()))
             {
-                draw_button(grid, *rect, label, false, (hover, measure), theme);
+                grid.panel(
+                    Bounds::cells(rect.x as f32, rect.y as f32, rect.w as f32, 2.0),
+                    0,
+                    Some(theme.popup),
+                    None,
+                );
+                draw_switch_knob(grid, page, rect.y, row.toggle.1, (theme, measure));
+            }
+            if !row.main.0.is_empty() {
+                if let Some((rect, _)) = buttons.iter().find(|(_, c)| *c == row.main.1) {
+                    draw_button(grid, *rect, &row.main.0, false, (hover, measure), theme);
+                }
+                if let Some((label, control)) = &row.quiet
+                    && let Some((rect, _)) = buttons.iter().find(|(_, c)| c == control)
+                {
+                    draw_button(grid, *rect, label, false, (hover, measure), theme);
+                }
             }
         }
         let add_row = card + self.agent_rows_len() - BLOCK_STEP;
@@ -2523,11 +2611,11 @@ impl SettingsPage {
         let placed = blocks.iter().enumerate();
         let mut out: Vec<(Rect, Control)> = placed
             .filter_map(|(index, block)| {
-                let (label, _, control) = block.action?;
+                let (label, _, control) = block.action.as_ref()?;
                 let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
                 let x = page.right().saturating_sub(wide + 2);
                 let y = self.integration_row(page, Self::block_row(index), 3)?;
-                Some((Rect::new(x, y, wide, 2), control))
+                Some((Rect::new(x, y, wide, 2), control.clone()))
             })
             .collect();
         let card = self.agents_card_row();
@@ -2535,13 +2623,21 @@ impl SettingsPage {
             let Some(y) = self.integration_row(page, card + index as u16 * BLOCK_STEP, 3) else {
                 continue;
             };
-            let main_wide = BUTTON_WIDTH.max(row.main.0.chars().count() as u16 + 2);
-            let x = page.right().saturating_sub(main_wide + 2);
-            out.push((Rect::new(x, y, main_wide, 2), row.main.1));
-            if let Some((label, control)) = &row.quiet {
-                let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
-                let x = x.saturating_sub(wide + 1);
-                out.push((Rect::new(x, y, wide, 2), *control));
+            let toggle = TOGGLE_WIDTH.ceil() as u16;
+            let right = page.right().saturating_sub(toggle + 2);
+            out.push((
+                Rect::new(right, y, toggle, 2),
+                Control::ToggleAgent(row.toggle.0.clone()),
+            ));
+            if !row.main.0.is_empty() {
+                let main_wide = BUTTON_WIDTH.max(row.main.0.chars().count() as u16 + 2);
+                let x = right.saturating_sub(main_wide + 1);
+                out.push((Rect::new(x, y, main_wide, 2), row.main.1.clone()));
+                if let Some((label, control)) = &row.quiet {
+                    let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
+                    let x = x.saturating_sub(wide + 1);
+                    out.push((Rect::new(x, y, wide, 2), control.clone()));
+                }
             }
         }
         if let Some(y) = self.integration_row(page, card + self.agent_rows_len() - BLOCK_STEP, 1) {
@@ -2718,6 +2814,18 @@ fn draw_toggle(
     grid.hairline(above, theme.border);
     let room = page.right().saturating_sub(TOGGLE_WIDTH.ceil() as u16 + 2);
     draw_text(grid, page, (y, room), text, theme);
+    draw_switch_knob(grid, page, y, on, (theme, measure));
+}
+
+/// A switch's track and knob alone, at the page's right: what the rows of the Your agents
+/// card carry, whose words are their own.
+fn draw_switch_knob(
+    grid: &mut Grid,
+    page: Rect,
+    y: u16,
+    on: bool,
+    (theme, measure): (&Theme, &dyn Measure),
+) {
     let right = page.right() as f32;
     let ((left, top, width, height, radius), knob) = switch_shape(measure);
     let x = right - left;
@@ -2978,14 +3086,21 @@ mod tests {
         assert!(spots.contains(&(spots[4].0, Control::Theme("auto"))));
         assert!(spots.iter().any(|(_, c)| *c == Control::Motion));
         for (rect, control) in &spots {
-            assert_eq!(settings.control_at(area, rect.x, rect.y), Some(*control));
+            assert_eq!(
+                settings.control_at(area, rect.x, rect.y),
+                Some(control.clone())
+            );
         }
         for _ in 0..spots.len() {
             settings.step(area, 1);
         }
-        assert_eq!(settings.focused(area), spots.last().map(|s| s.1));
+        assert_eq!(settings.focused(area), spots.last().map(|s| s.1.clone()));
         settings.step(area, 1);
-        assert_eq!(settings.focused(area), Some(spots[0].1), "and it wraps");
+        assert_eq!(
+            settings.focused(area),
+            Some(spots[0].1.clone()),
+            "and it wraps"
+        );
     }
 
     #[test]
@@ -3085,7 +3200,7 @@ mod tests {
             let block = blocks.iter().find(|b| b.name == "Kiro CLI")?;
             let offered = s.controls(AREA).iter().any(|c| c.1 == Control::Kiro);
             assert!(offered, "its button is where a click lands");
-            Some((block.state, block.action.map(|a| a.0)))
+            Some((block.state, block.action.as_ref().map(|a| a.0)))
         };
         assert_eq!(kiro(&settings), None, "not here: not listed");
         settings.found.kiro = true;
@@ -3127,20 +3242,23 @@ mod tests {
         assert_eq!(agents.len(), 4);
         for (rect, control) in &agents {
             assert!(rect.h > 0, "{control:?} in view at the top");
-            assert_eq!(settings.control_at(short, rect.x, rect.y), Some(*control));
+            assert_eq!(
+                settings.control_at(short, rect.x, rect.y),
+                Some(control.clone())
+            );
         }
         let last = |s: &SettingsPage| {
             let spots = s.controls(short);
             spots
                 .iter()
-                .find(|(_, c)| *c == Control::Ghostty)
+                .find(|(_, c)| *c == Control::AddAgent)
                 .unwrap()
                 .0
         };
         assert_eq!(
             last(&settings).h,
             0,
-            "the last card is under the window's foot"
+            "the page's last control is under the window's foot"
         );
         assert!(
             settings.scrolled(short).is_some(),
@@ -3151,7 +3269,7 @@ mod tests {
         assert!(rect.h > 0 && rect.bottom() <= short.bottom(), "{rect:?}");
         assert_eq!(
             settings.control_at(short, rect.x, rect.y),
-            Some(Control::Ghostty)
+            Some(Control::AddAgent)
         );
         // Scrolled, the Default agent is out of view, and no press lands on it.
         let spots = settings.controls(short);

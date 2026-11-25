@@ -193,8 +193,10 @@ impl App {
             .agent_session()
             .and_then(|session| Cli::from_agent(&session.name));
         let setting = self.settings.ask_agent.as_deref();
+        let disabled = &self.settings.disabled_agents;
         ask::choose(setting, pane, |cli| {
             ask::find(cli.program(), &path).is_some()
+                && !disabled.iter().any(|d| d == cli.program())
         })
     }
 
@@ -205,6 +207,11 @@ impl App {
         let path = self.side_path();
         if let Some(set) = self.settings.ask_agent.as_deref()
             && let Some(agent) = self.settings.agents.iter().find(|a| a.name == set)
+            && !self
+                .settings
+                .disabled_agents
+                .iter()
+                .any(|d| d == &agent.name)
             && let Some(cli) = Cli::from_setting(&agent.like)
             && crate::ask::find(&agent.command, &path).is_some()
         {

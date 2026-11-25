@@ -344,6 +344,9 @@ enum Line {
     /// A row with a line across its middle, between the terminal and the agents to start, as
     /// the + menu has; a blank row on cells, which have no hairline.
     Rule,
+    /// Nothing to start but the terminal: every agent is off or uninstalled, and this says
+    /// where to turn them on.
+    NoneOn,
 }
 
 /// An agent Cellix offers to start: one of `AGENTS`, or the person's own runner from the
@@ -611,10 +614,14 @@ impl Agents {
             let (terminal, agents): (Vec<_>, Vec<_>) =
                 self.installed.iter().enumerate().partition(shell);
             lines.extend(terminal.iter().map(|(index, _)| Line::Start(*index)));
-            if !terminal.is_empty() && !agents.is_empty() {
-                lines.push(Line::Rule);
+            if agents.is_empty() {
+                lines.push(Line::NoneOn);
+            } else {
+                if !terminal.is_empty() {
+                    lines.push(Line::Rule);
+                }
+                lines.extend(agents.iter().map(|(index, _)| Line::Start(*index)));
             }
-            lines.extend(agents.iter().map(|(index, _)| Line::Start(*index)));
         }
         if !self.worktrees.is_empty() {
             lines.push(Line::Gap);
@@ -803,6 +810,20 @@ impl Agents {
                     let stop = right.saturating_sub(wide + 1).max(side + 3);
                     grid.label(side + 2, y, &offered.name, theme.sidebar, stop);
                     grid.label_right_at(end, right, y, shown, dim, DETAIL_SIZE);
+                }
+                Line::NoneOn => {
+                    // Small and quiet, as a hint is, naming where the switches are.
+                    let hint = Style {
+                        fg: crate::theme::mix(theme.gutter.fg, theme.sidebar.bg, 0.35),
+                        ..theme.sidebar
+                    };
+                    grid.label(
+                        side,
+                        y,
+                        "No agents turned on · Settings › Integrations",
+                        hint,
+                        area.right(),
+                    );
                 }
                 Line::Rule => {
                     // In the middle of its own row, from where the rows' marks start to where

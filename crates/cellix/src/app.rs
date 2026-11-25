@@ -18082,7 +18082,7 @@ impl App {
     fn use_control(&mut self, control: Control) {
         let mut note = String::new();
         let var = |name: &str| std::env::var(name).ok();
-        match control {
+        match control.clone() {
             Control::Section(section) => {
                 if let Some(page) = &mut self.settings_page {
                     // With a filter typed, a page that has rows among what it found is gone
@@ -18258,6 +18258,20 @@ impl App {
                 }
             }
             Control::AddAgent => self.open_agent_form(None),
+            // An agent turned off is offered nowhere: `disabled_agents` keeps its command (a
+            // built-in) or its name (a runner), machine-wide, as every pick on the page is.
+            Control::ToggleAgent(key) => {
+                if self.settings.disabled_agents.iter().any(|d| d == &key) {
+                    self.settings.disabled_agents.retain(|d| d != &key);
+                } else {
+                    self.settings.disabled_agents.push(key.clone());
+                }
+                note = store(
+                    "disabled_agents",
+                    serde_json::to_value(&self.settings.disabled_agents).unwrap_or_default(),
+                );
+                self.refresh_settings_agents();
+            }
             Control::Keymap(name) => {
                 (self.vim, self.neovim) = keymap_engines(Some(name));
                 if name == "neovim" && self.neovim.is_none() {
@@ -18319,7 +18333,7 @@ impl App {
             }
         }
         if let Some(page) = &mut self.settings_page {
-            if matches!(control, Control::ClaudeCode | Control::Ghostty) {
+            if matches!(&control, Control::ClaudeCode | Control::Ghostty) {
                 page.found = Found::look(&self.machine);
             }
             page.note = note;
@@ -18342,10 +18356,10 @@ impl App {
             page.found.kiro_installed,
         );
         // What a server's Install runs here, as its row said while it was pointed at.
-        let plan = match control {
+        let plan = match &control {
             Control::InstallServer(index) => {
                 page.failed = None;
-                page.found.plan(index).cloned()
+                page.found.plan(*index).cloned()
             }
             _ => None,
         };
@@ -18353,6 +18367,7 @@ impl App {
         let (sender, receiver) = crate::wake::channel();
         page.note = "Working…".to_string();
         page.installing = Some(receiver);
+        let note_control = control.clone();
         page.installing_what = Some(control);
         self.say("Working…");
         std::thread::spawn(move || {
@@ -18360,7 +18375,7 @@ impl App {
             let said = |done: io::Result<()>, note: &str| {
                 done.map_or_else(|e| format!("Couldn't: {e}"), |()| note.to_string())
             };
-            let note = match control {
+            let note = match note_control {
                 Control::Codex if found.0 => {
                     said(crate::integrations::remove_codex(), "Removed from Codex.")
                 }
@@ -23204,6 +23219,7 @@ impl App {
                 })
                 .map(|agent| agent.command.clone())
                 .collect();
+            page.disabled = self.settings.disabled_agents.clone();
         }
         self.settings_page = page;
     }
@@ -27416,8 +27432,8 @@ mod tests {
         ];
         // On cells: the column its label ends at, at rest and pointed at.
         let mut app = open(false);
-        for (language, control, label) in rows {
-            let spot = settings_spot(&app, control).expect(language);
+        for (language, control, label) in rows.iter() {
+            let spot = settings_spot(&app, control.clone()).expect(language);
             let end = |app: &App| {
                 let row = screen(app).row_text(spot.y);
                 let at = row.find(label).unwrap_or_else(|| panic!("{label}: {row}"));
@@ -27431,8 +27447,8 @@ mod tests {
         // With pictures: where its painted label ends, and its ink in the picture.
         let mut app = open(true);
         let px = |units: i32| units as f32 / UNIT as f32 * 17.0;
-        for (language, control, label) in rows {
-            let spot = settings_spot(&app, control).expect(language);
+        for (language, control, label) in rows.iter() {
+            let spot = settings_spot(&app, control.clone()).expect(language);
             let painted = |grid: &Grid| {
                 (grid.paint.iter())
                     .find_map(|p| match p {

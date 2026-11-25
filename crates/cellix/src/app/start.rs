@@ -55,7 +55,11 @@ impl App {
                 .key(TERMINAL_KEY),
         ];
         let mut keys = AGENT_KEYS.iter().zip("123456789".chars());
-        for (index, (name, program)) in AGENTS.iter().enumerate() {
+        for (index, (name, program)) in AGENTS
+            .iter()
+            .filter(|(_, program)| !self.settings.disabled_agents.iter().any(|d| d == *program))
+            .enumerate()
+        {
             let (icon, color) = crate::agents::mark(program, theme);
             let item = MenuItem::new(*name, MenuAction::Start(program.to_string()));
             let item = if has(program) {

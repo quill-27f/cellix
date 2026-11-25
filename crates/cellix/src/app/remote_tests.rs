@@ -1618,6 +1618,12 @@ fn the_your_agents_card_lists_adds_edits_and_removes_runners() {
         tab.unwrap().0
     };
     click(&mut app, integrations.x + 1, integrations.y);
+    // The card is below the agents' cards: the page scrolls whole, and its rows come into
+    // view.
+    let area = app.sheet_area();
+    if let Some(page) = app.settings_page.as_mut() {
+        page.scroll_by(50, area);
+    }
     let grid = screen(&app);
     let text = grid.text();
     // The added runner, its command and what it works like; the found one, offered, added
@@ -1633,11 +1639,6 @@ fn the_your_agents_card_lists_adds_edits_and_removes_runners() {
     assert_eq!(app.settings.agents.len(), 2);
     assert_eq!(app.settings.agents[1].command, "codex-fast");
     assert_eq!(app.settings.agents[1].like, "codex");
-    // The card is below the agents' cards: the page scrolls whole.
-    let area = app.sheet_area();
-    if let Some(page) = app.settings_page.as_mut() {
-        page.scroll_by(20, area);
-    }
     // Edit opens the form filled with what it is.
     let grid = screen(&app);
     let (x, y) = on_row_of(&grid, "codex-fast", "Edit");
@@ -1718,4 +1719,122 @@ fn polish_runs_a_runner_as_the_default_agent() {
     // The doc is still read through Claude Code, not the runner, until the Default agent
     // names a runner that works like Claude Code.
     assert_eq!(thread_saying(&app, long).text, long);
+}
+
+/// Agents turned off are offered nowhere new: not the + menu, Review with…, New Worktree or
+/// the Default agent row, which Auto answers for; what's already running keeps its tab and
+/// can still be resumed; turned back on, they're offered again.
+#[test]
+fn agents_turned_off_are_offered_nowhere_new_and_back_when_on() {
+    let (dir, mut app) = project();
+    app.agents.pretend_installed(&["claude", "codex", "gemini"]);
+    // A Codex session already running, as one going keeps its tab however the switch stands.
+    stand_in(dir.path());
+    app.agent_program = Some(dir.path().join("bin/claude").display().to_string());
+    app.open_agent("codex");
+    let sessions = app.dock.sessions.len();
+    assert_eq!(sessions, 1);
+    // Turn Codex and Gemini off, on the Your agents card's switches.
+    app.run(Command::OpenSettings);
+    let integrations = {
+        let page = app.settings_page.as_ref().unwrap();
+        let spots = page.controls(app.sheet_area());
+        let section = crate::settings_page::Section::Integrations;
+        let tab = spots
+            .iter()
+            .find(|(_, c)| *c == crate::settings_page::Control::Section(section));
+        tab.unwrap().0
+    };
+    click(&mut app, integrations.x + 1, integrations.y);
+    let area = app.sheet_area();
+    if let Some(page) = app.settings_page.as_mut() {
+        page.scroll_by(20, area);
+    }
+    let off = |app: &mut App, key: &str| {
+        let page = app.settings_page.as_ref().unwrap();
+        let spot = page
+            .controls(app.sheet_area())
+            .into_iter()
+            .find(|(_, c)| matches!(c, crate::settings_page::Control::ToggleAgent(k) if k == key))
+            .map(|(rect, _)| rect)
+            .unwrap_or_else(|| panic!("no switch for {key}"));
+        click(app, spot.x + 1, spot.y);
+    };
+    off(&mut app, "codex");
+    off(&mut app, "gemini");
+    assert_eq!(
+        app.settings.disabled_agents,
+        vec!["codex".to_string(), "gemini".to_string()]
+    );
+    app.run(Command::CloseTab);
+    // Offered nowhere new: not the + menu, Review with…, nor New Worktree's choice. (The
+    // running Codex tab says "Codex" on the tab row; the menus' own rows are what's read.)
+    let labels = |app: &App| match &app.overlay {
+        super::Overlay::Menu(menu) => menu.labels(),
+        _ => panic!("no menu"),
+    };
+    app.show_start_menu((2, 2));
+    let menu = labels(&app);
+    assert!(
+        !menu.iter().any(|l| l == "Codex" || l == "Gemini CLI"),
+        "{menu:?}"
+    );
+    key(&mut app, Key::Esc);
+    app.run(Command::ReviewWith);
+    let menu = labels(&app);
+    assert!(
+        !menu.iter().any(|l| l == "Codex" || l == "Gemini CLI"),
+        "{menu:?}"
+    );
+    key(&mut app, Key::Esc);
+    app.run(Command::NewWorktree);
+    let shown = screen(&app).text();
+    assert!(
+        !shown.contains("Gemini CLI") && !shown.contains("  Codex  "),
+        "not a choice in New Worktree: {shown}"
+    );
+    key(&mut app, Key::Esc);
+    // The running Codex tab is untouched, and it can still be resumed.
+    assert_eq!(app.dock.sessions.len(), sessions);
+    // The Default agent row offers neither, and Auto answers.
+    app.run(Command::OpenSettings);
+    let integrations = {
+        let page = app.settings_page.as_ref().unwrap();
+        let spots = page.controls(app.sheet_area());
+        let section = crate::settings_page::Section::Integrations;
+        let tab = spots
+            .iter()
+            .find(|(_, c)| *c == crate::settings_page::Control::Section(section));
+        tab.unwrap().0
+    };
+    click(&mut app, integrations.x + 1, integrations.y);
+    let has = |app: &App, name: &str| {
+        app.settings_page
+            .as_ref()
+            .unwrap()
+            .controls(app.sheet_area())
+            .iter()
+            .any(|(_, c)| matches!(c, crate::settings_page::Control::DefaultAgent(n) if *n == name))
+    };
+    assert!(has(&app, "auto") && has(&app, "claude"));
+    assert!(
+        !has(&app, "codex") && !has(&app, "gemini"),
+        "turned off: not in the row"
+    );
+    // Turned back on, they're offered again.
+    let area = app.sheet_area();
+    if let Some(page) = app.settings_page.as_mut() {
+        page.scroll_by(20, area);
+    }
+    off(&mut app, "codex");
+    off(&mut app, "gemini");
+    assert!(app.settings.disabled_agents.is_empty());
+    app.run(Command::CloseTab);
+    app.show_start_menu((2, 2));
+    let menu = labels(&app);
+    assert!(
+        menu.iter().any(|l| l == "Codex") && menu.iter().any(|l| l == "Gemini CLI"),
+        "{menu:?}"
+    );
+    key(&mut app, Key::Esc);
 }
