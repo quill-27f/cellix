@@ -71,12 +71,34 @@ pub struct Settings {
     /// The order the Comments pane lists in: `document` (the default), `newest` or `oldest`.
     /// Picked from the pane's menu, it's kept here for every session on the machine.
     pub comment_sort: Option<String>,
-    /// Which agent's command line answers Ask's side questions: `claude`, `codex` or
-    /// `gemini`. Unset, the kind of agent in the side pane, else the first installed.
+    /// Which agent's command line answers Ask's side questions, Polish and Validate:
+    /// `claude`, `codex` or `gemini`. Unset or `auto`, the kind of agent in the side pane,
+    /// else the first installed. Settings › Integrations calls it the Default agent, and
+    /// `default_agent` names it too. Remote docs are read and posted through Claude Code
+    /// whatever it says.
+    #[serde(alias = "default_agent")]
     pub ask_agent: Option<String>,
     /// The MCP server, among those Claude Code knows, that a remote doc is read and posted
     /// through: its tools are the only ones the agent is allowed. Unset, the first review asks.
     pub remote_docs_mcp: Option<String>,
+}
+
+/// The agent choices `ask_agent` can name, in the order Settings shows them.
+pub const DEFAULT_AGENTS: [(&str, &str); 4] = [
+    ("auto", "Auto"),
+    ("claude", "Claude"),
+    ("codex", "Codex"),
+    ("gemini", "Gemini"),
+];
+
+/// Which default agent choice `ask_agent` names, whatever was written in it.
+pub fn default_agent_name(setting: Option<&str>) -> &'static str {
+    match setting.and_then(crate::ask::Cli::from_setting) {
+        Some(crate::ask::Cli::Claude) => "claude",
+        Some(crate::ask::Cli::Codex) => "codex",
+        Some(crate::ask::Cli::Gemini) => "gemini",
+        None => "auto",
+    }
 }
 
 /// The row heights `row_height` can name, with how many of the terminal's lines each is

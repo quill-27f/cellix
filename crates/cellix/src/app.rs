@@ -18068,6 +18068,12 @@ impl App {
                 self.settings.auto_save = Some(name.to_string());
                 note = store("auto_save", name.into());
             }
+            // Kept machine-wide, as every pick on the page is; Ask, Polish and Validate each
+            // read it when they start. Auto leaves it to the side pane's agent.
+            Control::DefaultAgent(name) => {
+                self.settings.ask_agent = Some(name.to_string());
+                note = store("ask_agent", name.into());
+            }
             Control::Keymap(name) => {
                 (self.vim, self.neovim) = keymap_engines(Some(name));
                 if name == "neovim" && self.neovim.is_none() {
@@ -18778,6 +18784,9 @@ impl App {
                 cursor_blink: self.settings.cursor_blink != Some(false),
                 auto_save,
                 notify: self.settings.notify != Some(false),
+                default_agent: crate::settings::default_agent_name(
+                    self.settings.ask_agent.as_deref(),
+                ),
             };
             let area = self.sheet_area();
             page.draw(grid, area, &values, (self.hover, &*self.measure), theme);

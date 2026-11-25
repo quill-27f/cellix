@@ -99,8 +99,14 @@ fn project() -> (TempDir, App) {
 /// A stand-in for `claude`: each run writes its arguments, one a line, its input and whether
 /// it was told it's a side run, then prints its run's lines, `claude.out.<run>`.
 fn stand_in(dir: &Path) {
+    stand_in_for(dir, "claude");
+}
+
+/// The same stand-in under another command line's name, `codex` or `gemini`, keeping its own
+/// record of each run.
+fn stand_in_for(dir: &Path, program: &str) {
     let bin = dir.join("bin");
-    let record = bin.join("claude");
+    let record = bin.join(program);
     let script = format!(
         "#!/bin/sh\n\
          n=$(/bin/cat '{rec}.runs' 2>/dev/null || echo 0); n=$((n + 1)); echo $n > '{rec}.runs'\n\
@@ -120,12 +126,20 @@ fn stand_in(dir: &Path) {
 
 /// What the stand-in prints on its `run`th run.
 fn answers(dir: &Path, run: usize, lines: &[String]) {
-    let out = dir.join("bin").join(format!("claude.out.{run}"));
+    answers_for(dir, "claude", run, lines);
+}
+
+fn answers_for(dir: &Path, program: &str, run: usize, lines: &[String]) {
+    let out = dir.join("bin").join(format!("{program}.out.{run}"));
     fs::write(out, lines.join("\n") + "\n").unwrap();
 }
 
 fn given(dir: &Path, run: usize) -> (Vec<String>, String, String) {
-    let base = dir.join("bin").join("claude");
+    given_for(dir, "claude", run)
+}
+
+fn given_for(dir: &Path, program: &str, run: usize) -> (Vec<String>, String, String) {
+    let base = dir.join("bin").join(program);
     let read = |what: &str| {
         fs::read_to_string(format!("{}.{what}.{run}", base.display())).unwrap_or_default()
     };
@@ -134,7 +148,11 @@ fn given(dir: &Path, run: usize) -> (Vec<String>, String, String) {
 }
 
 fn runs(dir: &Path) -> usize {
-    let file = dir.join("bin").join("claude.runs");
+    runs_of(dir, "claude")
+}
+
+fn runs_of(dir: &Path, program: &str) -> usize {
+    let file = dir.join("bin").join(format!("{program}.runs"));
     fs::read_to_string(file)
         .ok()
         .and_then(|n| n.trim().parse().ok())
@@ -773,4 +791,92 @@ fn a_remote_cards_names_menu_and_marks_stand_as_the_board_has_them() {
     app.set_measure(std::rc::Rc::new(cellix_render::CellMeasure));
     press_on_card(&mut app, "What happens when one consumer is slow?", "Copy");
     assert_eq!(app.clipboard, "What happens when one consumer is slow?");
+}
+
+/// What Codex prints for a run that answers `answer`: its thread, its message, its turn's end.
+fn codex_printed(answer: &str) -> Vec<String> {
+    vec![
+        json!({"type": "thread.started", "thread_id": "codex-1"}).to_string(),
+        json!({"type": "item.completed", "item": {"type": "agent_message", "text": answer}})
+            .to_string(),
+        json!({"type": "turn.completed", "usage": {}}).to_string(),
+    ]
+}
+
+/// The row of the screen that says `words`, and the column `then` starts at on it.
+fn on_row_of(grid: &Grid, words: &str, then: &str) -> (u16, u16) {
+    let (_, y) = find(grid, words);
+    let row = grid.row_text(y);
+    let at = row
+        .find(then)
+        .unwrap_or_else(|| panic!("no {then:?} beside {words:?}: {row}"));
+    (row[..at].chars().count() as u16, y)
+}
+
+/// Settings › Integrations has a Default agent, Auto, Claude, Codex or Gemini, kept in the
+/// `ask_agent` setting: a press on Codex keeps it, and every card under it still shows. Polish
+/// then runs Codex, not Claude Code, read-only with nothing but its prompt, and says it's
+/// Codex's; the doc is still read through Claude Code, whatever the Default agent is.
+#[test]
+fn the_default_agent_is_picked_in_settings_and_polish_runs_it() {
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    stand_in_for(dir.path(), "codex");
+    app.run(Command::OpenSettings);
+    let integrations = {
+        let page = app.settings_page.as_ref().unwrap();
+        let spots = page.controls(app.sheet_area());
+        let section = crate::settings_page::Section::Integrations;
+        let tab = spots
+            .iter()
+            .find(|(_, c)| *c == crate::settings_page::Control::Section(section));
+        tab.unwrap().0
+    };
+    click(&mut app, integrations.x + 1, integrations.y);
+    let grid = screen(&app);
+    let text = grid.text();
+    for words in [
+        "Default agent",
+        "Answers Ask, Polish and Validate",
+        "Auto",
+        "Gemini",
+    ] {
+        assert!(text.contains(words), "{words:?} in\n{text}");
+    }
+    // Every card stands under it. (Which agents this machine has is the page's own look, so
+    // the cards that depend on it are `settings_page`'s tests'.)
+    for card in ["Claude Code", "Codex", "Gemini CLI", "Browser"] {
+        assert!(text.contains(card), "{card:?} in\n{text}");
+    }
+    let (x, y) = on_row_of(&grid, "Default agent", "Codex");
+    click(&mut app, x + 1, y);
+    assert_eq!(app.settings.ask_agent.as_deref(), Some("codex"));
+    assert_eq!(
+        crate::settings::default_agent_name(app.settings.ask_agent.as_deref()),
+        "codex"
+    );
+    app.run(Command::CloseTab);
+    assert!(app.settings_page.is_none());
+
+    // The doc is read through Claude Code still.
+    read_doc(dir.path(), &mut app);
+    assert_eq!(runs(dir.path()), 1);
+    assert_eq!(runs_of(dir.path(), "codex"), 0);
+    let long = "I think this is a problem because if one consumer gets slow for whatever reason \
+                then all of the events behind it are going to wait.";
+    comment(&mut app, "slow consumer", long);
+    let short = "One slow consumer stalls its partition. How is that detected?";
+    answers_for(dir.path(), "codex", 1, &codex_printed(short));
+    press_on_card(&mut app, "Draft, not posted yet", "Polish");
+    let text = shows(&mut app, "Use This").text();
+    assert_eq!(runs_of(dir.path(), "codex"), 1, "Codex polished it");
+    assert_eq!(runs(dir.path()), 1, "and Claude Code didn't");
+    let (args, prompt, side) = given_for(dir.path(), "codex", 1);
+    assert_eq!(side, "1", "a side run, which no hook takes for an agent's");
+    assert_eq!(args.first().map(String::as_str), Some("exec"));
+    assert_eq!(values(&args, "--sandbox"), ["read-only"]);
+    assert!(prompt.contains("short, clear and kind"), "{prompt}");
+    assert!(prompt.contains(long), "{prompt}");
+    assert!(text.contains("Codex · 10 words, from 26"), "{text}");
+    assert_eq!(thread_saying(&app, long).text, long);
 }

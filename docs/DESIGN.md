@@ -887,11 +887,14 @@ November 2026).
 
 So Ask runs the agent's own command line once, in the background, non-interactive and
 read-only, in the project's folder (`ask.rs`). It never types into the agent working in the
-side pane or disturbs its session, and it brings in no comments. Which command line: the one
-the `ask_agent` setting names (`claude`, `codex`, `gemini`), else the kind of agent in the side
-pane where that's installed, else the first installed of Claude Code, Codex and Gemini CLI.
-With none, the card says what it needs and has Open Integrations, which opens Settings there;
-with the setting naming one that isn't installed, it says that. Kiro CLI doesn't answer: its
+side pane or disturbs its session, and it brings in no comments. Which command line: the
+Default agent, a row of Settings › Integrations (Auto, Claude, Codex, Gemini) over the cards,
+kept machine-wide as `ask_agent` (`default_agent` names it too); Auto, or nothing set, is the
+kind of agent in the side pane where that's installed, else the first installed of Claude
+Code, Codex and Gemini CLI. Polish and Validate run the same one (25 November 2026). With none,
+the card says what it needs and has Open Integrations, which opens Settings there; with the
+Default agent one that isn't installed, it says that. Integrations scrolls whole, as
+Appearance does, so every card under the row stays in reach on a short window. Kiro CLI doesn't answer: its
 `chat --no-interactive` needs a `KIRO_API_KEY` (paid plans) rather than the person's sign-in, runs
 on its V2 harness unless told `--v3`, which a Kiro CLI before 3.0 doesn't know, names its
 read-only tools only by example (`read_file`, `grep_search`; V2's `read` group from 3.3), and
@@ -992,7 +995,10 @@ answers with data that Cellix checks and writes itself (`remote.rs`, `app/remote
   WebFetch,WebSearch,Task,mcp__<every other server>__*`: no built-in tool, only that server's,
   never `--dangerously-skip-permissions`. The server's name is made as Claude Code names its
   tools, anything but letters, digits, `_` and `-` as `_`. `--tools` was read from `claude
-  --help` on this machine. Polish has none at all: `--tools "" --strict-mcp-config`.
+  --help` on this machine. Polish runs the Default agent, not the reader: Claude Code with no
+  tools at all, `--tools "" --strict-mcp-config`; Codex and Gemini CLI, which have no flag
+  that takes every tool away, read-only as Ask runs them (`ask::toolless_args`). Reading and
+  posting stay Claude Code's whatever the Default agent is.
 - A read is told to use the tools that read only and to answer one JSON object, `{title, link,
   version, markdown, comments: [{id, author, quote, text, at, resolved, replies: [{id, author,
   text, at}]}]}`, or `{"error": …}`; times may be ISO 8601 or seconds. Cellix writes

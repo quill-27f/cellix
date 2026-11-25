@@ -186,7 +186,7 @@ impl App {
     }
 
     /// Which command line answers here, or what's missing.
-    fn side_cli(&self) -> Result<Cli, Option<Cli>> {
+    pub(super) fn side_cli(&self) -> Result<Cli, Option<Cli>> {
         let path = self.side_path();
         let pane = self
             .dock
@@ -1080,8 +1080,8 @@ impl App {
                 rows.push(Row::Head("Ask needs an agent".to_string(), String::new()));
                 let why = match named {
                     Some(cli) => format!(
-                        "The ask_agent setting names {}, which isn't installed here. Install \
-                         it, or change the setting.",
+                        "The Default agent is {}, which isn't installed here. Install it, or \
+                         pick another in Settings › Integrations.",
                         cli.name()
                     ),
                     None => "Ask runs Claude Code, Codex or Gemini CLI once in the background, \

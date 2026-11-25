@@ -7761,5 +7761,12 @@
     "title": "A new Cellix opens a folder by itself only when it was an open workspace or has something running; one with only a stopped session stays closed and is offered to resume",
     "test": "only_an_open_workspace_or_running_work_opens_again_by_itself",
     "passes": true
+  },
+  {
+    "id": "default-agent-setting",
+    "milestone": 15,
+    "title": "Settings › Integrations has a Default agent, Auto, Claude, Codex or Gemini, kept machine-wide in ask_agent, which Ask and Polish run; the page scrolls so every card under it stays reachable, and remote docs stay Claude Code's",
+    "test": "the_default_agent_is_picked_in_settings_and_polish_runs_it",
+    "passes": true
   }
 ]

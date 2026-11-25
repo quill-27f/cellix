@@ -6,7 +6,7 @@ use crate::field::TextBox;
 use crate::install::{Machine, Plan};
 use crate::integrations;
 use crate::keys::{self, Shortcut};
-use crate::settings::{SERVERS, Server};
+use crate::settings::{DEFAULT_AGENTS, SERVERS, Server};
 use crate::theme::Theme;
 
 /// Rows from one integration's card to the next.
@@ -30,6 +30,15 @@ const AUTO_SAVES: [(&str, &str); 3] = [
     ("after_delay", "After a pause"),
     ("on_focus_change", "On leaving"),
 ];
+/// Which agent's command line answers Ask, Polish and Validate. Remote docs are read and
+/// posted through Claude Code whatever it says.
+const DEFAULT_AGENT: (&str, &str) = ("Default agent", "Answers Ask, Polish and Validate.");
+/// Wide enough for "Gemini" with a cell either side, four to a track.
+const AGENT_WIDTH: u16 = 9;
+/// Where the Default agent row and the integration cards start on Integrations, which
+/// scrolls whole where the window is short of room for every card.
+const AGENT_ROW: u16 = 3;
+const BLOCKS_ROW: u16 = 7;
 /// Where the Editor section's rows start, from the top of the page.
 const FORMAT_ROW: u16 = 3;
 const AUTO_SAVE_ROW: u16 = 6;
@@ -207,6 +216,9 @@ pub enum Control {
     CopyInstall(&'static str),
     /// Which of Claude Code's MCP servers a remote doc is read and posted through.
     RemoteDocs,
+    /// Which agent's command line answers Ask, Polish and Validate, by the `ask_agent`
+    /// setting's word for it, `auto` for the side pane's.
+    DefaultAgent(&'static str),
 }
 
 /// The settings as they stand, passed in so the page holds no second copy.
@@ -224,6 +236,7 @@ pub struct Values<'a> {
     pub cursor_blink: bool,
     pub auto_save: &'a str,
     pub notify: bool,
+    pub default_agent: &'a str,
 }
 
 /// How code is laid out and coloured, each a switch in Appearance.
@@ -252,6 +265,7 @@ enum Row {
     Switch(Control),
     AutoSave,
     Keymap,
+    DefaultAgent,
     /// A language server, by its place in `SERVERS`.
     Server(usize),
     /// An integration's card, by its place among them.
@@ -326,7 +340,7 @@ impl Row {
             }
             Row::Switch(_) => Section::Appearance,
             Row::AutoSave | Row::Server(_) => Section::Editor,
-            Row::Block(_) => Section::Integrations,
+            Row::Block(_) | Row::DefaultAgent => Section::Integrations,
             Row::Keymap | Row::Shortcut(_) => Section::Keyboard,
         }
     }
@@ -607,6 +621,10 @@ impl SettingsPage {
                 rows.push(Row::Server(index));
             }
         }
+        // Integrations has its Default agent over its cards.
+        if pair(DEFAULT_AGENT) || DEFAULT_AGENTS.iter().any(|a| fits(&[a.1])) {
+            rows.push(Row::DefaultAgent);
+        }
         for (index, block) in self.blocks().iter().enumerate() {
             if fits(&[block.name, block.state, block.detail]) {
                 rows.push(Row::Block(index));
@@ -744,7 +762,30 @@ impl SettingsPage {
     /// with the page scrolled as it is. Nowhere, if any of it is past either end: half a
     /// switch isn't drawn, and nothing is drawn over the bars under the page.
     fn appearance_row(&self, page: Rect, y: u16, rows: u16) -> Option<u16> {
-        let top = (self.top as u16).min(APPEARANCE_ROWS.saturating_sub(page.h));
+        self.scrolled_place(page, (y, rows), APPEARANCE_ROWS)
+    }
+
+    /// The same on Integrations, whose cards a short window scrolls through: with the Default
+    /// agent's row over them, the last ones had no room and weren't drawn.
+    fn integration_row(&self, page: Rect, y: u16, rows: u16) -> Option<u16> {
+        self.scrolled_place(page, (y, rows), self.integration_rows())
+    }
+
+    /// The rows Integrations takes: its heading and Default agent, a card every `BLOCK_STEP`
+    /// rows, and the row under them that says what a press did.
+    fn integration_rows(&self) -> u16 {
+        BLOCKS_ROW + self.blocks().len() as u16 * BLOCK_STEP + 1
+    }
+
+    /// Where a card on Integrations starts, down the page.
+    fn block_row(index: usize) -> u16 {
+        BLOCKS_ROW + index as u16 * BLOCK_STEP
+    }
+
+    /// Where a part `rows` tall, `y` rows down a page that scrolls whole and is `all` rows
+    /// long, stands on screen with the page scrolled as it is; nowhere where any of it is out.
+    fn scrolled_place(&self, page: Rect, (y, rows): (u16, u16), all: u16) -> Option<u16> {
+        let top = (self.top as u16).min(all.saturating_sub(page.h));
         (y >= top && y + rows - top <= page.h).then(|| page.y + y - top)
     }
 
@@ -759,8 +800,13 @@ impl SettingsPage {
             self.keys_top = (self.keys_top as isize + delta).clamp(0, last) as usize;
             return;
         }
-        if self.section == Section::Appearance {
-            let most = APPEARANCE_ROWS.saturating_sub(Self::content(area).h) as isize;
+        let whole = match self.section {
+            Section::Appearance => Some(APPEARANCE_ROWS),
+            Section::Integrations => Some(self.integration_rows()),
+            _ => None,
+        };
+        if let Some(all) = whole {
+            let most = all.saturating_sub(Self::content(area).h) as isize;
             self.top = (self.top as isize + delta).clamp(0, most) as usize;
             return;
         }
@@ -1009,11 +1055,23 @@ impl SettingsPage {
                 }
             }
             Section::Integrations => {
+                // As on Appearance: what's out of view has a place with no height at the
+                // page's end, which nothing is drawn in and no click lands on.
+                let place = |y: Option<u16>, x: u16, (w, h): (u16, u16)| match y {
+                    Some(y) => Rect::new(x, y, w, h),
+                    None => Rect::new(x, page.bottom(), w, 0),
+                };
+                let y = self.integration_row(page, AGENT_ROW, 2);
+                let start = page.right().saturating_sub(AGENT_WIDTH * 4);
+                for (i, (name, _)) in DEFAULT_AGENTS.iter().enumerate() {
+                    let x = start + i as u16 * AGENT_WIDTH;
+                    spots.push((place(y, x, (AGENT_WIDTH, 1)), Control::DefaultAgent(name)));
+                }
                 let x = page.right().saturating_sub(BUTTON_WIDTH + 2);
                 for (index, block) in self.blocks().iter().enumerate() {
                     if let Some((_, _, control)) = block.action {
-                        let y = page.y + 3 + index as u16 * BLOCK_STEP;
-                        spots.push((Rect::new(x, y, BUTTON_WIDTH, 2), control));
+                        let y = self.integration_row(page, Self::block_row(index), 3);
+                        spots.push((place(y, x, (BUTTON_WIDTH, 2)), control));
                     }
                 }
             }
@@ -1068,6 +1126,13 @@ impl SettingsPage {
                     let of = KEYMAPS.map(|k| Control::Keymap(k.0));
                     segments(y, SEGMENT_WIDTH, spots, of);
                 }
+                Row::DefaultAgent => {
+                    let start = page.right().saturating_sub(AGENT_WIDTH * 4);
+                    for (i, (name, _)) in DEFAULT_AGENTS.iter().enumerate() {
+                        let rect = Rect::new(start + i as u16 * AGENT_WIDTH, y, AGENT_WIDTH, 1);
+                        spots.push((rect, Control::DefaultAgent(name)));
+                    }
+                }
                 Row::Server(index) => {
                     if let Some((control, width)) = self.found.server_control(index) {
                         let x = page.right().saturating_sub(width);
@@ -1102,6 +1167,7 @@ impl SettingsPage {
         let (all, shown, from) = match self.section {
             _ if self.filtering() => return None,
             Section::Appearance => (APPEARANCE_ROWS, page.h, page.y),
+            Section::Integrations => (self.integration_rows(), page.h, page.y),
             Section::Editor => {
                 let room = page.h.saturating_sub(SERVERS_ROW);
                 (SERVERS.len() as u16, room, page.y + SERVERS_ROW)
@@ -1165,14 +1231,23 @@ impl SettingsPage {
 
     /// Scrolls Appearance until the control the keyboard is on is in view.
     fn reveal_focus(&mut self, area: Rect) {
-        if self.section != Section::Appearance || self.filtering() {
+        if self.filtering() {
             return;
         }
         let page = Self::content(area);
-        let Some((y, rows)) = self.focused(area).and_then(Self::appearance_place) else {
+        let focused = self.focused(area);
+        let (place, all) = match self.section {
+            Section::Appearance => (focused.and_then(Self::appearance_place), APPEARANCE_ROWS),
+            Section::Integrations => (
+                focused.and_then(|c| self.integration_place(c)),
+                self.integration_rows(),
+            ),
+            _ => return,
+        };
+        let Some((y, rows)) = place else {
             return;
         };
-        let most = APPEARANCE_ROWS.saturating_sub(page.h);
+        let most = all.saturating_sub(page.h);
         let top = (self.top as u16).min(most);
         let top = if y <= CARDS_ROW {
             // The cards come with the heading over them.
@@ -1185,6 +1260,18 @@ impl SettingsPage {
             top
         };
         self.top = top.min(most) as usize;
+    }
+
+    /// How far down Integrations a control is, and how many rows it takes.
+    fn integration_place(&self, control: Control) -> Option<(u16, u16)> {
+        if let Control::DefaultAgent(_) = control {
+            return Some((AGENT_ROW, 2));
+        }
+        let index = self
+            .blocks()
+            .iter()
+            .position(|b| b.action.is_some_and(|(_, _, c)| c == control))?;
+        Some((Self::block_row(index), 3))
     }
 
     /// How far down Appearance a control is, and how many rows it takes.
@@ -1284,7 +1371,9 @@ impl SettingsPage {
             Section::Editor => {
                 self.draw_editor(grid, page, &spots, values, (hover, measure), theme)
             }
-            Section::Integrations => self.draw_integrations(grid, page, (hover, measure), theme),
+            Section::Integrations => {
+                self.draw_integrations(grid, page, &spots, values, (hover, measure), theme)
+            }
             Section::Keyboard => {
                 let state = (&spots[..], values, hover, measure);
                 self.draw_keyboard(grid, page, state, theme);
@@ -1617,6 +1706,19 @@ impl SettingsPage {
                         Control::Keymap(name) => {
                             let word = KEYMAPS.iter().find(|k| k.0 == name)?.1;
                             Some((word, values.keymap == name))
+                        }
+                        _ => None,
+                    });
+                }
+                Row::DefaultAgent => {
+                    rule(grid, y);
+                    let room = page.right().saturating_sub(AGENT_WIDTH * 4 + 1);
+                    draw_text(grid, page, (y, room), DEFAULT_AGENT, theme);
+                    tag(grid, (DEFAULT_AGENT.0, bold), (y, room), row);
+                    segments(grid, y, &|control| match control {
+                        Control::DefaultAgent(name) => {
+                            let word = DEFAULT_AGENTS.iter().find(|a| a.0 == name)?.1;
+                            Some((word, values.default_agent == name))
                         }
                         _ => None,
                     });
@@ -2159,17 +2261,46 @@ impl SettingsPage {
         &self,
         grid: &mut Grid,
         page: Rect,
+        spots: &[(Rect, Control)],
+        values: &Values,
         (hover, measure): (Option<(u16, u16)>, &dyn Measure),
         theme: &Theme,
     ) {
-        heading(
+        // The whole page scrolls, its heading with it, as Appearance does.
+        if let Some(y) = self.integration_row(page, 0, 2) {
+            let at = Rect::new(page.x, y, page.w, 2);
+            let note =
+                "Cellix works with your agents and terminal. Nothing changes until you click.";
+            heading(grid, at, "Integrations", note, theme);
+        }
+        if let Some(y) = self.integration_row(page, AGENT_ROW, 2) {
+            let room = page.right().saturating_sub(AGENT_WIDTH * 4 + 1);
+            draw_text(grid, page, (y, room), DEFAULT_AGENT, theme);
+        }
+        let agents: Vec<(Rect, &str, bool)> = spots
+            .iter()
+            .filter(|(rect, _)| rect.h > 0)
+            .filter_map(|(rect, control)| match control {
+                Control::DefaultAgent(name) => {
+                    let label = DEFAULT_AGENTS.iter().find(|a| a.0 == *name)?.1;
+                    Some((*rect, label, values.default_agent == *name))
+                }
+                _ => None,
+            })
+            .collect();
+        draw_segments(
             grid,
-            page,
-            "Integrations",
-            "Cellix works with your agents and terminal. Nothing changes until you click.",
+            &agents,
+            (hover, theme.text.bg, measure.in_cells()),
             theme,
         );
+        // A line between the setting and the cards, as between the Editor page's rows.
+        if let Some(y) = self.integration_row(page, BLOCKS_ROW - 1, 1) {
+            let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
+            grid.hairline(above, theme.border);
+        }
         let blocks = self.blocks();
+        let buttons = self.controls_at(page);
         // One primary button to a page: the first that wants it; the rest are quiet.
         let mut primary_left = true;
         for (index, block) in blocks.iter().enumerate() {
@@ -2178,30 +2309,35 @@ impl SettingsPage {
                 Tone::Quiet => theme.gutter.fg,
             };
             let text = (block.name, block.state, color);
-            let top = page.y + 3 + index as u16 * BLOCK_STEP;
+            let primary = block.action.is_some_and(|(_, primary, _)| primary);
+            let primary = primary && std::mem::take(&mut primary_left);
+            let Some(top) = self.integration_row(page, Self::block_row(index), 3) else {
+                continue;
+            };
             draw_block(grid, page, (top, measure), text, block.detail, theme);
-            if let Some((label, primary, control)) = block.action {
-                let spots = self.controls_at(page);
-                let spot = spots.iter().find(|(_, c)| *c == control);
+            if let Some((label, _, control)) = block.action {
+                let spot = buttons.iter().find(|(_, c)| *c == control);
                 if let Some((rect, _)) = spot {
-                    let primary = primary && std::mem::take(&mut primary_left);
                     draw_button(grid, *rect, label, primary, (hover, measure), theme);
                 }
             }
         }
-        if !self.note.is_empty() {
+        let below = Self::block_row(blocks.len());
+        if let Some(y) = self
+            .integration_row(page, below, 1)
+            .filter(|_| !self.note.is_empty())
+        {
             let style = Style {
                 fg: theme.accent,
                 ..theme.text
             };
-            let y = page.y + 3 + blocks.len() as u16 * BLOCK_STEP;
             grid.label(page.x, y, &self.note, style, page.right());
         }
     }
 
-    /// Where the cards' buttons sit on a page already laid out: at the card's right, as wide
-    /// as a button or as its words and a column either side, whichever is wider. At twelve
-    /// columns, Copy Install Command ran past its chip at both ends.
+    /// Where the cards' buttons sit on a page already laid out, scrolled as it is: at the
+    /// card's right, as wide as a button or as its words and a column either side, whichever
+    /// is wider. At twelve columns, Copy Install Command ran past its chip at both ends.
     fn controls_at(&self, page: Rect) -> Vec<(Rect, Control)> {
         let blocks = self.blocks();
         let placed = blocks.iter().enumerate();
@@ -2210,13 +2346,12 @@ impl SettingsPage {
                 let (label, _, control) = block.action?;
                 let wide = BUTTON_WIDTH.max(label.chars().count() as u16 + 2);
                 let x = page.right().saturating_sub(wide + 2);
-                let y = page.y + 3 + index as u16 * BLOCK_STEP;
+                let y = self.integration_row(page, Self::block_row(index), 3)?;
                 Some((Rect::new(x, y, wide, 2), control))
             })
             .collect()
     }
 }
-
 fn heading(grid: &mut Grid, page: Rect, title: &str, note: &str, theme: &Theme) {
     let style = Style {
         fg: theme.heading,
@@ -2691,6 +2826,7 @@ mod tests {
             cursor_blink: false,
             auto_save: "off",
             notify: false,
+            default_agent: "auto",
         };
         let mut grid = Grid::new(AREA.w, AREA.h, theme.text);
         settings.draw(&mut grid, AREA, &values, (None, &measure), &theme);
@@ -2767,6 +2903,71 @@ mod tests {
             Some(("Installed", Some("Remove"))),
             "gone from the PATH, its hooks can still be removed"
         );
+    }
+
+    /// Integrations has its Default agent over the cards, four choices pressed where they're
+    /// drawn, and scrolls whole where the window is short: with the row over them the last
+    /// cards were cut off and couldn't be reached. Remote docs stay Claude Code's.
+    #[test]
+    fn the_default_agent_stands_over_every_card_and_the_page_scrolls() {
+        let mut settings = page(Section::Integrations);
+        settings.found.claude = true;
+        settings.found.ghostty_keeps_cmd_d = Some(true);
+        let blocks = settings.blocks();
+        let remote = blocks.iter().find(|b| b.name == "Remote docs").unwrap();
+        assert_eq!(remote.state, "Read through an MCP server of Claude Code's");
+        let short = Rect { h: 24, ..AREA };
+        let spots = settings.controls(short);
+        let agents: Vec<_> = spots
+            .iter()
+            .filter(|(_, c)| matches!(c, Control::DefaultAgent(_)))
+            .collect();
+        assert_eq!(agents.len(), 4);
+        for (rect, control) in &agents {
+            assert!(rect.h > 0, "{control:?} in view at the top");
+            assert_eq!(settings.control_at(short, rect.x, rect.y), Some(*control));
+        }
+        let last = |s: &SettingsPage| {
+            let spots = s.controls(short);
+            spots
+                .iter()
+                .find(|(_, c)| *c == Control::Ghostty)
+                .unwrap()
+                .0
+        };
+        assert_eq!(
+            last(&settings).h,
+            0,
+            "the last card is under the window's foot"
+        );
+        assert!(
+            settings.scrolled(short).is_some(),
+            "so the page has a thumb"
+        );
+        settings.scroll_by(100, short);
+        let rect = last(&settings);
+        assert!(rect.h > 0 && rect.bottom() <= short.bottom(), "{rect:?}");
+        assert_eq!(
+            settings.control_at(short, rect.x, rect.y),
+            Some(Control::Ghostty)
+        );
+        // Scrolled, the Default agent is out of view, and no press lands on it.
+        let spots = settings.controls(short);
+        assert!(
+            spots
+                .iter()
+                .filter(|(_, c)| matches!(c, Control::DefaultAgent(_)))
+                .all(|(rect, _)| rect.h == 0)
+        );
+        // The keys bring it back.
+        settings.focus = None;
+        settings.step(short, 1);
+        settings.step(short, 4);
+        assert!(matches!(
+            settings.focused(short),
+            Some(Control::DefaultAgent(_))
+        ));
+        assert_eq!(settings.top, 0);
     }
 
     #[test]

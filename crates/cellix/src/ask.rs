@@ -230,6 +230,25 @@ pub fn args(question: &Question) -> Vec<String> {
     }
 }
 
+/// What a run that needs nothing but what it's told is given, after the command line's
+/// name: Polish and Validate, whose prompt holds the comment and the document. Claude Code is
+/// given no tools at all, built in or from any MCP server. Codex and Gemini CLI have no flag
+/// that takes every tool away, so they run as Ask's first question does, read-only: Codex in
+/// its read-only sandbox, Gemini CLI leaving out every tool that would need a person to say
+/// yes.
+pub fn toolless_args(cli: Cli, root: &Path) -> Vec<String> {
+    match cli {
+        Cli::Claude => crate::remote::polish_args(),
+        Cli::Codex | Cli::Gemini => args(&Question {
+            cli,
+            root: root.to_path_buf(),
+            prompt: String::new(),
+            resume: None,
+            fork: false,
+        }),
+    }
+}
+
 /// What a run says, as it comes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum News {

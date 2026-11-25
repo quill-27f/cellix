@@ -537,7 +537,7 @@ fn ask_with_no_agent_installed_says_what_it_needs() {
     select(&mut app, "ICL");
     app.run(Command::AskAgent);
     let text = screen(&app).text();
-    assert!(text.contains("names Codex"), "{text}");
+    assert!(text.contains("agent is Codex"), "{text}");
     press(&mut app, SET_UP);
     assert!(app.side.is_none());
     let page = app.settings_page.as_ref().expect("Settings opened");

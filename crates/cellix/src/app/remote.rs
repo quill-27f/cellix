@@ -41,9 +41,10 @@ pub(super) struct Posting {
     pub said: String,
 }
 
-/// Polish under way for a draft, and how many words it had.
+/// Polish under way for a draft, which agent runs it, and how many words it had.
 pub(super) struct Polishing {
     pub thread: u32,
+    pub cli: Cli,
     pub from: usize,
     pub running: ask::Running,
     pub said: String,
@@ -337,7 +338,7 @@ impl App {
     pub(super) fn poll_remote(&mut self) -> bool {
         let mut changed = false;
         if let Some(reading) = self.remote.reading.as_mut() {
-            match drain(&reading.running, &mut reading.said) {
+            match drain(&reading.running, &mut reading.said, READER) {
                 Some(Ok(answer)) => {
                     let reading = self.remote.reading.take();
                     if let Some(reading) = reading {
@@ -355,7 +356,7 @@ impl App {
         }
         let mut ended = Vec::new();
         for (index, post) in self.remote.posts.iter_mut().enumerate() {
-            if let Some(result) = drain(&post.running, &mut post.said) {
+            if let Some(result) = drain(&post.running, &mut post.said, READER) {
                 ended.push((index, post.thread, post.reply, result));
             }
         }
@@ -366,21 +367,21 @@ impl App {
         }
         let mut polished = Vec::new();
         for (index, run) in self.remote.polishing.iter_mut().enumerate() {
-            if let Some(result) = drain(&run.running, &mut run.said) {
+            if let Some(result) = drain(&run.running, &mut run.said, run.cli) {
                 let result = match result {
                     Ok(text) if !text.trim().is_empty() => Polished::Ready(text),
                     Ok(_) => Polished::Failed("it gave no text".to_string()),
                     Err(why) => Polished::Failed(why),
                 };
-                polished.push((index, run.thread, run.from, result));
+                polished.push((index, run.thread, (run.cli, run.from), result));
             }
         }
-        for (index, thread, from, result) in polished.into_iter().rev() {
+        for (index, thread, (cli, from), result) in polished.into_iter().rev() {
             self.remote.polishing.remove(index);
             let shown = match result {
                 Polished::Ready(text) => Polish::Ready {
                     text: clean_polish(&text),
-                    by: READER.name().to_string(),
+                    by: cli.name().to_string(),
                     from,
                 },
                 Polished::Failed(why) => Polish::Failed(why),
@@ -593,22 +594,52 @@ impl App {
         let paragraph = doc::paragraph_around(&text, thread.anchor());
         let prompt = doc::polish_prompt(&thread.text, &thread.quote, &paragraph);
         let from = doc::words(&thread.text);
-        if self.remote_program().is_none() {
-            self.say("Polish needs Claude Code installed here");
-            return;
-        }
-        let Some(running) = self.start_remote_run(doc::polish_args(), &prompt) else {
+        let Some((cli, running)) = self.start_toolless_run("Polish", &prompt) else {
             return;
         };
         self.remote.polishing.push(Polishing {
             thread: id,
+            cli,
             from,
             running,
             said: String::new(),
         });
         self.remote
             .polish
-            .insert(id, Polish::Running(READER.name().to_string()));
+            .insert(id, Polish::Running(cli.name().to_string()));
+    }
+
+    /// Starts the Default agent (Settings › Integrations) on `prompt` with no tools, as
+    /// Polish and Validate run it; or says what's missing, `what` naming the action.
+    fn start_toolless_run(&mut self, what: &str, prompt: &str) -> Option<(Cli, ask::Running)> {
+        let cli = match self.side_cli() {
+            Ok(cli) => cli,
+            Err(Some(named)) => {
+                self.say(format!(
+                    "{what} runs {}, the Default agent in Settings › Integrations, which isn't \
+                     installed here",
+                    named.name()
+                ));
+                return None;
+            }
+            Err(None) => {
+                self.say(format!(
+                    "{what} needs Claude Code, Codex or Gemini CLI installed here"
+                ));
+                return None;
+            }
+        };
+        let path = self.side_path();
+        let program = ask::find(cli.program(), &path)?;
+        let root = self.workspace.root();
+        let run = ask::Run {
+            cli,
+            args: ask::toolless_args(cli, root),
+            root,
+            prompt,
+        };
+        let running = ask::start_run(&program, run, &path, self.remote_limit());
+        Some((cli, running))
     }
 
     /// Takes Polish's suggestion as the draft's words. It's still a draft.
@@ -893,7 +924,7 @@ impl App {
 
 /// What a run said since, up to its end: its answer, or why there's none. None while it's
 /// still going.
-fn drain(running: &ask::Running, said: &mut String) -> Option<Result<String, String>> {
+fn drain(running: &ask::Running, said: &mut String, cli: Cli) -> Option<Result<String, String>> {
     for news in running.news.try_iter() {
         match news {
             News::Fresh => said.clear(),
@@ -907,7 +938,7 @@ fn drain(running: &ask::Running, said: &mut String) -> Option<Result<String, Str
                 };
                 return Some(Ok(answer));
             }
-            News::Failed(failure) => return Some(Err(failure.words(READER))),
+            News::Failed(failure) => return Some(Err(failure.words(cli))),
             News::Session(_) | News::Doing(_) => {}
         }
     }
