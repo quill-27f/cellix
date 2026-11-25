@@ -1018,8 +1018,13 @@ answers with data that Cellix checks and writes itself (`remote.rs`, `app/remote
   author's is (the reviewer's "You" stays plain), with Reply, Ask Agent and Open in Doc. Post
   to Doc, Post Reply and Retry carry a paper plane before their words and Copy two sheets, as
   the board draws them. The server menu opens with a row lit for Enter. The
-  reviewer's is a draft until its own Post to Doc (filled), with Copy, Polish, Edit and
-  Delete; its pill says "Draft, not posted yet", "Posting…", "Posted N ago" in green, or "Not
+  reviewer's is a draft until its own Post to Doc (filled), then Validate, Polish, Copy, Ask
+  Agent and Reply, and Edit and Delete as plain words at the end: the same buttons in the same
+  order as the reviewer's card on a page of the project, which has Resolve after Reply where a
+  remote one, resolved in the doc by the doc tool, has none. Posted, it has Validate, Copy,
+  Ask Agent and Reply, then Open in Doc: its words are the doc's, so no Polish, Edit or Delete.
+  A card's buttons flow over rows where one doesn't hold them, and a short card keeps one,
+  the rest behind its "⋯". Its pill says "Draft, not posted yet", "Posting…", "Posted N ago" in green, or "Not
   posted" in red with why under the words and Retry and Copy. A sign-in the doc tool wants
   again reads "The doc tool asked to sign in again. Sign in (your security key), then Retry."
   The list's head says "Yours: N posted · N drafts" and "Others: N" in place of Check My

@@ -7782,5 +7782,12 @@
     "title": "On a remote draft Validate posts nothing, stands beside Polish's words, and both are kept through a Sync and a new Cellix until dismissed",
     "test": "validate_on_a_draft_is_kept_through_sync_and_reopening_till_dismissed",
     "passes": true
+  },
+  {
+    "id": "same-card-buttons-local-and-remote",
+    "milestone": 15,
+    "title": "The reviewer's card has Validate, Polish, Copy, Ask Agent and Reply in one order on a page and on a remote doc, a remote draft's Post to Doc before them and a page's Resolve after; Polish works on a page's comments, Use This saving its words as Edit does",
+    "test": "the_same_buttons_stand_on_both_and_polish_works_on_a_page",
+    "passes": true
   }
 ]

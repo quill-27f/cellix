@@ -172,13 +172,17 @@ const USE_THIS: &str = "Use This";
 const KEEP_MINE: &str = "Keep Mine";
 const DISMISS: &str = "Dismiss";
 const OPEN_IN_DOC: &str = "Open in Doc";
-/// A card's buttons: the reviewer's own Validate first, a remote draft's Post to Doc filled
-/// before it; someone else's Reply and Ask Agent.
-const LOCAL_BUTTONS: [&str; 4] = [VALIDATE, REPLY, ASK, RESOLVE];
-const DRAFT_BUTTONS: [&str; 4] = [POST, VALIDATE, COPY, POLISH];
-const FAILED_BUTTONS: [&str; 3] = [RETRY, VALIDATE, COPY];
+/// A card's buttons, the same on a page of the project and on a remote doc, in the same order:
+/// the reviewer's own Validate, Polish, Copy, Ask Agent and Reply, a remote draft's Post to Doc
+/// filled before them, and a page's Resolve after; someone else's Reply and Ask Agent. A
+/// remote comment is resolved in the doc, by the doc tool. A posted comment of the reviewer's
+/// is the doc's now, so Polish, which would change its words here only, isn't on it, nor
+/// Edit and Delete; while it posts there's only Copy.
+const LOCAL_BUTTONS: [&str; 6] = [VALIDATE, POLISH, COPY, ASK, REPLY, RESOLVE];
+const DRAFT_BUTTONS: [&str; 6] = [POST, VALIDATE, POLISH, COPY, ASK, REPLY];
+const FAILED_BUTTONS: [&str; 6] = [RETRY, VALIDATE, POLISH, COPY, ASK, REPLY];
 const POSTING_BUTTONS: [&str; 1] = [COPY];
-const POSTED_BUTTONS: [&str; 3] = [VALIDATE, REPLY, ASK];
+const POSTED_BUTTONS: [&str; 4] = [VALIDATE, COPY, ASK, REPLY];
 const THEIRS_BUTTONS: [&str; 2] = [REPLY, ASK];
 const REPLY_FAILED: [&str; 2] = [RETRY, COPY];
 const POLISH_CHOICE: [&str; 2] = [USE_THIS, KEEP_MINE];

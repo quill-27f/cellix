@@ -41642,7 +41642,7 @@ while True:
         app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
         app.run(Command::ShowComments);
         // Those on its first row: the rest flow to the next.
-        check(&app, &["Validate", "Reply", "Ask Agent"]);
+        check(&app, &["Validate", "Polish"]);
 
         // A change in Review.
         let (dir, mut app) = reviewed();

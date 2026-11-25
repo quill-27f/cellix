@@ -806,17 +806,27 @@ fn a_narrow_panes_cards_are_short_until_one_is_lit() {
     assert!(!text.contains("entirely here"), "cut short: {text}");
     assert!(!text.contains("It saves a read"), "{text}");
     assert!(
-        !text.contains("Resolve"),
+        !text.contains("Validate"),
         "no buttons till pointed at: {text}"
     );
-    // Pointed at, its buttons stand in the row that said so.
+    // Pointed at, its buttons stand in the row that said so: one row, what doesn't fit it
+    // behind its "⋯".
     let (x, y) = find(&screen(&app), "2 replies");
     app.handle(mouse(MouseKind::Move, x, y));
     let text = screen(&app).text();
     assert!(
-        text.contains("Resolve") && !text.contains("2 replies"),
+        text.contains("Validate") && !text.contains("2 replies"),
         "{text}"
     );
+    let row = screen(&app).row_text(y);
+    let more = row[..row.find('\u{22ef}').expect("a ⋯")].chars().count() as u16;
+    click(&mut app, more, y);
+    let text = screen(&app).text();
+    assert!(
+        text.contains("Resolve") && text.contains("Delete"),
+        "what has no room on its row is behind it: {text}"
+    );
+    app.handle(Event::Key(KeyEvent::plain(Key::Esc)));
     // Lit, by a click on its words, it's whole.
     let (x, y) = find(&screen(&app), "Why first?");
     click(&mut app, x + 1, y);

@@ -1031,3 +1031,127 @@ fn validate_on_a_draft_is_kept_through_sync_and_reopening_till_dismissed() {
     assert_eq!(state_of(&app, words), Some(Sent::Draft));
     assert_eq!(runs(dir.path()), 4);
 }
+
+/// The words of a card's buttons, in the order they stand, from the row under its words to the
+/// card's end: what's on the screen's rows from `card` on, up to `till`.
+fn buttons_after(grid: &Grid, card: &str, till: &str) -> String {
+    let (_, top) = find(grid, card);
+    let mut said = String::new();
+    for y in top + 1..grid.height() {
+        let row = grid.row_text(y);
+        if row.contains(till) {
+            break;
+        }
+        said.push_str(&row);
+        said.push('\n');
+    }
+    said
+}
+
+/// Whether `words` stand in `said` in this order.
+fn in_order(said: &str, words: &[&str]) -> bool {
+    let mut from = 0;
+    words.iter().all(|word| match said[from..].find(word) {
+        Some(at) => {
+            from += at + word.len();
+            true
+        }
+        None => false,
+    })
+}
+
+/// A card reads the same on a page of the project and on a remote doc: the reviewer's own has
+/// Validate, Polish, Copy, Ask Agent and Reply, in that order, a remote draft Post to Doc
+/// before them and a page's Resolve after them; someone else's Reply and Ask Agent. Polish
+/// works on a page's comment as on a draft: Use This takes its words as Edit's Save does, so a
+/// comment an agent was told of is an edited one, not told again; Copy copies its words.
+#[test]
+fn the_same_buttons_stand_on_both_and_polish_works_on_a_page() {
+    let (dir, mut app) = project();
+    stand_in(dir.path());
+    let path = dir.path().join("plan.md");
+    fs::write(&path, DOC).unwrap();
+    app.open(&path).unwrap();
+    let words = "I wonder if one slow consumer could hold back everything behind it here?";
+    comment(&mut app, "slow consumer", words);
+    app.dock.open = true;
+    app.dock.show_comments();
+    let grid = screen(&app);
+    let said = buttons_after(&grid, "I wonder if one", "\u{2003}");
+    assert!(
+        in_order(
+            &said,
+            &[
+                "Validate",
+                "Polish",
+                "Copy",
+                "Ask Agent",
+                "Reply",
+                "Resolve"
+            ]
+        ),
+        "{said}"
+    );
+    press_on_card(&mut app, words, "Copy");
+    assert_eq!(app.clipboard, words);
+
+    // Told to an agent, then polished and used: an edited comment, its words new.
+    let id = thread_saying(&app, words).id;
+    if let Some(thread) = app.threads.iter_mut().find(|t| t.id == id) {
+        thread.told = Some(0);
+    }
+    let short = "Can one slow consumer hold back the rest?";
+    answers(dir.path(), 1, &printed(short));
+    press_on_card(&mut app, words, "Polish");
+    let text = shows(&mut app, "Use This").text();
+    assert!(text.contains("Claude Code · 8 words, from 13"), "{text}");
+    let (args, prompt, _) = given(dir.path(), 1);
+    assert_eq!(values(&args, "--tools"), [""]);
+    assert!(prompt.contains(words), "{prompt}");
+    assert_eq!(thread_saying(&app, words).text, words, "not till Use This");
+    press_on_card(&mut app, "Polished", "Use This");
+    let thread = thread_saying(&app, short);
+    assert_eq!(thread.told, Some(0), "an edited comment, as Edit leaves it");
+    assert!(thread.polished.is_none());
+    assert!(thread.remote.is_none());
+    assert!(!screen(&app).text().contains("Use This"));
+
+    // A remote doc's draft, and someone else's comment, read the same way.
+    app.settings.remote_docs_mcp = Some(SERVER.to_string());
+    answers(dir.path(), 2, &printed(&read_answer(json!([]))));
+    app.run(Command::ReviewRemoteDoc);
+    typed(&mut app, LINK);
+    key(&mut app, Key::Enter);
+    shows(&mut app, "From team-docs, read by Claude Code");
+    comment(&mut app, "holiday week", "Which week exactly?");
+    let grid = screen(&app);
+    let said = buttons_after(&grid, "Which week exactly?", "\u{2003}");
+    assert!(
+        in_order(
+            &said,
+            &[
+                "Post to Doc",
+                "Validate",
+                "Polish",
+                "Copy",
+                "Ask Agent",
+                "Reply"
+            ]
+        ),
+        "{said}"
+    );
+    assert!(
+        !said.contains("Resolve"),
+        "a doc's comment is the doc's to resolve: {said}"
+    );
+    let said = buttons_after(&grid, "Where does 3x come from?", "You \u{b7}");
+    assert!(
+        in_order(&said, &["Reply", "Ask Agent", "Open in Doc"]),
+        "{said}"
+    );
+    assert!(
+        !said.contains("Validate") && !said.contains("Polish"),
+        "{said}"
+    );
+    assert_eq!(runs(dir.path()), 2, "one polish, one read: nothing posted");
+}
