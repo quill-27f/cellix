@@ -2006,22 +2006,32 @@ with tempfile.TemporaryDirectory() as made:
     shoot("16-settings-editor", [*settings, EDITOR_PAGE], CODE_FILE)
     shoot("17-settings-integrations", [*settings, ["click", *ON("Integrations")]], CODE_FILE)
     # The agents' on/off switches, with Codex and Gemini off: the list says so, and neither
-    # is in the Default agent row above it. The machine's settings hold it for this scene
-    # only, then give it back.
-    settings_file = f"{HOME}/.config/cellix/settings.json"
+    # is in the Default agent row above it. The workspace's own settings hold it, which a
+    # scene before reads and none after keeps (each scene starts with no `.cellix`).
+    os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
+    workspace_settings = f"{ROOT}/.cellix/settings.json"
     kept_off = {}
-    try:
-        with open(settings_file) as f:
-            kept_off = json.load(f)
-    except (OSError, ValueError):
-        pass
-    with open(settings_file, "w") as f:
+    with open(workspace_settings, "w") as f:
         json.dump({**kept_off, "disabled_agents": ["codex", "gemini"]}, f)
     shoot("17b-agents-switches",
           [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 12], ["wait", 0.8]],
-          CODE_FILE)
-    with open(settings_file, "w") as f:
-        json.dump(kept_off, f)
+          CODE_FILE, cellix=True)
+    # One of the person's own runners (a stand-in; never the machine's real one), in the
+    # Default agent row and the Your agents card.
+    custom_tools = f"{scratch}/custom-tools"
+    os.makedirs(custom_tools, exist_ok=True)
+    ds = f"{custom_tools}/claude-ds"
+    with open(ds, "w") as f:
+        f.write("#!/bin/sh\nexec sleep 30\n")
+    os.chmod(ds, 0o755)
+    with open(workspace_settings, "w") as f:
+        json.dump(
+            {"agents": [{"name": "Claude (DeepSeek)", "command": "claude-ds", "like": "claude"}]},
+            f,
+        )
+    shoot("17c-your-agents",
+          [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 10], ["wait", 0.8]],
+          CODE_FILE, env={"PATH": f"{custom_tools}:{os.environ['PATH']}"}, cellix=True)
     shoot("18-settings-keyboard", [*settings, ["click", *ON("Keyboard")]], CODE_FILE)
     shoot("19-dialog", [["keys", "x"], ["keys", CTRL("q")]], CODE_FILE)
     # Workflow: tasks, Open Recent, and Settings' Editor and Keyboard sections, reached through
