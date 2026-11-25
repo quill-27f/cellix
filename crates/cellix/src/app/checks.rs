@@ -43,6 +43,8 @@ pub(super) struct Checking {
     pub thread: u32,
     pub job: Job,
     pub cli: Cli,
+    /// Who it is on the card: the agent's name, or a runner's own.
+    pub by: String,
     pub on: String,
     pub running: ask::Running,
     pub said: String,
@@ -117,16 +119,17 @@ impl App {
             }
         };
         let on = thread.text.clone();
-        let Some((cli, running)) = self.start_toolless_run(job.name(), &prompt) else {
+        let Some((cli, by, running)) = self.start_toolless_run(job.name(), &prompt) else {
             return false;
         };
         self.checks
             .pending(job)
-            .insert(id, Pending::Running(cli.name().to_string()));
+            .insert(id, Pending::Running(by.clone()));
         self.checks.running.push(Checking {
             thread: id,
             job,
             cli,
+            by,
             on,
             running,
             said: String::new(),
@@ -158,9 +161,9 @@ impl App {
         &mut self,
         what: &str,
         prompt: &str,
-    ) -> Option<(Cli, ask::Running)> {
-        let cli = match self.side_cli() {
-            Ok(cli) => cli,
+    ) -> Option<(Cli, String, ask::Running)> {
+        let (cli, command) = match self.side_runner() {
+            Ok(chosen) => chosen,
             Err(Some(named)) => {
                 self.say(format!(
                     "{what} runs {}, the Default agent in Settings › Integrations, which isn't \
@@ -177,7 +180,8 @@ impl App {
             }
         };
         let path = self.side_path();
-        let program = ask::find(cli.program(), &path)?;
+        // A runner's own command is found on the PATH as agents' programs are.
+        let program = ask::find(&command, &path)?;
         let root = self.workspace.root();
         let run = ask::Run {
             cli,
@@ -186,7 +190,13 @@ impl App {
             prompt,
         };
         let limit = self.remote.limit.unwrap_or(ask::TIME_LIMIT);
-        Some((cli, ask::start_run(&program, run, &path, limit)))
+        let by = self
+            .settings
+            .agents
+            .iter()
+            .find(|a| a.command == command)
+            .map_or_else(|| cli.name().to_string(), |a| a.name.clone());
+        Some((cli, by, ask::start_run(&program, run, &path, limit)))
     }
 
     /// What the status bar says is under way, with its spinner.
@@ -214,7 +224,7 @@ impl App {
     /// A run's end: what it said kept with the comment, or why it said nothing on its card.
     /// What it said of words since changed is dropped, as it's said of words that are gone.
     fn finish_check(&mut self, run: Checking, result: Result<String, String>) {
-        let by = run.cli.name().to_string();
+        let by = run.by.clone();
         let kept = match (run.job, result) {
             (_, Err(why)) => Err(why),
             (Job::Validate, Ok(answer)) => {

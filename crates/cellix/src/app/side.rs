@@ -198,6 +198,22 @@ impl App {
         })
     }
 
+    /// The command line that answers here, and the command that runs it: the agent whose
+    /// treatment the arguments take, and a runner's own command where the Default agent is
+    /// one of the person's. What's missing is said as `side_cli` says it.
+    pub(super) fn side_runner(&self) -> Result<(Cli, String), Option<Cli>> {
+        let path = self.side_path();
+        if let Some(set) = self.settings.ask_agent.as_deref()
+            && let Some(agent) = self.settings.agents.iter().find(|a| a.name == set)
+            && let Some(cli) = Cli::from_setting(&agent.like)
+            && crate::ask::find(&agent.command, &path).is_some()
+        {
+            return Ok((cli, agent.command.clone()));
+        }
+        let cli = self.side_cli()?;
+        Ok((cli, cli.program().to_string()))
+    }
+
     /// The Claude Code session working here that a question can be asked in a copy of: the
     /// agent in the side pane, or inside Claude Code the one this pane is in, once its hooks
     /// have said its session.

@@ -223,9 +223,18 @@ impl App {
         }
     }
 
-    /// The command line that reads and posts, found on the PATH Ask uses.
+    /// The command line that reads and posts, found on the PATH Ask uses: Claude Code's,
+    /// or a runner's own where the Default agent is one of the person's that works like
+    /// Claude Code.
     fn remote_program(&self) -> Option<PathBuf> {
-        ask::find(READER.program(), &self.side_path())
+        let path = self.side_path();
+        if let Some(set) = self.settings.ask_agent.as_deref()
+            && let Some(agent) = self.settings.agents.iter().find(|a| a.name == set)
+            && agent.like == "claude"
+        {
+            return ask::find(&agent.command, &path);
+        }
+        ask::find(READER.program(), &path)
     }
 
     fn start_remote_run(&self, args: Vec<String>, prompt: &str) -> Option<ask::Running> {

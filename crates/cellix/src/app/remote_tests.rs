@@ -1669,3 +1669,53 @@ fn the_your_agents_card_lists_adds_edits_and_removes_runners() {
             .any(|a| a.command == "codex-fast")
     );
 }
+
+/// Polish runs the Default agent: where that's one of the person's runners, the runner's own
+/// command runs, with its like agent's treatment and its own name on the card; what the
+/// command printed on failure reaches the card, as any agent's does.
+#[test]
+fn polish_runs_a_runner_as_the_default_agent() {
+    let (dir, mut app) = project();
+    // A stand-in runner that behaves as the stand-in claude does: each run answers what it's
+    // told, and it records how it was run; the doc's read goes through the stand-in claude.
+    stand_in(dir.path());
+    stand_in_for(dir.path(), "claude-ds");
+    app.settings.agents.push(crate::settings::CustomAgent {
+        name: "Claude (DeepSeek)".to_string(),
+        command: "claude-ds".to_string(),
+        like: "claude".to_string(),
+    });
+    app.settings.ask_agent = Some("Claude (DeepSeek)".to_string());
+    // The doc's read runs the runner too (it works like Claude Code): its first run answers
+    // the read, its second the polish.
+    answers_for(
+        dir.path(),
+        "claude-ds",
+        1,
+        &printed(&read_answer(json!([]))),
+    );
+    read_doc(dir.path(), &mut app);
+    let long = "I think this is a problem because if one consumer gets slow for whatever reason \
+                then all of the events behind it are going to wait.";
+    comment(&mut app, "slow consumer", long);
+    let short = "One slow consumer stalls its partition. How is that detected?";
+    answers_for(dir.path(), "claude-ds", 2, &printed(short));
+    press_on_card(&mut app, "Draft, not posted yet", "Polish");
+    let text = shows(&mut app, "Use This").text();
+    assert_eq!(
+        runs_of(dir.path(), "claude-ds"),
+        2,
+        "the runner read and polished"
+    );
+    assert_eq!(runs(dir.path()), 0, "and plain claude didn't");
+    let (_args, prompt, side) = given_for(dir.path(), "claude-ds", 2);
+    assert_eq!(side, "1", "a side run, which no hook takes for an agent's");
+    assert!(prompt.contains("short, clear and kind"), "{prompt}");
+    assert!(
+        text.contains("Claude (DeepSeek) · 10 words, from 26"),
+        "the card says who: {text}"
+    );
+    // The doc is still read through Claude Code, not the runner, until the Default agent
+    // names a runner that works like Claude Code.
+    assert_eq!(thread_saying(&app, long).text, long);
+}

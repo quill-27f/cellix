@@ -11431,7 +11431,7 @@ impl App {
         let resumable = stopped
             .agent
             .as_ref()
-            .and_then(|a| crate::agents::resume_args(name, &a.session))
+            .and_then(|a| self.resume_args_for(name, &a.session))
             .is_some();
         let (detail, buttons) = if resumable {
             (
@@ -11470,7 +11470,7 @@ impl App {
                 .any(|s| {
                     s.agent
                         .as_ref()
-                        .and_then(|a| crate::agents::resume_args(&s.job.name, &a.session))
+                        .and_then(|a| self.resume_args_for(&s.job.name, &a.session))
                         .is_some()
                 });
             let label = if any_resumes {
@@ -11654,7 +11654,7 @@ impl App {
         let resume = stopped
             .agent
             .as_ref()
-            .and_then(|a| crate::agents::resume_args(&job.name, &a.session))
+            .and_then(|a| self.resume_args_for(&job.name, &a.session))
             .filter(|_| choice == Revive::Resume);
         if let Some(args) = resume {
             // After what the program is always given: `kiro-cli chat --resume-id <id>`.
@@ -23168,6 +23168,19 @@ impl App {
 
     /// Brings the page's Your agents card and the Default agent row up to date with what
     /// `agents` holds and what's on the PATH.
+    /// What resumes the session of the agent called `name`: its like agent's flags where
+    /// the name is one of the person's runners, which takes that agent's arguments.
+    fn resume_args_for(&self, name: &str, session: &str) -> Option<Vec<String>> {
+        let like = self
+            .settings
+            .agents
+            .iter()
+            .find(|a| a.name == name)
+            .map(|a| crate::agents::display_name(&a.like))
+            .unwrap_or(name);
+        crate::agents::resume_args(like, session)
+    }
+
     fn refresh_settings_agents(&mut self) {
         self.refresh_agents();
         let mut page = self.settings_page.take();
