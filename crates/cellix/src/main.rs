@@ -136,6 +136,14 @@ Usage: cellix [--wait] [files]
   cellix comments [--take]  Review comments, as JSON
   cellix comments --waiting Everything no agent has had yet, a document's comments too
   cellix open <file>        Opens a file in the running Cellix
+  cellix todo add <text> [--parent ID] [--owner NAME] [--source S] [--active TEXT]
+                            A to-do on the workspace's shared list, written with no Cellix
+  cellix todo set <id|text> <todo|doing|done>
+                            Moves one; on a parent, all its children
+  cellix todo active|edit|rm <id|text> …
+                            Sets the form under way, renames, or removes one
+  cellix todo list [--json]
+                            What is left, as words or JSON
   cellix review <link>      Reviews a doc that lives elsewhere, read through Claude Code
   cellix setup [claude|codex|gemini|opencode|copilot|cursor|kiro]
                             Connects an agent
@@ -393,6 +401,216 @@ fn checkpoint(label: &str) -> ExitCode {
     }
 }
 
+const TODO_USAGE: &str = "\
+Usage: cellix todo add <text> [--parent ID] [--owner NAME] [--source S] [--active TEXT]
+       cellix todo set <id|text> <todo|doing|done>
+       cellix todo active <id|text> <text>
+       cellix todo edit <id|text> <new text>
+       cellix todo rm <id|text>
+       cellix todo list [--json]
+";
+
+/// `cellix todo …`: the workspace's shared to-dos, written straight to `.cellix/todos.jsonl`,
+/// so an agent keeps them with no Cellix running and the next one shows them. `CELLIX_AGENT`
+/// names the owner of what an agent adds; the person's own are `you`.
+fn todo(args: &[&str]) -> ExitCode {
+    use cellix_review::todos::{self, State};
+    if args.is_empty() || matches!(args[0], "--help" | "-h" | "help") {
+        print!("{TODO_USAGE}");
+        return ExitCode::SUCCESS;
+    }
+    let cwd = match std::env::current_dir().and_then(dunce::canonicalize) {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            eprintln!("cellix todo: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let roots = cellix_agent::hook::workspaces(&cwd);
+    let Some(root) = cellix_agent::hook::project_root(&roots) else {
+        eprintln!(
+            "cellix todo: not in a project: run it in a git repository, or in a folder Cellix \
+             has open"
+        );
+        return ExitCode::FAILURE;
+    };
+    // Flags stand among the words, each with its value; `--json` takes none.
+    let (mut owner, mut source, mut active, mut parent, mut json) = (None, None, None, None, false);
+    let mut rest = Vec::new();
+    let mut words = args.iter().copied();
+    while let Some(word) = words.next() {
+        let mut value = || match words.next() {
+            Some(value) => Some(value),
+            None => {
+                eprintln!("cellix todo: {word} wants a value");
+                None
+            }
+        };
+        match word {
+            "--json" => json = true,
+            "--owner" => match value() {
+                Some(v) => owner = Some(v),
+                None => return ExitCode::FAILURE,
+            },
+            "--source" => match value() {
+                Some(v) => source = Some(v),
+                None => return ExitCode::FAILURE,
+            },
+            "--active" => match value() {
+                Some(v) => active = Some(v),
+                None => return ExitCode::FAILURE,
+            },
+            "--parent" => match value() {
+                Some(v) => parent = Some(v),
+                None => return ExitCode::FAILURE,
+            },
+            other => rest.push(other),
+        }
+    }
+    let items = todos::list(&root);
+    let found = |key: &str| todos::find(&items, key).map(|item| item.id.clone());
+    let owner = owner.map(str::to_string).unwrap_or_else(|| {
+        std::env::var("CELLIX_AGENT")
+            .ok()
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "you".to_string())
+    });
+    let source = source.map(str::to_string).unwrap_or_else(|| {
+        if owner == "you" {
+            "you".to_string()
+        } else {
+            format!("agent:{owner}")
+        }
+    });
+    let result = match rest.as_slice() {
+        ["add", text @ ..] if !text.is_empty() => {
+            let parent = match parent {
+                Some(key) => match todos::find(&items, key) {
+                    Some(item) if item.parent.is_none() => Some(item.id.clone()),
+                    Some(_) => {
+                        eprintln!("cellix todo: a sub-task can't have sub-tasks");
+                        return ExitCode::FAILURE;
+                    }
+                    None => {
+                        eprintln!("cellix todo: no to-do matches {key:?}");
+                        return ExitCode::FAILURE;
+                    }
+                },
+                None => None,
+            };
+            let text = text.join(" ");
+            let active = active.unwrap_or("");
+            todos::add(&root, &text, &owner, &source, parent.as_deref(), active).map(|id| {
+                println!("{id}");
+            })
+        }
+        ["set", key, name] => match (found(key), State::parse(name)) {
+            (Some(id), Some(state)) => todos::set(&root, &id, state),
+            (None, _) => {
+                eprintln!("cellix todo: no to-do matches {key:?}");
+                return ExitCode::FAILURE;
+            }
+            (_, None) => {
+                eprintln!("cellix todo: {name:?} isn't todo, doing or done");
+                return ExitCode::FAILURE;
+            }
+        },
+        ["active", key, text @ ..] if !text.is_empty() => match found(key) {
+            Some(id) => todos::active(&root, &id, &text.join(" ")),
+            None => {
+                eprintln!("cellix todo: no to-do matches {key:?}");
+                return ExitCode::FAILURE;
+            }
+        },
+        ["edit", key, text @ ..] if !text.is_empty() => match found(key) {
+            Some(id) => todos::edit(&root, &id, &text.join(" ")),
+            None => {
+                eprintln!("cellix todo: no to-do matches {key:?}");
+                return ExitCode::FAILURE;
+            }
+        },
+        ["rm", key] => match found(key) {
+            Some(id) => todos::remove(&root, &id),
+            None => {
+                eprintln!("cellix todo: no to-do matches {key:?}");
+                return ExitCode::FAILURE;
+            }
+        },
+        ["list"] => {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&items).unwrap_or_default()
+                );
+            } else {
+                print_todos(&items);
+            }
+            Ok(())
+        }
+        _ => {
+            eprint!("{TODO_USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("cellix todo: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// The list as words, one to-do a line, children two spaces in: its mark, its words, how far
+/// a parent has got, its owner when that isn't the person, and what it's doing.
+fn print_todos(items: &[cellix_review::todos::Item]) {
+    use cellix_review::todos::{self, State};
+    if items.is_empty() {
+        println!("No to-dos.");
+        return;
+    }
+    let mark = |state: State| match state {
+        State::Todo => "\u{2610}",
+        State::Doing => "\u{25d0}",
+        State::Done => "\u{2611}",
+    };
+    let tail = |item: &cellix_review::todos::Item| {
+        let owner = if item.owner.is_empty() || item.owner == todos::YOU {
+            String::new()
+        } else {
+            format!("  ({})", item.owner)
+        };
+        let active = if item.state == State::Doing && !item.active.is_empty() {
+            format!("  \u{2014} {}", item.active)
+        } else {
+            String::new()
+        };
+        format!("{owner}{active}")
+    };
+    for top in todos::top_level(items) {
+        let children: Vec<&cellix_review::todos::Item> = todos::children(items, &top.id).collect();
+        let progress = if children.is_empty() {
+            String::new()
+        } else {
+            let done = children
+                .iter()
+                .filter(|child| child.state == State::Done)
+                .count();
+            format!("  {done}/{}", children.len())
+        };
+        println!(
+            "{}  {}{}{}",
+            mark(todos::effective(top, items)),
+            top.text,
+            progress,
+            tail(top)
+        );
+        for child in children {
+            println!("   {}  {}{}", mark(child.state), child.text, tail(child));
+        }
+    }
+}
+
 fn main() -> ExitCode {
     // Settings and the agents' folders are found under HOME, which Windows sets only inside
     // Git Bash. Elsewhere it's the profile folder, which is where the agents keep theirs.
@@ -421,6 +639,7 @@ fn main() -> ExitCode {
         }
         ["checkpoint", label @ ..] => return checkpoint(&label.join(" ")),
         ["agent", rest @ ..] => return agent(rest),
+        ["todo", rest @ ..] => return todo(rest),
         ["ls"] => return list(),
         ["hook", kind] => return hook("Claude Code", kind),
         ["hook", "--agent", agent, kind] => return hook(agent, kind),

@@ -58,8 +58,8 @@ impl State {
     }
 }
 
-/// One to-do after the log is replayed.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One to-do after the log is replayed. `cellix todo list --json` prints them in this shape.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Item {
     pub id: String,
     pub text: String,

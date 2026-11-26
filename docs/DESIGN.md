@@ -2636,6 +2636,11 @@ when it is a repository — and the app reads its own workspace's log: a Cellix 
 folder an agent runs in is the one the hook finds, and an agent working elsewhere in the
 repository writes at the top, which the app shows when that is the workspace it opened.
 
+Other agents keep theirs with `cellix todo add|set|active|edit|rm|list`, which writes the same
+log directly, so it works with no Cellix running and a running one reads it on its next tick.
+`--parent`, `--owner` (the agent's own name from `CELLIX_AGENT` when it runs it), `--source` and
+`--active`; a set on a parent moves its children, and removing one takes its children with it.
+
 ### Agents starting agents
 
 An agent can start others in the side pane, give them work, wait for them and read what they

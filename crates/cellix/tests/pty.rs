@@ -3004,3 +3004,43 @@ fn pty_ask_answers_a_side_question_on_a_card() {
     screen.send(b"\x11"); // Ctrl+Q
     screen.wait_exit();
 }
+
+/// What `cellix todo` writes, a running Cellix shows: the real binary adds a to-do and the
+/// view reads it on its next tick, then the CLI marks it done and it folds away.
+#[test]
+#[cfg(unix)]
+fn cellix_todo_changes_the_list_a_running_cellix_shows() {
+    let dir = project();
+    let mut screen = Screen::start(dir.path(), &["hello.txt"]);
+    screen.wait_for("hello from a file");
+    // The To-dos view, from the palette.
+    screen.send(b"\x1b[112;6u"); // Ctrl+Shift+P, Kitty keyboard protocol
+    screen.wait_for("Type to search");
+    screen.send(b"Show To-dos");
+    screen.wait_for("View: Show To-dos");
+    screen.send(b"\r");
+    screen.wait_for("TO-DOS");
+    screen.wait_for("No to-dos yet.");
+
+    // The real binary writes the log; the view reads it on a tick, with no message between.
+    let run = |args: &[&str]| {
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .args(args)
+            .current_dir(dir.path())
+            .env_remove("CELLIX_AGENT")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    run(&["todo", "add", "Write the notes"]);
+    screen.wait_for("Write the notes");
+    run(&["todo", "set", "Write the notes", "done"]);
+    screen.wait_for("Show 1 done");
+
+    screen.send(b"\x11"); // Ctrl+Q
+    screen.wait_exit();
+}

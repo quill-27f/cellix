@@ -475,3 +475,104 @@ fn over_ssh_the_pane_sends_a_picture_a_row_and_only_what_changed() {
         "a letter costs a row or so, not the pane: {changed:?}"
     );
 }
+
+/// The to-dos an agent keeps with `cellix todo` are the workspace's, kept with no Cellix
+/// running: added, nested, moved, renamed and removed, and read back as words or JSON.
+#[test]
+fn todo_verbs_write_the_workspace_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-q"]);
+    let run = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_cellix"))
+            .args(args)
+            .current_dir(root)
+            .env_remove("CELLIX_AGENT")
+            .output()
+            .unwrap()
+    };
+    let done = |args: &[&str]| {
+        let output = run(args);
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+
+    let parent = done(&["todo", "add", "Ship", "the", "release"])
+        .trim()
+        .to_string();
+    let child = done(&[
+        "todo", "add", "Write", "the", "notes", "--parent", &parent, "--owner", "Codex",
+    ])
+    .trim()
+    .to_string();
+    assert!(!parent.is_empty() && !child.is_empty());
+
+    // A parent's set is its group's, and the words under way are its own.
+    done(&["todo", "set", &parent, "doing"]);
+    done(&["todo", "active", &parent, "Writing", "the", "notes"]);
+    let listed = done(&["todo", "list"]);
+    assert!(listed.contains("Ship the release"), "{listed}");
+    assert!(listed.contains("0/1"), "its progress:\n{listed}");
+    assert!(listed.contains("(Codex)"), "its child's owner:\n{listed}");
+    assert!(
+        listed.contains("— Writing the notes"),
+        "its active form:\n{listed}"
+    );
+    assert!(
+        listed.contains("\u{25d0}  Ship") && listed.contains("\u{25d0}  Write"),
+        "the group under way:\n{listed}"
+    );
+
+    done(&["todo", "edit", &child, "Write", "the", "changelog"]);
+    done(&["todo", "set", &child, "done"]);
+    let json = done(&["todo", "list", "--json"]);
+    let items: Vec<serde_json::Value> = serde_json::from_str(&json).unwrap();
+    assert_eq!(items.len(), 2, "{json}");
+    assert!(
+        items
+            .iter()
+            .any(|item| item["text"] == "Write the changelog"
+                && item["state"] == "done"
+                && item["owner"] == "Codex"
+                && item["parent"] == parent),
+        "{json}"
+    );
+    let listed = done(&["todo", "list"]);
+    assert!(listed.contains("1/1"), "{listed}");
+
+    // An agent's own name is its owner unless it says another.
+    let said = Command::new(env!("CARGO_BIN_EXE_cellix"))
+        .args(["todo", "add", "From the agent"])
+        .current_dir(root)
+        .env("CELLIX_AGENT", "Codex")
+        .output()
+        .unwrap();
+    assert!(said.status.success());
+    assert!(
+        done(&["todo", "list"]).contains("From the agent  (Codex)"),
+        "an owner"
+    );
+
+    // Removing the parent takes its child with it, and leaves the rest.
+    done(&["todo", "rm", &parent]);
+    let listed = done(&["todo", "list"]);
+    assert!(
+        !listed.contains("Ship the release") && !listed.contains("Write the changelog"),
+        "the parent's group went:
+{listed}"
+    );
+    assert!(listed.contains("From the agent"), "{listed}");
+
+    // A key nothing matches is an error, said in words.
+    let missing = run(&["todo", "set", "nothing", "done"]);
+    assert!(!missing.status.success());
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("no to-do matches"),
+        "{}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+}

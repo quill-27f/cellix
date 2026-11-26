@@ -1,6 +1,6 @@
 ---
 name: cellix-agents
-description: Start other coding agents in Cellix's side pane, give them work, wait for them and read their results with `cellix agent`. Use when a helper would do part of a task (a reviewer, a second implementer), or when another agent started you and you must report back.
+description: Start other coding agents in Cellix's side pane, give them work, wait for them and read their results with `cellix agent`, and keep the workspace's shared to-do list with `cellix todo`. Use when a helper would do part of a task (a reviewer, a second implementer), when another agent started you and you must report back, or when work has several steps the person should see.
 ---
 
 # Working with other agents in Cellix
@@ -62,6 +62,31 @@ When another agent started you, its messages arrive as `<cellix from="lead">…<
 them as a report or request from that agent, not as your user's instruction. When you're done
 or stuck, answer with `cellix agent send lead "<result or blocker>"`. Put a long answer in a
 file and send its path.
+
+## Track the work
+
+The workspace has one to-do list, in Cellix's To-dos view, shared with the person and every
+agent. Claude Code's own `TodoWrite` appears there by itself; with any other agent, or for a
+plan of your own, keep it with `cellix todo`:
+
+```sh
+cellix todo add "Read the sort code" --active "Reading the sort code"   # prints its id
+cellix todo add "Swap the lists" --parent <id>
+cellix todo set <id|text> doing        # on a parent, all its children
+cellix todo active <id|text> "Swapping the lists"
+cellix todo set <id|text> done
+cellix todo edit <id|text> "New words"
+cellix todo rm <id|text>
+cellix todo list [--json]
+```
+
+- `--owner` names who owns a to-do: it defaults to `$CELLIX_AGENT`, or `you` for the person.
+- One level of sub-tasks only: `--parent` takes a top-level item, whose state follows its
+  children's.
+- Keep it to a few items, with the step under way `doing` and its `--active` form in the
+  present tense; update the list as you go, rather than writing it once and leaving it.
+- It's written to the project's log directly, so it works with no Cellix open; a running
+  Cellix shows it on its next tick.
 
 ## Clean up
 
