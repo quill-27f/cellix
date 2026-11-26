@@ -4,7 +4,7 @@
 use std::fs;
 use std::rc::Rc;
 
-use cellix_input::{Command, Event, Mods, MouseEvent};
+use cellix_input::{Command, Event, Key, KeyEvent, Mods, MouseEvent};
 use cellix_render::{FontMeasure, Grid, Icon, Paint, Piece};
 use cellix_review::todos::{self, State};
 use tempfile::TempDir;
@@ -78,6 +78,16 @@ fn mouse(kind: cellix_input::MouseKind, x: u16, y: u16) -> Event {
 fn click(app: &mut App, x: u16, y: u16) {
     app.handle(mouse(cellix_input::MouseKind::Left, x, y));
     app.handle(mouse(cellix_input::MouseKind::Up, x, y));
+}
+
+fn typed(app: &mut App, text: &str) {
+    for c in text.chars() {
+        app.handle(Event::Key(KeyEvent::plain(Key::Char(c))));
+    }
+}
+
+fn key(app: &mut App, key: Key) {
+    app.handle(Event::Key(KeyEvent::plain(key)));
 }
 
 #[test]
@@ -374,4 +384,69 @@ fn a_press_marks_a_to_do_done_and_it_stays_done() {
         !text.contains("Run the tests") && !text.contains("Read the sort"),
         "{text}"
     );
+}
+
+#[test]
+fn a_to_do_can_be_added_renamed_and_removed() {
+    let (dir, mut app) = worked();
+    let area = app.sidebar_area().unwrap();
+
+    // The control at the list's end opens a box; Enter writes the to-do and keeps the box
+    // open for another.
+    let grid = screen(&app);
+    let add = row_of(&grid, "+ Add a To-do");
+    click(&mut app, area.x + 5, add);
+    typed(&mut app, "Plan the release");
+    key(&mut app, Key::Enter);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("Plan the release"), "{text}");
+    assert!(text.contains("1 of 4"), "the new to-do counted:\n{text}");
+    assert!(
+        text.contains("+ Add a To-do"),
+        "the box stays open:\n{text}"
+    );
+    key(&mut app, Key::Esc);
+
+    // A press on the words opens the row's box; a press in the box puts the caret where it
+    // lands, and Enter writes the new words.
+    let grid = screen(&app);
+    let notes = row_of(&grid, "Write notes");
+    click(&mut app, area.x + 5, notes);
+    click(&mut app, area.x + 4, notes);
+    typed(&mut app, "New ");
+    key(&mut app, Key::Enter);
+    let grid = screen(&app);
+    assert!(
+        grid.text().contains("New Write notes"),
+        "the words renamed:\n{}",
+        grid.text()
+    );
+
+    // The × at the row's end removes it, leaving the rest.
+    let notes = row_of(&grid, "New Write notes");
+    click(&mut app, area.right() - 2, notes);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(!text.contains("Write notes"), "removed:\n{text}");
+    assert!(text.contains("1 of 3"), "{text}");
+
+    // Escape leaves the words as they were.
+    let plan = row_of(&grid, "Plan the release");
+    click(&mut app, area.x + 5, plan);
+    typed(&mut app, " changed");
+    key(&mut app, Key::Esc);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("Plan the release"), "{text}");
+    assert!(!text.contains("Plan the release changed"), "{text}");
+
+    // The log has all of it: the added to-do, the new words gone, the plan as it was.
+    let mut later = App::new(dir.path().to_path_buf(), (160, 30));
+    later.run(Command::ShowTodos);
+    let grid = screen(&later);
+    let text = grid.text();
+    assert!(text.contains("Plan the release"), "{text}");
+    assert!(!text.contains("Write notes"), "{text}");
+    assert!(text.contains("1 of 3"), "{text}");
 }

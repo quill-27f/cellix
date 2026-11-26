@@ -7880,5 +7880,12 @@
     "title": "A press on a to-do's box ticks it done, an item under way too, and a press on a done one puts it back to do; done rows fold under Show N done, a press unfolds them where the chip stands, and Clear done takes only those, all of it kept in .cellix/todos.jsonl for the next Cellix",
     "test": "a_press_marks_a_to_do_done_and_it_stays_done",
     "passes": true
+  },
+  {
+    "id": "todos-add-edit-remove",
+    "milestone": 16,
+    "title": "The To-dos view adds one at the list's end (and on an empty list's button), renames one on a press on its words with a press in its box placing the caret, and removes one with the × that comes at the hovered row's end; Enter writes, Escape leaves it as it was, and the add box stays open for the next, all written to .cellix/todos.jsonl",
+    "test": "a_to_do_can_be_added_renamed_and_removed",
+    "passes": true
   }
 ]

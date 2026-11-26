@@ -8,6 +8,7 @@
 //! two columns in under an elbow, as the Agents list draws one.
 
 use std::collections::HashSet;
+use std::io;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -15,6 +16,7 @@ use cellix_render::{Bounds, Grid, Icon, Measure, Paint, Rect, Rgb, Style};
 use cellix_review::todos as store;
 use cellix_review::todos::{Item, State};
 
+use crate::field::TextBox;
 use crate::theme::Theme;
 
 /// The title's count, set as the title is but not bold.
@@ -57,6 +59,10 @@ const FOLD_MARK: f32 = 0.4;
 /// What Clear done says where there are pictures, and on cells where the row is narrow.
 const CLEAR: &str = "Clear done";
 const CLEAR_CELLS: &str = "Clear";
+/// The control at the list's end that opens a box for a new to-do.
+const ADD: &str = "+ Add a To-do";
+/// The room a field stands in from the words' column, in columns: the canvas's 8 px.
+const FIELD_LEAD: f32 = 8.0 / 17.0;
 
 /// One line of the list, in the order it is drawn. An item under way with an active form
 /// takes a second line under it, the form quiet.
@@ -65,14 +71,25 @@ enum Line {
     Item(ItemRow),
     Active { at: usize },
     Fold { count: usize, open: bool },
+    Add,
 }
 
-/// What a press in the view found: an item's box to tick, the fold, or Clear done.
+/// What a press in the view found: a box to tick, a row's words to rename, its remove mark,
+/// the fold, Clear done, or the add control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
     Box { at: usize },
+    Words { at: usize },
+    Remove { at: usize },
     Fold,
     Clear,
+    Add,
+}
+
+/// The box the view has open: a new to-do at the list's end, or one being renamed.
+enum Editing {
+    Add,
+    Rename(String),
 }
 
 /// Where the fold's parts stand, in columns from the sidebar's left edge and on its cells.
@@ -114,6 +131,8 @@ pub struct Todos {
     top: usize,
     /// The children of a parent folded away, by the parent's id.
     folded: HashSet<String>,
+    /// The box writing a new to-do or renaming one, while it has the keyboard.
+    field: Option<(Editing, TextBox)>,
     /// When and how big the log was when it was last read, to know when to read it again.
     seen: Option<(SystemTime, u64)>,
 }
@@ -131,8 +150,122 @@ impl Todos {
         self.items = store::list(root);
     }
 
-    /// The box, fold or Clear done at `(x, y)` of the panel, when one is there.
+    /// The box with the keyboard, to read.
+    pub fn field(&self) -> Option<&TextBox> {
+        self.field.as_ref().map(|(_, field)| field)
+    }
+
+    /// The same, to change.
+    pub fn field_mut(&mut self) -> Option<&mut TextBox> {
+        self.field.as_mut().map(|(_, field)| field)
+    }
+
+    /// Opens a box for a new to-do at the list's end.
+    pub fn start_add(&mut self) {
+        self.field = Some((Editing::Add, TextBox::default()));
+    }
+
+    /// Opens the box that renames the item at `at`, its words in it and the caret after them.
+    pub fn start_rename(&mut self, at: usize) {
+        let Some(item) = self.items.get(at) else {
+            return;
+        };
+        self.field = Some((Editing::Rename(item.id.clone()), TextBox::new(&item.text)));
+    }
+
+    /// Closes the box without writing anything, as Escape does.
+    pub fn cancel(&mut self) {
+        self.field = None;
+    }
+
+    /// Writes what the box holds: a new to-do, after which the box stays open and empty for
+    /// another, or the new words of one being renamed, after which it closes. Empty words
+    /// write nothing.
+    pub fn commit(&mut self, root: &Path) -> io::Result<()> {
+        let Some((editing, field)) = self.field.take() else {
+            return Ok(());
+        };
+        let text = field.text().trim().to_string();
+        let written = match &editing {
+            Editing::Add if !text.is_empty() => {
+                store::add(root, &text, store::YOU, store::YOU, None, "").map(|_| ())
+            }
+            Editing::Add => Ok(()),
+            Editing::Rename(id) if !text.is_empty() => store::edit(root, id, &text),
+            Editing::Rename(_) => Ok(()),
+        };
+        if let Err(e) = written {
+            self.field = Some((editing, field));
+            return Err(e);
+        }
+        if matches!(editing, Editing::Add) {
+            self.field = Some((Editing::Add, TextBox::default()));
+        }
+        Ok(())
+    }
+
+    /// The byte of the box with the keyboard a press or drag at `(x, y)` stands at: when it's
+    /// on that box, or with `clamp`, anywhere.
+    pub fn place(
+        &self,
+        area: Rect,
+        (x, y): (f32, u16),
+        (measure, theme): (&dyn Measure, &Theme),
+        clamp: bool,
+    ) -> Option<usize> {
+        let (editing, field) = self.field.as_ref()?;
+        let rect = self.field_rect(area, editing, measure)?;
+        if !clamp && !rect.contains(x as u16, y) {
+            return None;
+        }
+        let shown = crate::palette::Input::of(field, "", true, theme.sidebar.bg);
+        Some(crate::palette::input_press(rect, &shown, x, measure))
+    }
+
+    /// Where the open box stands, when it is on screen: on the row of the item renamed, or at
+    /// the list's end, or where an empty list's button stands.
+    fn field_rect(&self, area: Rect, editing: &Editing, measure: &dyn Measure) -> Option<Rect> {
+        let lines = self.lines();
+        let visible = area.h.saturating_sub(1) as usize;
+        let top = self.top.min(lines.len().saturating_sub(1));
+        let (y, words_x, words_cell) = match editing {
+            Editing::Rename(id) => {
+                let at = lines.iter().position(
+                    |line| matches!(line, Line::Item(row) if &self.items[row.at].id == id),
+                )?;
+                let row = at.checked_sub(top)?;
+                if row >= visible {
+                    return None;
+                }
+                let depth = match &lines[at] {
+                    Line::Item(item) => item.depth,
+                    _ => 0,
+                };
+                let (words_x, words_cell) = words_left(depth);
+                (area.y + 1 + row as u16, words_x, words_cell)
+            }
+            Editing::Add if self.counts().is_some() => {
+                let row = lines.len().checked_sub(1)?.checked_sub(top)?;
+                if row >= visible {
+                    return None;
+                }
+                (area.y + 1 + row as u16, WORDS_LEFT, WORDS_CELL)
+            }
+            Editing::Add => (self.empty_parts(area, measure).1, WORDS_LEFT, WORDS_CELL),
+        };
+        Some(field_rect(area, y, words_x, words_cell, measure))
+    }
+
+    /// The box, the words, the remove mark, the fold, Clear done or the add control at
+    /// `(x, y)` of the panel, when one is there.
     pub fn hit(&self, area: Rect, x: u16, y: u16, measure: &dyn Measure) -> Option<Hit> {
+        if self.counts().is_none() {
+            let (_, button) = self.empty_parts(area, measure);
+            if y != button {
+                return None;
+            }
+            return self.add_hit(area, x, measure);
+        }
         let row = y.checked_sub(area.y + 1)? as usize;
         let lines = self.lines();
         let top = self.top.min(lines.len().saturating_sub(1));
@@ -140,7 +273,16 @@ impl Todos {
         match line {
             Line::Item(item) => {
                 let (_, mark_cell) = mark_left(area, item.depth);
-                (x >= mark_cell && x < mark_cell + 1).then_some(Hit::Box { at: item.at })
+                if x >= mark_cell && x < mark_cell + 1 {
+                    return Some(Hit::Box { at: item.at });
+                }
+                let right = area.right().saturating_sub(RIGHT);
+                if x >= right.saturating_sub(OWNER) {
+                    return Some(Hit::Remove { at: item.at });
+                }
+                let (_, words_cell) = words_left(item.depth);
+                let words = words_right(area, measure, item.progress);
+                (x >= area.x + words_cell && x < words).then_some(Hit::Words { at: item.at })
             }
             Line::Fold { count, open } => {
                 let parts = self.fold_parts(area, measure, (*count, *open));
@@ -161,8 +303,20 @@ impl Todos {
                     on.then_some(Hit::Clear)
                 })
             }
+            Line::Add => self.add_hit(area, x, measure),
             Line::Section(..) | Line::Active { .. } => None,
         }
+    }
+
+    /// The add control at the words' column, when `x` is on its chip.
+    fn add_hit(&self, area: Rect, x: u16, measure: &dyn Measure) -> Option<Hit> {
+        let (left, cell, wide, _) = self.add_parts(area, measure);
+        let on = if measure.in_cells() {
+            x >= cell && x < cell + wide as u16
+        } else {
+            (x as f32) >= left && (x as f32) < left + wide
+        };
+        on.then_some(Hit::Add)
     }
 
     /// Reads the log again if it changed since it was last read, and says whether it did. The
@@ -242,6 +396,7 @@ impl Todos {
                 }
             }
         }
+        lines.push(Line::Add);
         lines
     }
 
@@ -308,7 +463,7 @@ impl Todos {
             grid.label_right_at(right as f32, right, area.y, &count, style, COUNT_SIZE);
         }
         if self.counts().is_none() {
-            self.draw_empty(grid, area, (theme, measure));
+            self.draw_empty(grid, area, (theme, measure), hover);
             return;
         }
         let lines = self.lines();
@@ -340,34 +495,151 @@ impl Todos {
                 Line::Fold { count, open } => {
                     self.draw_fold(grid, area, y, (*count, *open), hover, (theme, measure));
                 }
+                Line::Add => self.draw_add(grid, area, y, hover, (theme, measure)),
             }
         }
     }
 
-    fn draw_empty(&self, grid: &mut Grid, area: Rect, (theme, measure): (&Theme, &dyn Measure)) {
+    fn draw_empty(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        (theme, measure): (&Theme, &dyn Measure),
+        hover: Option<(u16, u16)>,
+    ) {
         let right = area.right().saturating_sub(RIGHT);
         let x = area.x + WORDS_CELL;
         let x_px = area.x as f32 + WORDS_LEFT;
-        let space = words_room(measure, right, x, area.x as f32 + WORDS_LEFT);
-        let mut y = area.y + 1;
+        let (lines, button) = self.empty_parts(area, measure);
         let note = Style {
             fg: theme.sidebar.fg,
             ..theme.sidebar
         };
-        grid.label_at(x_px, x, y, "No to-dos yet.", note, right, WORD_SIZE);
-        y += 1;
+        grid.label_at(
+            x_px,
+            x,
+            area.y + 1,
+            "No to-dos yet.",
+            note,
+            right,
+            WORD_SIZE,
+        );
         let quiet = Style {
             fg: theme.tab.fg,
             ..theme.sidebar
         };
-        for line in crate::threads::wrap("An agent's plan shows here as it works.", space, measure)
-        {
-            if y >= area.bottom() {
-                break;
-            }
-            grid.label_at(x_px, x, y, &line, quiet, right, ACTIVE_SIZE);
-            y += 1;
+        for (line, at) in lines.iter().zip(area.y + 2..button) {
+            grid.label_at(x_px, x, at, line, quiet, right, ACTIVE_SIZE);
         }
+        if button < area.bottom() {
+            self.draw_add(grid, area, button, hover, (theme, measure));
+        }
+    }
+
+    /// The empty list's quiet words, on as many lines as they take, and the row its button
+    /// stands on, under them.
+    fn empty_parts(&self, area: Rect, measure: &dyn Measure) -> (Vec<String>, u16) {
+        let right = area.right().saturating_sub(RIGHT);
+        let x = area.x + WORDS_CELL;
+        let space = words_room(measure, right, x, area.x as f32 + WORDS_LEFT);
+        let lines = crate::threads::wrap("An agent's plan shows here as it works.", space, measure);
+        let button = area.y + 2 + lines.len() as u16;
+        (lines, button)
+    }
+
+    /// The add control at the list's end, or the box it opens.
+    fn draw_add(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        y: u16,
+        hover: Option<(u16, u16)>,
+        (theme, measure): (&Theme, &dyn Measure),
+    ) {
+        if let Some((Editing::Add, _)) = &self.field {
+            self.draw_field(grid, area, y, WORDS_LEFT, WORDS_CELL, (theme, measure));
+            return;
+        }
+        let (left, cell, wide, cells) = self.add_parts(area, measure);
+        let over = hover.is_some_and(|(hx, hy)| {
+            if measure.in_cells() {
+                hy == y && hx >= cell && hx < cell + wide as u16
+            } else {
+                hy == y && (hx as f32) >= left && (hx as f32) < left + wide
+            }
+        });
+        let quiet = theme.quiet_button(theme.sidebar.bg);
+        let fill = if over {
+            theme.quiet_button(quiet)
+        } else {
+            quiet
+        };
+        let style = Style {
+            bg: fill,
+            fg: theme.text.fg,
+            ..theme.sidebar
+        };
+        if measure.in_cells() {
+            grid.button(cell, y, &cells, "", fill, style);
+            return;
+        }
+        grid.chip(left, y, wide, fill);
+        let under = Style {
+            bg: theme.sidebar.bg,
+            painted: true,
+            ..style
+        };
+        let at = left + FOLD_ROOM;
+        let end = (left + wide).ceil() as u16;
+        let painted = grid.painted_so_far();
+        grid.label_at(
+            at,
+            at as u16,
+            y,
+            ADD,
+            under,
+            end,
+            crate::measures::BUTTON_TEXT,
+        );
+        grid.centre_span_since(painted);
+    }
+
+    /// Where the add control's chip is, and its cells: at the words' column.
+    fn add_parts(&self, area: Rect, measure: &dyn Measure) -> (f32, u16, f32, String) {
+        let cells = format!(" {ADD} ");
+        let font = cellix_render::Font {
+            size: crate::measures::BUTTON_TEXT,
+            ..cellix_render::Font::default()
+        };
+        let wide = if measure.in_cells() {
+            f32::from(cells.chars().count() as u16)
+        } else {
+            2.0 * FOLD_ROOM + measure.width(ADD, font)
+        };
+        (area.x as f32 + WORDS_LEFT, area.x + WORDS_CELL, wide, cells)
+    }
+
+    /// The open box, at the words' column of `y`: the field a to-do is written or renamed in.
+    fn draw_field(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        y: u16,
+        words_x: f32,
+        words_cell: u16,
+        (theme, measure): (&Theme, &dyn Measure),
+    ) {
+        let Some((editing, field)) = &self.field else {
+            return;
+        };
+        let hint = if matches!(editing, Editing::Add) {
+            ADD
+        } else {
+            ""
+        };
+        let rect = field_rect(area, y, words_x, words_cell, measure);
+        let shown = crate::palette::Input::of(field, hint, true, theme.sidebar.bg);
+        crate::palette::input(grid, rect, &shown, measure, theme);
     }
 
     fn draw_item(
@@ -388,9 +660,14 @@ impl Todos {
             row.active,
         );
         let item = &self.items[at];
+        let editing = self
+            .field
+            .as_ref()
+            .is_some_and(|(editing, _)| matches!(editing, Editing::Rename(id) if id == &item.id));
         let tall = 1 + u16::from(active);
         let row = Rect::new(area.x, y, area.w, tall);
-        if hover.is_some_and(|h| row.contains(h.0, h.1)) {
+        let hovered = hover.is_some_and(|h| row.contains(h.0, h.1));
+        if hovered {
             grid.panel(
                 Bounds::inset(row, 0.5, 0.06),
                 12,
@@ -403,16 +680,11 @@ impl Todos {
             draw_elbow(grid, area, y, (mark_x, last), (theme, measure));
         }
         self.draw_mark(grid, (mark_x, mark_cell), y, at, progress, (theme, measure));
-        let words_x = if depth == 0 {
-            WORDS_LEFT
-        } else {
-            CHILD_WORDS_LEFT
-        };
-        let words_cell = if depth == 0 {
-            WORDS_CELL
-        } else {
-            WORDS_CELL + INDENT
-        };
+        let (words_x, words_cell) = words_left(depth);
+        if editing {
+            self.draw_field(grid, area, y, words_x, words_cell, (theme, measure));
+            return;
+        }
         let right = area.right().saturating_sub(RIGHT);
         let max_x = words_right(area, measure, progress);
         let space = words_room(measure, max_x, area.x + words_cell, area.x as f32 + words_x);
@@ -434,10 +706,47 @@ impl Todos {
             max_x,
             WORD_SIZE,
         );
+        if hovered {
+            // Under the pointer the owner gives way to the × that removes the row; on cells
+            // the progress gives way too, there being one column at the row's end.
+            self.draw_remove(grid, right, y, (theme, measure));
+            if !measure.in_cells()
+                && let Some((done, total)) = progress
+            {
+                self.draw_progress(grid, (right, y), (done, total), (theme, measure));
+            }
+            return;
+        }
         if let Some((done, total)) = progress {
             self.draw_progress(grid, (right, y), (done, total), (theme, measure));
         }
         self.draw_owner(grid, (right, y), at, progress, (theme, measure));
+    }
+
+    /// The × that removes a row, at the owner's place at its end.
+    fn draw_remove(
+        &self,
+        grid: &mut Grid,
+        right: u16,
+        y: u16,
+        (theme, measure): (&Theme, &dyn Measure),
+    ) {
+        let colour = theme.tab.fg;
+        let shown = Style {
+            fg: colour,
+            painted: true,
+            ..theme.sidebar
+        };
+        if measure.in_cells() {
+            grid.put_str(right.saturating_sub(1), y, "×", shown, right);
+            return;
+        }
+        let x = f32::from(right) - 16.0 / CELL;
+        grid.paint.push(Paint::Icon {
+            bounds: Bounds::cells(x, y as f32 + (1.0 - MARK) / 2.0, 1.0, MARK),
+            icon: Icon::Close,
+            color: colour,
+        });
     }
 
     fn draw_active(
@@ -452,16 +761,7 @@ impl Todos {
         // are quiet under it.
         let item = &self.items[at];
         let depth = if item.parent.is_some() { 1 } else { 0 };
-        let words_x = if depth == 0 {
-            WORDS_LEFT
-        } else {
-            CHILD_WORDS_LEFT
-        };
-        let words_cell = if depth == 0 {
-            WORDS_CELL
-        } else {
-            WORDS_CELL + INDENT
-        };
+        let (words_x, words_cell) = words_left(depth);
         let max_x = words_right(area, measure, None);
         let space = words_room(measure, max_x, area.x + words_cell, area.x as f32 + words_x);
         let style = Style {
@@ -777,6 +1077,26 @@ fn mark_left(area: Rect, depth: u8) -> (f32, u16) {
         area.x as f32 + MARK_LEFT + columns,
         area.x + MARK_CELL + u16::from(depth) * INDENT,
     )
+}
+
+/// Where an item's words start, in columns from the sidebar's edge and in its cells.
+fn words_left(depth: u8) -> (f32, u16) {
+    if depth == 0 {
+        (WORDS_LEFT, WORDS_CELL)
+    } else {
+        (CHILD_WORDS_LEFT, WORDS_CELL + INDENT)
+    }
+}
+
+/// The row a box stands in, from the words' column less its lead to the row's far edge.
+fn field_rect(area: Rect, y: u16, words_x: f32, words_cell: u16, measure: &dyn Measure) -> Rect {
+    let left = if measure.in_cells() {
+        area.x + words_cell
+    } else {
+        (area.x as f32 + words_x - FIELD_LEAD).floor() as u16
+    };
+    let right = area.right().saturating_sub(RIGHT);
+    Rect::new(left, y, right.saturating_sub(left), 1)
 }
 
 /// The furthest column an item's words may reach: before the owner, or before the owner and

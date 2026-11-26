@@ -3282,6 +3282,7 @@ impl App {
     /// Shows Agent Context, for the agent running beside the file if there is one.
     fn show_agent_context(&mut self) {
         self.search.focus = None;
+        self.todos.cancel();
         self.review = None;
         self.sidebar_view = SidebarView::Context;
         self.show_sidebar = true;
@@ -3299,6 +3300,8 @@ impl App {
     /// Shows the workspace's shared to-dos, as the rail's checklist or View: Show To-dos does.
     fn show_todos(&mut self) {
         self.search.focus = None;
+        self.source.focused = false;
+        self.todos.cancel();
         self.review = None;
         self.sidebar_view = SidebarView::Todos;
         self.show_sidebar = true;
@@ -3306,15 +3309,20 @@ impl App {
         self.todos.show(self.workspace.root());
     }
 
-    /// Takes a press in the To-dos view: a box ticks or unticks what it marks, the fold
-    /// opens or closes the done items, and Clear done empties them.
+    /// Takes a press in the To-dos view: a box ticks or unticks what it marks, the words
+    /// rename it, its × removes it, the fold opens or closes the done items, Clear done
+    /// empties them, and the add control opens a box at the list's end.
     fn click_todos(&mut self, x: u16, y: u16) {
         use cellix_review::todos::{self as store, State};
         let Some(area) = self.sidebar_area() else {
             return;
         };
         let measure = self.measure.clone();
-        let Some(hit) = self.todos.hit(area, x, y, measure.as_ref()) else {
+        let hit = self.todos.hit(area, x, y, measure.as_ref());
+        // A press anywhere else takes the keyboard from an open box; a press on the box
+        // itself was the box's before it came here.
+        self.todos.cancel();
+        let Some(hit) = hit else {
             return;
         };
         let root = self.workspace.root().to_path_buf();
@@ -3333,6 +3341,24 @@ impl App {
                     self.say(format!("Could not save the to-do: {e}"));
                     return;
                 }
+            }
+            crate::todos::Hit::Words { at } => {
+                self.todos.start_rename(at);
+                return;
+            }
+            crate::todos::Hit::Remove { at } => {
+                let Some(item) = self.todos.items.get(at) else {
+                    return;
+                };
+                let id = item.id.clone();
+                if let Err(e) = store::remove(&root, &id) {
+                    self.say(format!("Could not remove the to-do: {e}"));
+                    return;
+                }
+            }
+            crate::todos::Hit::Add => {
+                self.todos.start_add();
+                return;
             }
             crate::todos::Hit::Fold => {
                 self.todos.done_open = !self.todos.done_open;
@@ -4264,6 +4290,7 @@ impl App {
             });
         }
         self.search.show(word, found);
+        self.todos.cancel();
         self.sidebar_view = SidebarView::Search;
         self.show_sidebar = true;
         self.drawer = self.view_drawer();
@@ -5437,6 +5464,13 @@ impl App {
             return;
         }
         if self.sidebar_area().is_some()
+            && self.sidebar_view == SidebarView::Todos
+            && let Some(field) = self.todos.field_mut()
+        {
+            field.insert(text.lines().next().unwrap_or_default());
+            return;
+        }
+        if self.sidebar_area().is_some()
             && let Some(field) = self.search.field_mut()
         {
             field.insert(text);
@@ -5807,6 +5841,9 @@ impl App {
         if let Some(page) = &self.settings_page {
             return Some(&page.filter);
         }
+        if self.sidebar_area().is_some() && self.sidebar_view == SidebarView::Todos {
+            return self.todos.field();
+        }
         if self.sidebar_area().is_some() {
             return self.search.field();
         }
@@ -5820,6 +5857,7 @@ impl App {
         let shown = self.sidebar_area().is_some();
         (self.source.focused && self.sidebar_view == SidebarView::Source)
             || (shown && self.search.focus.is_some() && self.sidebar_view == SidebarView::Search)
+            || (shown && self.todos.field().is_some() && self.sidebar_view == SidebarView::Todos)
     }
 
     /// `focused_box`, to change.
@@ -5854,6 +5892,9 @@ impl App {
         }
         if self.settings_page.is_some() {
             return self.settings_page.as_mut().map(|page| &mut page.filter);
+        }
+        if self.sidebar_area().is_some() && self.sidebar_view == SidebarView::Todos {
+            return self.todos.field_mut();
         }
         if self.sidebar_area().is_some() {
             return self.search.field_mut();
@@ -5942,6 +5983,13 @@ impl App {
                 }
                 if let Some(page) = &self.settings_page {
                     return page.filter_place(self.sheet_area(), (mouse.fine_x, y), measure, clamp);
+                }
+                if let Some(area) = self
+                    .sidebar_area()
+                    .filter(|_| self.sidebar_view == SidebarView::Todos)
+                {
+                    let look = (measure, &self.theme);
+                    return self.todos.place(area, (mouse.fine_x, y), look, clamp);
                 }
                 if let Some(area) = self
                     .sidebar_area()
@@ -7421,6 +7469,12 @@ impl App {
             return;
         }
         if self.search.focus.is_some() && self.sidebar_area().is_some() && self.search_key(key) {
+            return;
+        }
+        if self.sidebar_view == SidebarView::Todos
+            && self.sidebar_area().is_some()
+            && self.todos_key(key)
+        {
             return;
         }
         if self.suggest_key(key) {
@@ -9863,6 +9917,7 @@ impl App {
                         let room = self.size.0.saturating_sub(left);
                         if !self.compact() && room >= crate::review::MIN_SIDE_BY_SIDE {
                             self.search.focus = None;
+                            self.todos.cancel();
                             self.show_sidebar = true;
                             self.sidebar_view = SidebarView::Source;
                             self.source_age = 0;
@@ -10189,6 +10244,7 @@ impl App {
             }
             Command::ShowSourceControl => {
                 self.search.focus = None;
+                self.todos.cancel();
                 self.review = None;
                 self.sidebar_view = SidebarView::Source;
                 self.show_sidebar = true;
@@ -10209,6 +10265,7 @@ impl App {
             }
             Command::ShowOutline => {
                 self.search.focus = None;
+                self.todos.cancel();
                 self.review = None;
                 self.sidebar_view = SidebarView::Outline;
                 self.show_sidebar = true;
@@ -13113,6 +13170,7 @@ impl App {
 
     fn show_search(&mut self, field: Field) {
         self.review = None;
+        self.todos.cancel();
         self.sidebar_view = SidebarView::Search;
         self.show_sidebar = true;
         self.drawer = self.view_drawer();
@@ -13194,6 +13252,7 @@ impl App {
     /// until its own × or Esc.
     fn hide_sidebar(&mut self) {
         self.search.focus = None;
+        self.todos.cancel();
         self.show_sidebar = false;
         self.drawer = false;
         if let Some(review) = &mut self.review {
@@ -13238,6 +13297,7 @@ impl App {
 
     fn show_explorer(&mut self) {
         self.search.focus = None;
+        self.todos.cancel();
         self.review = None;
         self.sidebar_view = SidebarView::Explorer;
     }
@@ -13282,6 +13342,37 @@ impl App {
                 }
                 if *field != was {
                     self.search_edited();
+                }
+            }
+        }
+        true
+    }
+
+    /// The keys of the box a to-do is written or renamed in: Enter writes it and Escape
+    /// leaves it as it was; the rest are the box's, as in every box.
+    fn todos_key(&mut self, key: KeyEvent) -> bool {
+        if self.todos.field().is_none() {
+            return false;
+        }
+        let plain = !key.mods.ctrl && !key.mods.alt;
+        match key.key {
+            Key::Esc if plain => self.todos.cancel(),
+            Key::Enter if plain => {
+                let root = self.workspace.root().to_path_buf();
+                match self.todos.commit(&root) {
+                    Ok(()) => self.todos.reload(&root),
+                    Err(e) => self.say(format!("Could not save the to-do: {e}")),
+                }
+            }
+            _ => {
+                let command = self.workflow.keys.command(key);
+                let Some(field) = self.todos.field_mut() else {
+                    return false;
+                };
+                if matches!(key.key, Key::Up | Key::Down | Key::PageUp | Key::PageDown)
+                    || !field.key_as(key, command)
+                {
+                    return false;
                 }
             }
         }
