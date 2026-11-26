@@ -49,12 +49,44 @@ const OWNER: u16 = 3;
 const ELBOW_TOP: f32 = 0.04;
 const ELBOW_SHARE: f32 = 0.21;
 
+/// The fold's chip: its air either side of what it says, the gap before its chevron, and
+/// the chevron's square, in columns and rows, as the canvas draws them.
+const FOLD_ROOM: f32 = 0.7;
+const FOLD_GAP: f32 = 0.35;
+const FOLD_MARK: f32 = 0.4;
+/// What Clear done says where there are pictures, and on cells where the row is narrow.
+const CLEAR: &str = "Clear done";
+const CLEAR_CELLS: &str = "Clear";
+
 /// One line of the list, in the order it is drawn. An item under way with an active form
 /// takes a second line under it, the form quiet.
 enum Line {
     Section(&'static str, usize),
     Item(ItemRow),
     Active { at: usize },
+    Fold { count: usize, open: bool },
+}
+
+/// What a press in the view found: an item's box to tick, the fold, or Clear done.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hit {
+    Box { at: usize },
+    Fold,
+    Clear,
+}
+
+/// Where the fold's parts stand, in columns from the sidebar's left edge and on its cells.
+struct FoldParts {
+    /// What the chip says, and the cells that say it on the cell tier.
+    label: String,
+    cells: String,
+    left: f32,
+    cell: u16,
+    wide: f32,
+    /// The painted width of its words, to place the chevron.
+    words: f32,
+    /// Clear done, when the row can hold it: its cells, its painted left edge, and its words.
+    clear: Option<(u16, f32, &'static str)>,
 }
 
 /// A row of the list: an item, its depth, and what its row needs to know.
@@ -76,6 +108,8 @@ struct ItemRow {
 #[derive(Default)]
 pub struct Todos {
     pub items: Vec<Item>,
+    /// Whether done items show under the fold.
+    pub done_open: bool,
     /// The first line drawn, for scrolling a list that does not fit.
     top: usize,
     /// The children of a parent folded away, by the parent's id.
@@ -88,8 +122,47 @@ impl Todos {
     /// Reads the log afresh, as opening the view does.
     pub fn show(&mut self, root: &Path) {
         self.top = 0;
+        self.reload(root);
+    }
+
+    /// Reads the log again, keeping the place in it, as after a press the app itself wrote.
+    pub fn reload(&mut self, root: &Path) {
         self.seen = store::changed(root);
         self.items = store::list(root);
+    }
+
+    /// The box, fold or Clear done at `(x, y)` of the panel, when one is there.
+    pub fn hit(&self, area: Rect, x: u16, y: u16, measure: &dyn Measure) -> Option<Hit> {
+        let row = y.checked_sub(area.y + 1)? as usize;
+        let lines = self.lines();
+        let top = self.top.min(lines.len().saturating_sub(1));
+        let line = lines.get(top + row)?;
+        match line {
+            Line::Item(item) => {
+                let (_, mark_cell) = mark_left(area, item.depth);
+                (x >= mark_cell && x < mark_cell + 1).then_some(Hit::Box { at: item.at })
+            }
+            Line::Fold { count, open } => {
+                let parts = self.fold_parts(area, measure, (*count, *open));
+                let chip_left = if measure.in_cells() {
+                    f32::from(area.x + parts.cell)
+                } else {
+                    area.x as f32 + parts.left
+                };
+                if x as f32 >= chip_left && (x as f32) < chip_left + parts.wide {
+                    return Some(Hit::Fold);
+                }
+                parts.clear.and_then(|(cell, left, _)| {
+                    let on = if measure.in_cells() {
+                        x >= cell
+                    } else {
+                        x as f32 >= left
+                    };
+                    on.then_some(Hit::Clear)
+                })
+            }
+            Line::Section(..) | Line::Active { .. } => None,
+        }
     }
 
     /// Reads the log again if it changed since it was last read, and says whether it did. The
@@ -147,13 +220,26 @@ impl Todos {
             }
         }
         let mut lines = Vec::new();
-        for (name, bucket) in [("IN PROGRESS", &doing), ("TO DO", &todo), ("DONE", &done)] {
+        for (name, bucket) in [("IN PROGRESS", &doing), ("TO DO", &todo)] {
             if bucket.is_empty() {
                 continue;
             }
             lines.push(Line::Section(name, bucket.len()));
             for &at in bucket {
                 self.item_lines(&mut lines, at, 0, false);
+            }
+        }
+        // Done folds under one chip, as resolved comments do; open, the finished rows come
+        // out under it, where it stays.
+        if !done.is_empty() {
+            lines.push(Line::Fold {
+                count: done.len(),
+                open: self.done_open,
+            });
+            if self.done_open {
+                for &at in &done {
+                    self.item_lines(&mut lines, at, 0, false);
+                }
             }
         }
         lines
@@ -250,6 +336,9 @@ impl Todos {
                 }
                 Line::Active { at } => {
                     self.draw_active(grid, area, y, *at, (theme, measure));
+                }
+                Line::Fold { count, open } => {
+                    self.draw_fold(grid, area, y, (*count, *open), hover, (theme, measure));
                 }
             }
         }
@@ -393,6 +482,180 @@ impl Todos {
             max_x,
             ACTIVE_SIZE,
         );
+    }
+
+    /// The fold's parts: its words, and where its chip and Clear done stand. "done" goes
+    /// before Clear does when the row is too narrow for both, since the count is the point.
+    fn fold_parts(
+        &self,
+        area: Rect,
+        measure: &dyn Measure,
+        (count, open): (usize, bool),
+    ) -> FoldParts {
+        let verb = if open { "Hide" } else { "Show" };
+        let full = format!("{verb} {count} done");
+        let short = format!("{verb} {count}");
+        let clear_label = if measure.in_cells() {
+            CLEAR_CELLS
+        } else {
+            CLEAR
+        };
+        let chevron = if open { "▾" } else { "›" };
+        let right = area.w.saturating_sub(RIGHT);
+        // Clear keeps its cells, and one column's air, from the chip's room.
+        let clear_cells = clear_label.chars().count() as u16;
+        let clear_room = if open { clear_cells + 1 } else { 0 };
+        let font = cellix_render::Font {
+            size: crate::measures::BUTTON_TEXT,
+            ..cellix_render::Font::default()
+        };
+        let chip_fits = |label: &str| {
+            let room = right.saturating_sub(clear_room);
+            if measure.in_cells() {
+                WORDS_CELL + label.chars().count() as u16 + 3 <= room
+            } else {
+                let wide =
+                    FOLD_ROOM + measure.width(label, font) + FOLD_GAP + FOLD_MARK + FOLD_ROOM;
+                WORDS_LEFT + wide <= f32::from(room)
+            }
+        };
+        let label = if chip_fits(&full) {
+            full
+        } else if chip_fits(&short) {
+            short
+        } else {
+            // Nothing else shortens; the chip is laid out at the row's whole width and the
+            // Clear is left to the tip, if the row is ever this narrow.
+            full
+        };
+        let clear = open.then_some(()).filter(|_| chip_fits(&label));
+        let cells = format!(" {label} {chevron}");
+        let words = measure.width(&label, font);
+        let wide = if measure.in_cells() {
+            f32::from(cells.chars().count() as u16)
+        } else {
+            FOLD_ROOM + words + FOLD_GAP + FOLD_MARK + FOLD_ROOM
+        };
+        let clear = clear.map(|_| {
+            let at = right.saturating_sub(clear_cells);
+            let edge = cellix_render::Font {
+                size: OWNER_SIZE,
+                ..cellix_render::Font::default()
+            };
+            (
+                at,
+                if measure.in_cells() {
+                    f32::from(at)
+                } else {
+                    f32::from(right) - measure.width(clear_label, edge)
+                },
+                clear_label,
+            )
+        });
+        FoldParts {
+            label,
+            cells,
+            left: WORDS_LEFT,
+            cell: WORDS_CELL,
+            wide,
+            words,
+            clear,
+        }
+    }
+
+    /// Draws the fold's chip with its chevron, and Clear done at the row's far end when the
+    /// done items show and the row has room for both.
+    fn draw_fold(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        y: u16,
+        (count, open): (usize, bool),
+        hover: Option<(u16, u16)>,
+        (theme, measure): (&Theme, &dyn Measure),
+    ) {
+        let parts = self.fold_parts(area, measure, (count, open));
+        let left = area.x as f32 + parts.left;
+        let left_cell = area.x + parts.cell;
+        let over_chip = hover.is_some_and(|(hx, hy)| {
+            if measure.in_cells() {
+                hy == y && hx >= left_cell && hx < left_cell + parts.wide as u16
+            } else {
+                hy == y && (hx as f32) >= left && (hx as f32) < left + parts.wide
+            }
+        });
+        let quiet = theme.quiet_button(theme.sidebar.bg);
+        let fill = if over_chip {
+            theme.quiet_button(quiet)
+        } else {
+            quiet
+        };
+        let style = Style {
+            bg: fill,
+            fg: theme.text.fg,
+            ..theme.sidebar
+        };
+        if measure.in_cells() {
+            grid.button(left_cell, y, &parts.cells, "", fill, style);
+        } else {
+            grid.chip(left, y, parts.wide, fill);
+            let under = Style {
+                bg: theme.sidebar.bg,
+                painted: true,
+                ..style
+            };
+            let at = left + FOLD_ROOM;
+            let end = (left + parts.wide).ceil() as u16;
+            let painted = grid.painted_so_far();
+            grid.label_at(
+                at,
+                at as u16,
+                y,
+                &parts.label,
+                under,
+                end,
+                crate::measures::BUTTON_TEXT,
+            );
+            grid.centre_span_since(painted);
+            let chevron = if open {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            };
+            grid.paint.push(Paint::Icon {
+                bounds: Bounds::cells(
+                    at + parts.words + FOLD_GAP,
+                    y as f32 + (1.0 - FOLD_MARK) / 2.0,
+                    FOLD_MARK,
+                    FOLD_MARK,
+                ),
+                icon: chevron,
+                color: theme.tab.fg,
+            });
+        }
+        if let Some((cell, clear_left, label)) = parts.clear {
+            let over_clear = hover.is_some_and(|(hx, hy)| {
+                if measure.in_cells() {
+                    hy == y && hx >= cell
+                } else {
+                    hy == y && (hx as f32) >= clear_left
+                }
+            });
+            let look = Style {
+                fg: if over_clear {
+                    theme.sidebar.fg
+                } else {
+                    theme.tab.fg
+                },
+                ..theme.sidebar
+            };
+            let right = area.right().saturating_sub(RIGHT);
+            if measure.in_cells() {
+                grid.label_right(right, y, label, look, OWNER_SIZE);
+            } else {
+                grid.label_right_at(f32::from(right), right, y, label, look, OWNER_SIZE);
+            }
+        }
     }
 
     fn draw_mark(

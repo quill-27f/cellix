@@ -7873,5 +7873,12 @@
     "title": "The To-dos view lists the workspace's log in progress first, then to do, then done, with a parent's children under it, marks for every state, its progress, and the owner's mark or a quiet you at the row's end, on cells and where there are pictures; the rail has a checklist icon with the count under way, and the log is read again on the next poll",
     "test": "the_todos_view_lists_what_is_left_by_state_and_who_owns_it",
     "passes": true
+  },
+  {
+    "id": "todos-tick-done",
+    "milestone": 16,
+    "title": "A press on a to-do's box ticks it done, an item under way too, and a press on a done one puts it back to do; done rows fold under Show N done, a press unfolds them where the chip stands, and Clear done takes only those, all of it kept in .cellix/todos.jsonl for the next Cellix",
+    "test": "a_press_marks_a_to_do_done_and_it_stays_done",
+    "passes": true
   }
 ]

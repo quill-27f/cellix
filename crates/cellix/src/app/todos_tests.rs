@@ -4,7 +4,7 @@
 use std::fs;
 use std::rc::Rc;
 
-use cellix_input::Command;
+use cellix_input::{Command, Event, Mods, MouseEvent};
 use cellix_render::{FontMeasure, Grid, Icon, Paint, Piece};
 use cellix_review::todos::{self, State};
 use tempfile::TempDir;
@@ -64,6 +64,22 @@ fn row_of(grid: &Grid, words: &str) -> u16 {
         .unwrap_or_else(|| panic!("{words:?} isn't drawn:\n{}", grid.text()))
 }
 
+fn mouse(kind: cellix_input::MouseKind, x: u16, y: u16) -> Event {
+    Event::Mouse(MouseEvent {
+        kind,
+        x,
+        y,
+        fine_x: x as f32 + 0.5,
+        fine_y: y as f32 + 0.5,
+        mods: Mods::default(),
+    })
+}
+
+fn click(app: &mut App, x: u16, y: u16) {
+    app.handle(mouse(cellix_input::MouseKind::Left, x, y));
+    app.handle(mouse(cellix_input::MouseKind::Up, x, y));
+}
+
 #[test]
 fn the_todos_view_lists_what_is_left_by_state_and_who_owns_it() {
     let (dir, mut app) = seeded();
@@ -76,7 +92,7 @@ fn the_todos_view_lists_what_is_left_by_state_and_who_owns_it() {
         "2 of 5",
         "IN PROGRESS",
         "TO DO",
-        "DONE",
+        "Show 2 done",
         "Fix the order",
         "Read the sort",
         "Swap the lists",
@@ -84,13 +100,18 @@ fn the_todos_view_lists_what_is_left_by_state_and_who_owns_it() {
         "Run the tour",
         "Running the tour…",
         "Add export button",
-        "Read old tests",
-        "Ask about the sort",
     ] {
         assert!(text.contains(words), "{words:?} missing:\n{text}");
     }
+    // Done folds away: its rows are not in the list until the fold is pressed.
+    for words in ["Read old tests", "Ask about the sort"] {
+        assert!(
+            !text.contains(words),
+            "{words:?} shows though the fold is closed:\n{text}"
+        );
+    }
 
-    // In progress first, then to do, then done; a parent's children follow it.
+    // In progress first, then to do, then the fold; a parent's children follow it.
     let order = [
         row_of(&grid, "IN PROGRESS"),
         row_of(&grid, "Fix the order"),
@@ -100,9 +121,7 @@ fn the_todos_view_lists_what_is_left_by_state_and_who_owns_it() {
         row_of(&grid, "Run the tour"),
         row_of(&grid, "TO DO"),
         row_of(&grid, "Add export button"),
-        row_of(&grid, "DONE"),
-        row_of(&grid, "Read old tests"),
-        row_of(&grid, "Ask about the sort"),
+        row_of(&grid, "Show 2 done"),
     ];
     assert!(
         order.windows(2).all(|pair| pair[0] < pair[1]),
@@ -141,6 +160,24 @@ fn the_todos_view_lists_what_is_left_by_state_and_who_owns_it() {
         "Codex's mark:\n{}",
         grid.row_text(row_of(&grid, "Add export button"))
     );
+
+    // The fold opens where it stands, and the finished rows come out under it, ticked.
+    let fold = row_of(&grid, "Show 2 done");
+    let area = app.sidebar_area().unwrap();
+    click(&mut app, area.x + 5, fold);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("Hide 2 done"), "{text}");
+    let fold = row_of(&grid, "Hide 2 done");
+    let done = [
+        row_of(&grid, "Read old tests"),
+        row_of(&grid, "Ask about the sort"),
+    ];
+    assert!(done[0] > fold && done[1] > fold, "under the fold:\n{text}");
+    for at in done {
+        let row = grid.row_text(at);
+        assert!(row.contains('☑'), "a finished row ticked: {row:?}");
+    }
 
     // The views' rail carries the checklist, not the Task page's checked box.
     let rail = app.activity_area();
@@ -220,4 +257,121 @@ fn the_todos_view_lists_what_is_left_by_state_and_who_owns_it() {
     assert!(app.poll(), "the log changed, so the view reads it again");
     let grid = screen(&app);
     assert!(grid.text().contains("A new one"), "{}", grid.text());
+}
+
+/// A list with a to-do, an item under way, and one finished: enough to tick, unfold and
+/// clear.
+fn worked() -> (TempDir, App) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    todos::add(root, "Write notes", "you", "you", None, "").unwrap();
+    let run = todos::add(root, "Run the tests", "you", "you", None, "").unwrap();
+    todos::set(root, &run, State::Doing).unwrap();
+    let read = todos::add(root, "Read the sort", "you", "you", None, "").unwrap();
+    todos::set(root, &read, State::Done).unwrap();
+    let mut app = App::new(root.to_path_buf(), (160, 30));
+    app.run(Command::ShowTodos);
+    (dir, app)
+}
+
+#[test]
+fn a_press_marks_a_to_do_done_and_it_stays_done() {
+    let (dir, mut app) = worked();
+    let grid = screen(&app);
+    let text = grid.text();
+    for words in ["1 of 3", "Write notes", "Show 1 done"] {
+        assert!(text.contains(words), "{words:?} missing:\n{text}");
+    }
+    assert!(
+        !text.contains("Read the sort"),
+        "done stays folded:\n{text}"
+    );
+
+    // The box at the start of a to-do's row ticks it: it goes to done and folds away.
+    let area = app.sidebar_area().unwrap();
+    let notes = row_of(&grid, "Write notes");
+    click(&mut app, area.x + 3, notes);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("2 of 3"), "{text}");
+    assert!(text.contains("Show 2 done"), "{text}");
+    assert!(
+        !text.contains("Write notes"),
+        "ticked, so folded away:\n{text}"
+    );
+
+    // A list opened after that reads the same: the tick is in the log, not in this screen.
+    let mut again = App::new(dir.path().to_path_buf(), (160, 30));
+    again.run(Command::ShowTodos);
+    let grid = screen(&again);
+    let text = grid.text();
+    assert!(
+        text.contains("2 of 3") && text.contains("Show 2 done"),
+        "{text}"
+    );
+    assert!(!text.contains("Write notes"), "{text}");
+
+    // The fold shows the finished rows, ticked; a press on a tick puts it back to do.
+    let area = again.sidebar_area().unwrap();
+    let fold = row_of(&grid, "Show 2 done");
+    click(&mut again, area.x + 5, fold);
+    let grid = screen(&again);
+    let text = grid.text();
+    assert!(
+        text.contains("Write notes") && text.contains("Read the sort"),
+        "{text}"
+    );
+    let notes = row_of(&grid, "Write notes");
+    assert!(
+        grid.row_text(notes).contains('☑'),
+        "{}",
+        grid.row_text(notes)
+    );
+    click(&mut again, area.x + 3, notes);
+    let grid = screen(&again);
+    let text = grid.text();
+    assert!(text.contains("1 of 3"), "{text}");
+    assert!(text.contains("Write notes"), "back to do:\n{text}");
+    assert!(
+        grid.row_text(row_of(&grid, "Write notes")).contains('☐'),
+        "{}",
+        grid.row_text(row_of(&grid, "Write notes"))
+    );
+
+    // What is under way goes to done with a press on its mark too.
+    let run = row_of(&grid, "Run the tests");
+    click(&mut again, area.x + 3, run);
+    let grid = screen(&again);
+    let text = grid.text();
+    assert!(text.contains("2 of 3"), "{text}");
+    assert!(
+        grid.row_text(row_of(&grid, "Run the tests")).contains('☑'),
+        "{}",
+        grid.row_text(row_of(&grid, "Run the tests"))
+    );
+
+    // Clear done takes the finished rows, and nothing else.
+    let clear = row_of(&grid, "Clear");
+    click(&mut again, area.right() - 2, clear);
+    let grid = screen(&again);
+    let text = grid.text();
+    assert!(text.contains("0 of 1"), "{text}");
+    assert!(text.contains("Write notes"), "{text}");
+    for words in ["Run the tests", "Read the sort", "Clear"] {
+        assert!(!text.contains(words), "{words:?} stays:\n{text}");
+    }
+
+    // And it stays cleared.
+    let mut later = App::new(dir.path().to_path_buf(), (160, 30));
+    later.run(Command::ShowTodos);
+    let grid = screen(&later);
+    let text = grid.text();
+    assert!(
+        text.contains("0 of 1") && text.contains("Write notes"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("Run the tests") && !text.contains("Read the sort"),
+        "{text}"
+    );
 }

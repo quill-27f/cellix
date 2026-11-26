@@ -3306,6 +3306,49 @@ impl App {
         self.todos.show(self.workspace.root());
     }
 
+    /// Takes a press in the To-dos view: a box ticks or unticks what it marks, the fold
+    /// opens or closes the done items, and Clear done empties them.
+    fn click_todos(&mut self, x: u16, y: u16) {
+        use cellix_review::todos::{self as store, State};
+        let Some(area) = self.sidebar_area() else {
+            return;
+        };
+        let measure = self.measure.clone();
+        let Some(hit) = self.todos.hit(area, x, y, measure.as_ref()) else {
+            return;
+        };
+        let root = self.workspace.root().to_path_buf();
+        match hit {
+            crate::todos::Hit::Box { at } => {
+                let Some(item) = self.todos.items.get(at) else {
+                    return;
+                };
+                let state = if item.state == State::Done {
+                    State::Todo
+                } else {
+                    State::Done
+                };
+                let id = item.id.clone();
+                if let Err(e) = store::set(&root, &id, state) {
+                    self.say(format!("Could not save the to-do: {e}"));
+                    return;
+                }
+            }
+            crate::todos::Hit::Fold => {
+                self.todos.done_open = !self.todos.done_open;
+                return;
+            }
+            crate::todos::Hit::Clear => {
+                if let Err(e) = store::clear_done(&root) {
+                    self.say(format!("Could not clear the done to-dos: {e}"));
+                    return;
+                }
+                self.todos.done_open = false;
+            }
+        }
+        self.todos.reload(&root);
+    }
+
     fn click_context(&mut self, x: u16, y: u16) {
         let Some(area) = self.sidebar_area() else {
             return;
@@ -17090,9 +17133,9 @@ impl App {
                 self.click_outline(y);
             }
             MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Outline => {}
-            // The to-dos are read here for now; their boxes and words take presses with the
-            // tick and rename that come next.
-            MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Todos => {}
+            MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Todos => {
+                self.click_todos(mouse.x, mouse.y);
+            }
             MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Todos => {}
             MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Explorer => {
                 self.open_explorer_menu(x, y);
