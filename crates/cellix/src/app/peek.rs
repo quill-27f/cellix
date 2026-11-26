@@ -81,14 +81,11 @@ impl App {
     /// agent other than that one, a helper opens in peek and one with a tab of its own comes
     /// to the front, as their rows in the Agents list do. Returns whether it was one.
     pub(super) fn look_at_name(&mut self, word: &str, from: usize) -> bool {
-        let Some(index) = self.member_index(word) else {
-            return false;
-        };
-        let session = &self.dock.sessions[index];
-        if index == from || session.exited {
+        if !self.looks_at_name(word, from) {
             return false;
         }
-        if session.tabbed {
+        let index = self.member_index(word).expect("a name it looks at");
+        if self.dock.sessions[index].tabbed {
             self.peek = None;
             self.dock.open = true;
             self.dock.active = Some(index);
@@ -100,6 +97,26 @@ impl App {
             self.open_peek(word);
         }
         true
+    }
+
+    /// Whether a Ctrl+press on `word` in session `from` would look at another agent, as
+    /// `look_at_name` does: the pointer takes the hand over one.
+    pub(super) fn looks_at_name(&self, word: &str, from: usize) -> bool {
+        self.member_index(word)
+            .is_some_and(|index| index != from && !self.dock.sessions[index].exited)
+    }
+
+    /// Whether a Ctrl+press on the peek card here opens something, as on the terminal it
+    /// shows: its own links, a comment a mention names, a file its output names, an agent's
+    /// name.
+    pub(super) fn peek_link_at(&self, (x, y): (u16, u16)) -> bool {
+        let (Some(index), Some(screen)) = (self.peeked(), self.peek_screen()) else {
+            return false;
+        };
+        if !screen.contains(x, y) {
+            return false;
+        }
+        self.session_ctrl_link(index, (x - screen.x, y - screen.y))
     }
 
     pub(super) fn close_peek(&mut self) {

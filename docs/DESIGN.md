@@ -1073,6 +1073,12 @@ but its MCP tools still ask for approval it can't get in `-p`, unless trusted. B
 Cellix tells the terminal which pointer to show with OSC 22: a hand on what can be pressed, a bar on
 text, an arrow elsewhere. Left to itself a terminal picks one from its own state, which can stick.
 
+A link takes the hand: on a page or in a terminal while Ctrl is held, since that's what a press
+there needs, and on a comment's card, where a plain press opens it. Ctrl held is learnt from the
+key and mouse events' own modifiers; a terminal sends nothing when Ctrl alone goes down or up, so
+the shape follows at the next event — the move that takes the pointer to the link, in practice —
+and it's told again each time a frame is drawn, so one message lost costs one change, not the state.
+
 Where the terminal reports the mouse in pixels, a press is turned into a cell by the cell's size,
 so that size has to be the terminal's own. It's asked for at the start (`CSI 16 t`) and asked
 again whenever the window's size in cells or in pixels has changed and held still for a fifth of

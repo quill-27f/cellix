@@ -206,6 +206,78 @@ impl App {
         true
     }
 
+    /// Whether the pointer takes the hand where it is: over a link a Ctrl+press opens, with
+    /// Ctrl held, since a plain press there does something else; or over a link on a comment's
+    /// card, which a plain press opens. What the hand promises is what the press does.
+    pub(super) fn link_look(&self, at: (u16, u16)) -> bool {
+        let (x, y) = at;
+        // The peek card stands over the pane, its terminal's links its own.
+        if self.peek.is_some() && self.peek_link_at(at) {
+            return true;
+        }
+        if self.dock_area().is_some_and(|a| a.contains(x, y)) {
+            if self.dock.front == Front::Comments && self.comment_link_at(at) {
+                return true;
+            }
+            return self.dock.front == Front::Session && self.ctrl && self.session_ctrl_link_at(at);
+        }
+        self.ctrl && self.page_ctrl_link_at(at)
+    }
+
+    /// Whether a Ctrl+press on a terminal's text at `spot` opens something: a web address, a
+    /// comment a mention names, a file its output names, or the name of another agent.
+    pub(super) fn session_ctrl_link(&self, index: usize, spot: (u16, u16)) -> bool {
+        let Some(session) = self.dock.sessions.get(index) else {
+            return false;
+        };
+        session.link_at(spot).is_some()
+            || session.comment_at(spot).is_some()
+            || session.path_at(spot).is_some()
+            || session
+                .word_at(spot)
+                .is_some_and(|word| self.looks_at_name(&word, index))
+    }
+
+    /// Whether a Ctrl+press where the pointer is would open something in the side pane's own
+    /// terminal.
+    fn session_ctrl_link_at(&self, (x, y): (u16, u16)) -> bool {
+        let Some(index) = self.dock.active else {
+            return false;
+        };
+        self.session_ctrl_link(index, self.session_spot(x, y))
+    }
+
+    /// Whether a press on a comment's card here opens its link, as a plain press does.
+    fn comment_link_at(&self, (x, y): (u16, u16)) -> bool {
+        let Some(screen) = self.dock_panel() else {
+            return false;
+        };
+        if !screen.contains(x, y) {
+            return false;
+        }
+        let top = self.dock.tops.of(Front::Comments);
+        let at = (x, y, self.pointer.1);
+        self.card_rows(|shown, measure| threads::hit(screen, shown, top, at, measure))
+            .is_some_and(|hit| matches!(hit, ThreadHit::Link(..)))
+    }
+
+    /// Whether a Ctrl+press on the page here opens a link: a row that links to a file, or a
+    /// link in its text.
+    fn page_ctrl_link_at(&self, (x, y): (u16, u16)) -> bool {
+        if self.review.is_some() || self.settings_page.is_some() {
+            return false;
+        }
+        if self.pane_at(x, y) != Some(self.focus) {
+            return false;
+        }
+        let area = self.focused_area();
+        let Some(editor) = self.editors.get(self.active()) else {
+            return false;
+        };
+        let at = editor.position_at(area, self.pointer.0, y);
+        self.editor_linked(area, y, at).is_some()
+    }
+
     /// What a link at char `at` of the file in front goes to, the pointer being on row `y` of
     /// `area`: a page's row that links to a file, as a paper's `\input` does, or the address
     /// of a link in the text there.

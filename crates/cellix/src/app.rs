@@ -1644,6 +1644,10 @@ pub struct App {
     hover: Option<(u16, u16)>,
     /// The same, with the fractions of a cell, for what's painted past its cells.
     pointer: (f32, f32),
+    /// Whether Ctrl is held, as the last key or mouse event said: the pointer shows the hand
+    /// over a link only with Ctrl held, where a press needs it. A terminal sends nothing for
+    /// Ctrl pressed alone, so the shape changes at the next event that comes, a move or a key.
+    ctrl: bool,
     /// The comment whose words the pointer rests on while the Comments pane is shut, which
     /// shows on a card under them.
     glance: Option<glance::Glance>,
@@ -2115,6 +2119,7 @@ impl App {
             inbox_shared: None,
             hover: None,
             pointer: (0.0, 0.0),
+            ctrl: false,
             glance: None,
             last_click: None,
             box_drag: false,
@@ -5157,6 +5162,13 @@ impl App {
 
     pub fn handle(&mut self, event: Event) {
         self.blink_on(&event);
+        // Whether Ctrl is held, for the pointer's link look. A key or a move carries it; a
+        // terminal sends nothing when Ctrl alone goes down, so the shape follows at the next.
+        match &event {
+            Event::Key(key) => self.ctrl = key.mods.ctrl,
+            Event::Mouse(mouse) => self.ctrl = mouse.mods.ctrl,
+            _ => {}
+        }
         // Ticks and pointer moves aren't the user moving on, so they leave messages up.
         let passive = matches!(
             event,
@@ -22585,6 +22597,11 @@ impl App {
             } else {
                 "ew-resize"
             };
+        }
+        // A link takes the hand: with Ctrl over a page's or a terminal's, where a press needs
+        // it, and on a comment's card, where a plain press opens it (the user, 25 November).
+        if self.link_look((x, y)) {
+            return HAND;
         }
         let on_chip = self
             .selection_bar()

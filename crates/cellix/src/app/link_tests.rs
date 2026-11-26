@@ -487,3 +487,65 @@ fn the_review_says_each_comments_number() {
     let review = super::report::markdown(&app.threads).unwrap();
     assert!(review.contains("#### Line 2 · Open · #2"), "{review}");
 }
+
+/// The pointer takes the hand over a link, so a person sees where a press goes before it
+/// lands: with Ctrl held on a page or in a terminal, where a plain press does something else,
+/// and on a comment's card, where a plain press opens it. Off the link, or with Ctrl let go,
+/// it's what it was (the user, 25 November).
+#[test]
+#[cfg(unix)]
+fn the_pointer_takes_the_hand_over_a_link() {
+    let (dir, mut app, _log) = project();
+    app.show_sidebar = false;
+    let hover = |app: &mut App, (x, y): (u16, u16), ctrl: bool| {
+        press(
+            app,
+            MouseKind::Move,
+            (x, y),
+            Mods {
+                ctrl,
+                ..Mods::default()
+            },
+        );
+    };
+    // A page's link: the text's bar over the words, and the hand with Ctrl.
+    let page = "See [the docs](https://example.com/docs/page) first.\n";
+    fs::write(dir.path().join("page.md"), page).unwrap();
+    app.open(&dir.path().join("page.md")).unwrap();
+    let (x, y) = find(&screen(&app), "the docs");
+    hover(&mut app, (x + 2, y), false);
+    assert_eq!(app.pointer(), "text");
+    hover(&mut app, (x + 2, y), true);
+    assert_eq!(app.pointer(), "pointer", "Ctrl+press opens it");
+    let (x2, y2) = find(&screen(&app), "first.");
+    hover(&mut app, (x2 + 1, y2), true);
+    assert_eq!(app.pointer(), "text", "off the link, Ctrl changes nothing");
+    // Ctrl let go: a terminal sends nothing for Ctrl alone, so the next event says so.
+    hover(&mut app, (x + 2, y), false);
+    assert_eq!(app.pointer(), "text");
+
+    // A terminal's link is the same, and its other words aren't a link.
+    terminal(
+        &mut app,
+        "echo 'see https://example.com/term/a'; echo ready; sleep 60",
+        "ready",
+    );
+    let (x, y) = find(&screen(&app), "https://example.com/term/a");
+    hover(&mut app, (x + 3, y), false);
+    assert_eq!(app.pointer(), "text");
+    hover(&mut app, (x + 3, y), true);
+    assert_eq!(app.pointer(), "pointer", "Ctrl+press opens it");
+
+    // A comment's card's link opens on a plain press, so it takes the hand without Ctrl.
+    app.open(&dir.path().join("alpha.txt")).unwrap();
+    let text = "See https://example.com/spec/a here.";
+    let fields = format!(r#""id":4,"file":"alpha.txt","line":1,"quote":"first","text":"{text}""#);
+    app.threads = vec![serde_json::from_str(&format!("{{{fields}}}")).unwrap()];
+    app.run(Command::ShowComments);
+    let (x, y) = find(&screen(&app), "https://example.com/spec/a");
+    hover(&mut app, (x + 4, y), false);
+    assert_eq!(app.pointer(), "pointer", "a plain press opens it");
+    let (x, y) = find(&screen(&app), "See https");
+    hover(&mut app, (x + 1, y), false);
+    assert_eq!(app.pointer(), "default", "a card's words are no link");
+}
