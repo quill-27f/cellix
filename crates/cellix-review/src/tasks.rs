@@ -16,7 +16,8 @@ use crate::history::{Turn, checkpoint};
 /// The log, one event a line, under the project.
 const FILE: &str = ".cellix/tasks.jsonl";
 /// What `.cellix/.gitignore` holds, so nothing Cellix keeps there shows as a change.
-pub const IGNORED: &str = "threads.json\nthreads.json.tmp\nplans/\ntasks.jsonl\n.gitignore\n";
+pub const IGNORED: &str =
+    "threads.json\nthreads.json.tmp\nplans/\ntasks.jsonl\ntodos.jsonl\n.gitignore\n";
 /// Longest prompt kept. A pasted log can be megabytes; the start says what was asked.
 const PROMPT_LENGTH: usize = 4000;
 /// Longest test output kept, from the end, where failures are.
@@ -113,21 +114,27 @@ fn file(root: &Path) -> PathBuf {
     root.join(FILE)
 }
 
-/// Makes sure `.cellix` ignores what Cellix keeps in it, including a `.gitignore` written
-/// before the task log existed.
+/// Makes sure `.cellix` ignores what Cellix keeps in it, including names added after a
+/// `.gitignore` was first written: every missing line is added, and the rest left as they are.
 pub fn ignore_own_files(folder: &Path) -> io::Result<()> {
     let ignore = folder.join(".gitignore");
-    match fs::read_to_string(&ignore) {
-        Ok(text) if text.lines().any(|l| l == "tasks.jsonl") => Ok(()),
-        Ok(text) => {
-            let mut text = text;
-            if !text.ends_with('\n') && !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str("tasks.jsonl\n");
-            fs::write(ignore, text)
+    let mut text = fs::read_to_string(&ignore).unwrap_or_default();
+    let mut changed = false;
+    for line in IGNORED.lines() {
+        if text.lines().any(|known| known == line) {
+            continue;
         }
-        Err(_) => fs::write(ignore, IGNORED),
+        if !text.is_empty() && !text.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str(line);
+        text.push('\n');
+        changed = true;
+    }
+    if changed {
+        fs::write(ignore, text)
+    } else {
+        Ok(())
     }
 }
 

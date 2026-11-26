@@ -7852,5 +7852,12 @@
     "title": "Every agent has an on/off switch in Settings' Your agents card, kept as disabled_agents: off, it's offered nowhere new (the + menu, Review with…, New Worktree, the Default agent row, which Auto answers for), what's running keeps its tab and resumes, and turning it back on offers it again",
     "test": "agents_turned_off_are_offered_nowhere_new_and_back_when_on",
     "passes": true
+  },
+  {
+    "id": "todos-store",
+    "milestone": 16,
+    "title": "To-dos are the replay of an append-only .cellix/todos.jsonl in order: a parent's state follows its children's, and a line that can't be read costs only itself",
+    "test": "to_dos_are_read_from_a_log_that_skips_what_it_cant_read",
+    "passes": true
   }
 ]

@@ -2608,6 +2608,25 @@ that rule. A plan's words, and what was said about it, are wrapped as they're dr
 and a heading in it has no empty line under it, so it stands nearer what it heads. Narrow, the
 step's place stands in the middle between the two buttons that step, whose chevrons are icons.
 
+### To-dos: what is left
+
+A Task says what an agent did; a to-do says what is still to do, and the person and the agents
+share one list. To-dos live in `.cellix/todos.jsonl`, one event a line — add, set, group,
+edit, active, remove, clear, and an agent's whole list as a replace — and the list is worked out
+from it whenever it's read, as the task log is; a line that can't be read costs only itself.
+Every event carries its source (`you`, or an agent's session), so a replace touches only that
+session's items.
+
+One level of sub-tasks: a parent's state is its children's — done when all are, in progress when
+any is, to do when none is — and its own state is ignored while it has children. A press on its
+box groups them; a done child under an unfinished parent stays visible. Done top-level groups
+fold under "Show N done", and Clear done takes only those.
+
+Claude Code's `TodoWrite` is mirrored by the PostToolUse hook as a replace for its session. New
+items match the old by text and then by list position, so a matched item keeps its id, its time
+and any children the person nested under it, and an unchanged list writes nothing. Each event
+carries Cellix's ids, so every reader of the log agrees on them.
+
 ### Agents starting agents
 
 An agent can start others in the side pane, give them work, wait for them and read what they

@@ -8,6 +8,7 @@ mod log;
 mod stash;
 pub mod tasks;
 pub mod threads;
+pub mod todos;
 
 pub use diff::{
     FileDiff, Hunk, LineChange, LineUndo, Row, RowKind, Side, hunk_patch, line_changes,

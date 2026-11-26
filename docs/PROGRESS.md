@@ -4775,3 +4775,10 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 
 - On the user's word: "go releas it". 0.16.3 is `66dc1d5`: the pointer takes the hand over a link a press opens — with Ctrl on a page's or a terminal's, and on a comment's card without it. README's web section and DESIGN.md's pointer section say it.
 - Unverified: nothing new (a terminal without OSC 22 ignores the pointer, as it did for every other shape; a terminal that reports no modifiers on mouse moves sees Ctrl only when a key says so).
+
+## To-dos: the log (2026-11-26)
+
+- The store behind the approved To-dos design (the canvas approved 2026-11-26): `.cellix/todos.jsonl`, one event a line — add, set, group, edit, active, remove, clear and an agent's whole list as a replace — replayed whenever read, with a line that can't be read skipped. A parent's state follows its children's; its box groups them; Clear done takes only finished top-level groups, and a done child under an unfinished parent stays. An agent's replace matches by text then list position, keeps matched ids, times and the person's children, carries Cellix's ids so every reader agrees, and an unchanged list writes nothing.
+- `.cellix/.gitignore` learns every name Cellix keeps there, not only `tasks.jsonl`: the live repo's own ignore had missed `tasks.jsonl` as well.
+- Tests: `to_dos_are_read_from_a_log_that_skips_what_it_cant_read` (the feature), a mirror's ids and children, a group and Clear done, two writers at once, and `find`.
+- Unverified: nothing runs it yet — the view, the hook's mirror and `cellix todo` are next. Next: the crowded-width drawer, then the sidebar view.
