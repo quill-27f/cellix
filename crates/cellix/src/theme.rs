@@ -71,7 +71,9 @@ pub struct Theme {
     pub popup_dim: Rgb,
     /// What can't be done right now.
     pub disabled: Rgb,
-    /// A gitignored file's name and icon in the tree: there, but quiet.
+    /// A gitignored file's name and icon in the tree: there, but quiet. It reads at 4.5 to 1
+    /// on the sidebar's ground, where the tree's own `target` row was 3.49 to 1 in the dark
+    /// theme, and could hardly be read.
     pub ignored: Rgb,
     pub popup_border: Rgb,
     /// The highlighted row of a list in a floating panel.
@@ -531,7 +533,9 @@ impl Theme {
             popup: white,
             popup_dim: second,
             disabled: overlay0,
-            ignored: overlay2,
+            // The sidebar's ground is the frame's (see `on_frame`), and a gitignored name
+            // has to be read.
+            ignored: readable(overlay2, crust, 4.5),
             popup_border: line,
             pick: mix(white, blue, 0.16),
             button: blue,
@@ -718,7 +722,9 @@ impl Default for Theme {
             popup: raised,
             popup_dim: second,
             disabled: dim,
-            ignored: dim,
+            // herdr's dim is 3.49 to 1 on the frame, which the sidebar stands on: there, but
+            // not so quiet that a gitignored name can't be read.
+            ignored: readable(dim, frame, 4.5),
             popup_border: hairline(raised),
             pick: picked(raised),
             button: blue,
@@ -957,6 +963,21 @@ mod tests {
         ] {
             let ratio = contrast(color, ground);
             assert!(ratio >= 4.5, "{name} are {ratio:.2} to 1");
+        }
+    }
+
+    /// A gitignored file's name reads at 4.5 to 1 on the sidebar's ground in both themes:
+    /// the tree's own `target` row was 3.49 to 1 in the dark theme and 2.99 in the light,
+    /// where it could hardly be read.
+    #[test]
+    fn an_ignored_files_name_reads_on_the_sidebar() {
+        for (name, theme) in [
+            ("dark", Theme::default()),
+            ("light", Theme::named(Some("light"))),
+        ] {
+            let ground = theme.on_frame().sidebar.bg;
+            let ratio = contrast(theme.ignored, ground);
+            assert!(ratio >= 4.5, "{name}: ignored is {ratio:.2} to 1");
         }
     }
 

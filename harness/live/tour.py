@@ -2029,10 +2029,10 @@ with tempfile.TemporaryDirectory() as made:
           [*settings, ["click", *ON("Integrations")], ["wait", 1.2]],
           CODE_FILE, env={"PATH": f"{custom_tools}:{os.environ['PATH']}"}, cellix=True)
     shoot("17b-agents-switches",
-          [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 12], ["wait", 0.8]],
+          [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 13], ["wait", 0.8]],
           CODE_FILE, env={"PATH": f"{custom_tools}:{os.environ['PATH']}"}, cellix=True)
     shoot("17b-agents-switches-light",
-          [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 12], ["wait", 0.8]],
+          [*settings, ["click", *ON("Integrations")], ["wheel", 90, 20, 13], ["wait", 0.8]],
           CODE_FILE, env={"PATH": f"{custom_tools}:{os.environ['PATH']}"}, cellix=True, background="eff1f5")
     shoot("18-settings-keyboard", [*settings, ["click", *ON("Keyboard")]], CODE_FILE)
     shoot("19-dialog", [["keys", "x"], ["keys", CTRL("q")]], CODE_FILE)

@@ -11,6 +11,12 @@ use crate::theme::Theme;
 
 /// Rows from one integration's card to the next.
 const BLOCK_STEP: u16 = 4;
+/// The rows the heading over the Your agents card takes: a row of air, its title, its note,
+/// and two rows of air under it, as the Default agent's note has over the cards (the first
+/// card's surface reaches 0.4 of a row above its own, which eats half of one). Its list of
+/// switches followed the cards with nothing over it, so its first row read at a glance as
+/// another copy of the Claude Code card.
+const AGENTS_HEADING_ROWS: u16 = 5;
 
 const SECTIONS: [(&str, Section); 4] = [
     ("Appearance", Section::Appearance),
@@ -33,6 +39,12 @@ const AUTO_SAVES: [(&str, &str); 3] = [
 /// Which agent's command line answers Ask, Polish and Validate. Remote docs are read and
 /// posted through Claude Code whatever it says.
 const DEFAULT_AGENT: (&str, &str) = ("Default agent", "Answers Ask, Polish and Validate.");
+/// The heading over the Your agents card: every agent Cellix can start, and what its switch
+/// does.
+const AGENTS_HEADING: (&str, &str) = (
+    "Your agents",
+    "Every agent Cellix can start. Turn one off and it's offered nowhere new.",
+);
 /// Wide enough for "Gemini" with a cell either side, four to a track.
 const AGENT_WIDTH: u16 = 9;
 /// A runner's segment in the Default agent row is as wide as its name and its air; the
@@ -845,14 +857,19 @@ impl SettingsPage {
     }
 
     /// The rows Integrations takes: its heading and Default agent, a card every `BLOCK_STEP`
-    /// rows, the Your agents card's rows, and the row under them that says what a press did.
+    /// rows, the Your agents card's heading and rows, and the row under them that says what a
+    /// press did.
     fn integration_rows(&self) -> u16 {
-        BLOCKS_ROW + self.blocks().len() as u16 * BLOCK_STEP + self.agent_rows_len() + 1
+        BLOCKS_ROW
+            + self.blocks().len() as u16 * BLOCK_STEP
+            + AGENTS_HEADING_ROWS
+            + self.agent_rows_len()
+            + 1
     }
 
-    /// Where the Your agents card starts, after the agents' cards.
+    /// Where the Your agents card's list starts, after the agents' cards and its heading.
     fn agents_card_row(&self) -> u16 {
-        BLOCKS_ROW + self.blocks().len() as u16 * BLOCK_STEP
+        BLOCKS_ROW + self.blocks().len() as u16 * BLOCK_STEP + AGENTS_HEADING_ROWS
     }
 
     /// How many rows the Your agents card takes: one per agent (built-ins and the person's
@@ -1045,9 +1062,9 @@ impl SettingsPage {
         if found.claude {
             blocks.push(Block {
                 name: "Remote docs",
-                state: "Read through an MCP server of Claude Code's",
+                state: "Read through one of Claude Code's MCP servers",
                 tone: Tone::Quiet,
-                detail: "Review Remote Doc… reads a doc there, and posts each comment you post.",
+                detail: "Review Remote Doc… reads a doc there, and posts each comment you write.",
                 action: Some(("Pick Server", false, Control::RemoteDocs)),
             });
         }
@@ -1532,7 +1549,7 @@ impl SettingsPage {
                 }
                 if let Some(y) = self.appearance_row(page, ROW_HEIGHT_ROW, 2) {
                     let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
-                    draw_text(grid, page, (y, room), ROW_HEIGHT, theme);
+                    draw_text(grid, page, (y, room), ROW_HEIGHT, (measure, theme));
                 }
                 // What's drawn is what has a place in view: a part the window has no room
                 // for has none, and comes into view as the page scrolls.
@@ -1854,7 +1871,7 @@ impl SettingsPage {
                 Row::Theme => {
                     rule(grid, y);
                     let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
-                    draw_text(grid, page, (y, room), THEME, theme);
+                    draw_text(grid, page, (y, room), THEME, (measure, theme));
                     tag(grid, (THEME.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::Theme(name) => {
@@ -1881,7 +1898,7 @@ impl SettingsPage {
                 Row::AutoSave => {
                     rule(grid, y);
                     let room = page.right().saturating_sub(AUTO_SAVE_WIDTH * 3 + 1);
-                    draw_text(grid, page, (y, room), AUTO_SAVE, theme);
+                    draw_text(grid, page, (y, room), AUTO_SAVE, (measure, theme));
                     tag(grid, (AUTO_SAVE.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::AutoSave(name) => {
@@ -1894,7 +1911,7 @@ impl SettingsPage {
                 Row::Height => {
                     rule(grid, y);
                     let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
-                    draw_text(grid, page, (y, room), ROW_HEIGHT, theme);
+                    draw_text(grid, page, (y, room), ROW_HEIGHT, (measure, theme));
                     tag(grid, (ROW_HEIGHT.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::RowHeight(name) => {
@@ -1907,7 +1924,7 @@ impl SettingsPage {
                 Row::Keymap => {
                     rule(grid, y);
                     let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
-                    draw_text(grid, page, (y, room), KEYMAP, theme);
+                    draw_text(grid, page, (y, room), KEYMAP, (measure, theme));
                     tag(grid, (KEYMAP.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::Keymap(name) => {
@@ -1922,7 +1939,7 @@ impl SettingsPage {
                     let room = page.right().saturating_sub(
                         default_agent_total(&self.custom_agents, &self.disabled) + 1,
                     );
-                    draw_text(grid, page, (y, room), DEFAULT_AGENT, theme);
+                    draw_text(grid, page, (y, room), DEFAULT_AGENT, (measure, theme));
                     tag(grid, (DEFAULT_AGENT.0, bold), (y, room), section);
                     segments(grid, y, &|control| match control {
                         Control::DefaultAgent(name) => {
@@ -2057,7 +2074,7 @@ impl SettingsPage {
             theme,
         );
         let room = page.right().saturating_sub(SEGMENT_WIDTH * 3 + 1);
-        draw_text(grid, page, (page.y + 3, room), KEYMAP, theme);
+        draw_text(grid, page, (page.y + 3, room), KEYMAP, (measure, theme));
         let keymaps: Vec<(Rect, &str, bool)> = spots
             .iter()
             .filter_map(|(rect, control)| match control {
@@ -2248,7 +2265,7 @@ impl SettingsPage {
         let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
         grid.hairline(above, theme.border);
         let room = page.right().saturating_sub(AUTO_SAVE_WIDTH * 3 + 1);
-        draw_text(grid, page, (y, room), AUTO_SAVE, theme);
+        draw_text(grid, page, (y, room), AUTO_SAVE, (measure, theme));
         let saves: Vec<(Rect, &str, bool)> = spots
             .iter()
             .filter_map(|(rect, control)| match control {
@@ -2502,7 +2519,7 @@ impl SettingsPage {
                     .map(|n| custom_agent_width(n))
                     .sum::<u16>();
             let room = page.right().saturating_sub(total + 1);
-            draw_text(grid, page, (y, room), DEFAULT_AGENT, theme);
+            draw_text(grid, page, (y, room), DEFAULT_AGENT, (measure, theme));
         }
         let agents: Vec<(Rect, &str, bool)> = spots
             .iter()
@@ -2525,9 +2542,12 @@ impl SettingsPage {
             (hover, theme.text.bg, measure.in_cells()),
             theme,
         );
-        // A line between the setting and the cards, as between the Editor page's rows.
+        // A line between the setting and the cards, as between the Editor page's rows. It
+        // stands halfway between the note's ink and the first card's surface, which reaches
+        // 0.4 of a row above its own: by the words it read 54 px under and 39 px over, and
+        // by the rows' boxes exactly half, which is the same 15 px off at the eye.
         if let Some(y) = self.integration_row(page, BLOCKS_ROW - 1, 1) {
-            let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
+            let above = Bounds::cells(page.x as f32, y as f32 - 0.34, page.w as f32, 0.0);
             grid.hairline(above, theme.border);
         }
         let blocks = self.blocks();
@@ -2565,8 +2585,18 @@ impl SettingsPage {
             }
         }
         // The Your agents card: each of the person's runners with Edit and Remove, each
-        // found on the PATH with Add, and Add Agent at the foot.
+        // found on the PATH with Add, and Add Agent at the foot. Its heading says what the
+        // switches there do, so its first row doesn't read as another plugin card.
         let card = self.agents_card_row();
+        if let Some(y) = self.integration_row(page, card - 4, 2) {
+            draw_text(
+                grid,
+                page,
+                (y, page.right()),
+                AGENTS_HEADING,
+                (measure, theme),
+            );
+        }
         for (index, row) in self.agent_rows().iter().enumerate() {
             let Some(top) = self.integration_row(page, card + index as u16 * BLOCK_STEP, 3) else {
                 continue;
@@ -2701,13 +2731,15 @@ fn heading(grid: &mut Grid, page: Rect, title: &str, note: &str, theme: &Theme) 
     grid.label_at(x, page.x, page.y + 1, note, quiet, page.right(), NOTE_SIZE);
 }
 
-/// A title with a line under it, at the left of a row of two, stopping before `room`.
+/// A title with a line under it, at the left of a row of two, stopping before `room`. The
+/// note is cut with an ellipsis where the room is short of it: the cell tier cut it mid-word
+/// at "Vali", where the pixel tier showed the whole sentence.
 fn draw_text(
     grid: &mut Grid,
     page: Rect,
     (y, room): (u16, u16),
     (title, detail): (&str, &str),
-    theme: &Theme,
+    (measure, theme): (&dyn Measure, &Theme),
 ) {
     let name = Style {
         bold: true,
@@ -2719,9 +2751,16 @@ fn draw_text(
     };
     grid.label(page.x, y, title, name, room);
     // Small words, as the design has what explains a setting: the longest of them fits a
-    // window of 120 columns that way.
+    // window of 120 columns that way. Where they don't, the end says so.
     let x = page.x;
-    grid.label_at(f32::from(x), x, y + 1, detail, quiet, room, NOTE_SIZE);
+    let cells = f32::from(room.saturating_sub(x));
+    let wide = if measure.in_cells() {
+        cells
+    } else {
+        cells * 100.0 / f32::from(NOTE_SIZE)
+    };
+    let detail = crate::context::elide(detail, wide, measure);
+    grid.label_at(f32::from(x), x, y + 1, &detail, quiet, room, NOTE_SIZE);
 }
 
 /// What a command's row is drawn with: the pointer, the text's measure, and how many
@@ -2851,7 +2890,7 @@ fn draw_toggle(
     let above = Bounds::cells(page.x as f32, y as f32 - 0.5, page.w as f32, 0.0);
     grid.hairline(above, theme.border);
     let room = page.right().saturating_sub(TOGGLE_WIDTH.ceil() as u16 + 2);
-    draw_text(grid, page, (y, room), text, theme);
+    draw_text(grid, page, (y, room), text, (measure, theme));
     draw_switch_knob(grid, page, y, page.right(), on, (theme, measure));
 }
 
@@ -3097,7 +3136,9 @@ fn draw_button(
     // which stood Copy Install Command on its card's edge.
     let held: String = label.chars().take(wide as usize).collect();
     let cells = format!("{held:^width$}", width = wide as usize);
-    grid.large_button_between(x, rect.y, &cells, label, fill, style);
+    // On the card's title line, where its switches and every other button stand, not centred
+    // between the title and the line under it, which aligned the words with neither.
+    grid.large_button(x, rect.y, &cells, label, fill, style);
 }
 
 #[cfg(test)]
@@ -3116,6 +3157,27 @@ mod tests {
             section,
             found: Found::default(),
             ..SettingsPage::new(Found::default())
+        }
+    }
+
+    /// The settings as the page draws them, with nothing picked beyond the defaults.
+    fn values() -> Values<'static> {
+        Values {
+            theme: "dark",
+            row_height: "airy",
+            keymap: "default",
+            smooth_scroll: false,
+            motion: false,
+            minimap: false,
+            view: EditorView::default(),
+            inlay_hints: false,
+            format_on_save: false,
+            reading_width: false,
+            cursor_blink: false,
+            auto_save: "off",
+            notify: false,
+            default_agent: "auto",
+            custom_agents: &[],
         }
     }
 
@@ -3275,7 +3337,10 @@ mod tests {
         settings.found.ghostty_keeps_cmd_d = Some(true);
         let blocks = settings.blocks();
         let remote = blocks.iter().find(|b| b.name == "Remote docs").unwrap();
-        assert_eq!(remote.state, "Read through an MCP server of Claude Code's");
+        assert_eq!(
+            remote.state,
+            "Read through one of Claude Code's MCP servers"
+        );
         let short = Rect { h: 24, ..AREA };
         let spots = settings.controls(short);
         let agents: Vec<_> = spots
@@ -3375,6 +3440,135 @@ mod tests {
         // The filter's rows place it the same way.
         settings.filter = TextBox::new("default");
         check(&settings.controls(AREA));
+    }
+
+    /// The Your agents card's list has a heading over it: its first row followed the plugin
+    /// cards with nothing over it, so it read at a glance as another copy of the Claude Code
+    /// card.
+    #[test]
+    fn the_agents_list_has_its_own_heading() {
+        let settings = page(Section::Integrations);
+        let area = Rect { h: 60, ..AREA };
+        let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        let theme = Theme::default();
+        let mut grid = Grid::new(area.w, area.h, theme.text);
+        settings.draw(&mut grid, area, &values(), (None, &measure), &theme);
+        let first = settings
+            .controls(area)
+            .iter()
+            .find(|(_, c)| matches!(c, Control::ToggleAgent(_)))
+            .expect("the list's first switch")
+            .0;
+        assert!(first.h > 0, "the list's first row is in view");
+        let y = (0..area.h)
+            .find(|y| grid.row_text(*y).contains("Your agents"))
+            .expect("the heading over the list");
+        assert_eq!(
+            y + 4,
+            first.y,
+            "the heading leaves two rows of air over its list"
+        );
+        assert!(
+            grid.row_text(y + 1).contains("Turn one off"),
+            "and says what a switch does: {}",
+            grid.row_text(y + 1)
+        );
+    }
+
+    /// A card's action stands on its title line, where its switch and every other button
+    /// stands, not centred between the title and the line under it, which aligned its words
+    /// with neither.
+    #[test]
+    fn a_cards_button_stands_on_its_title_line() {
+        let theme = Theme::default();
+        let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        let mut grid = Grid::new(AREA.w, AREA.h, theme.text);
+        let rect = Rect::new(4, 10, 12, 2);
+        draw_button(&mut grid, rect, "Install", true, (None, &measure), &theme);
+        let unit = cellix_render::UNIT as f32;
+        let chip = grid
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                cellix_render::Paint::Panel {
+                    bounds,
+                    fill: Some(_),
+                    ..
+                } => Some((
+                    bounds.x as f32 / unit,
+                    bounds.y as f32 / unit,
+                    (bounds.y + bounds.h) as f32 / unit,
+                )),
+                _ => None,
+            })
+            .expect("its chip");
+        assert!(
+            chip.1 >= 10.0 && chip.2 <= 11.0,
+            "the chip stands inside the title's row: {chip:?}"
+        );
+    }
+
+    /// The line between the Default agent and the cards stands halfway between the note's
+    /// foot and the first card's surface, which reaches 0.4 of a row above its row.
+    #[test]
+    fn the_line_over_the_cards_stands_between_them() {
+        let settings = page(Section::Integrations);
+        let measure = cellix_render::FontMeasure::new(17, 50).with_type_row(36);
+        let theme = Theme::default();
+        let mut grid = Grid::new(AREA.w, AREA.h, theme.text);
+        settings.draw(&mut grid, AREA, &values(), (None, &measure), &theme);
+        let page = SettingsPage::content(AREA);
+        let unit = cellix_render::UNIT as f32;
+        let line = grid
+            .paint
+            .iter()
+            .find_map(|p| match p {
+                cellix_render::Paint::Hairline { bounds, .. }
+                    if (bounds.x as f32 / unit) == f32::from(page.x) =>
+                {
+                    Some(bounds.y as f32 / unit)
+                }
+                _ => None,
+            })
+            .expect("the line over the cards");
+        // The note's ink ends 0.28 of a row over its row's foot (510 against 524 px on the
+        // retaken picture, rows 50 px apart); the first card's surface starts 0.4 of a row
+        // over its row, `BLOCKS_ROW` down the page.
+        let note_ink = f32::from(page.y) + f32::from(AGENT_ROW) + 2.0 - 0.28;
+        let card = f32::from(page.y) + f32::from(BLOCKS_ROW) - 0.4;
+        assert!(
+            (line - (note_ink + card) / 2.0).abs() < 0.05,
+            "the line stands {line}, not halfway between {note_ink} and {card}"
+        );
+    }
+
+    /// A note the room can't hold ends with an ellipsis rather than mid-word: the cell tier
+    /// cut the Default agent's at "Vali", where the pixel tier showed it whole.
+    #[test]
+    fn a_cut_note_ends_with_an_ellipsis() {
+        let settings = page(Section::Integrations);
+        let area = Rect { w: 80, ..AREA };
+        let theme = Theme::default();
+        let mut grid = Grid::new(area.w, area.h, theme.text);
+        settings.draw(
+            &mut grid,
+            area,
+            &values(),
+            (None, &cellix_render::CellMeasure),
+            &theme,
+        );
+        let at = (0..area.h)
+            .find(|y| grid.row_text(*y).contains("Default agent"))
+            .expect("the row");
+        let page = SettingsPage::content(area);
+        let note = grid.row_text(at + 1);
+        let shown = note[page.x as usize..].trim_end();
+        assert!(shown.ends_with('…'), "cut with an ellipsis: {shown:?}");
+        let room = page.right().saturating_sub(default_agent_total(&[], &[])) - page.x - 1;
+        assert!(
+            shown.chars().count() <= room as usize,
+            "{shown:?} fits in the {room} columns before the row's track"
+        );
     }
 
     #[test]
