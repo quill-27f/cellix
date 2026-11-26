@@ -2,6 +2,11 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.16.3] - 2026-11-26
+
+### Added
+- The pointer takes the hand over a link a press opens: with Ctrl held on a page's link or a terminal's, in the side pane and in peek, and on a comment's card, where a plain click opens it.
+
 ## [0.16.2] - 2026-11-26
 
 ### Fixed

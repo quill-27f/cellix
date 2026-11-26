@@ -625,7 +625,9 @@ To turn off smooth scrolling on a slow link, add this to `~/.config/cellix/setti
 ## The web
 
 `Open in Browser` in the palette, or Ctrl+click on a link, opens the link at the cursor, the
-current HTML file, or a Markdown file as a page of its own, with its math typeset. Right-click a
+current HTML file, or a Markdown file as a page of its own, with its math typeset. The pointer
+takes the hand over a link you can open — with Ctrl held on a page or in a terminal, and on a
+comment's card, where a plain click opens it. Right-click a
 link, on a page, in code, in a comment or in a terminal's output, for **Open Link** and **Copy
 Link**: Copy Link copies where it goes (a Markdown link's target, not its words), through your
 terminal's clipboard. A `file:line` a terminal prints has **Open File** and **Copy Path**. Set
