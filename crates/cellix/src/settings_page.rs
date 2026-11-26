@@ -40,12 +40,18 @@ const AGENT_WIDTH: u16 = 9;
 fn custom_agent_width(name: &str) -> u16 {
     name.chars().count() as u16 + 2
 }
-fn default_agent_total(customs: &[String], disabled: &[String]) -> u16 {
-    let on = DEFAULT_AGENTS
+/// The agents the Default agent row offers before the person's own: the built-in ones not
+/// turned off.
+fn default_agents_on(disabled: &[String]) -> Vec<(&'static str, &'static str)> {
+    DEFAULT_AGENTS
         .iter()
-        .filter(|(name, _)| !disabled.iter().any(|d| d == *name))
-        .count() as u16;
-    AGENT_WIDTH * on + customs.iter().map(|n| custom_agent_width(n)).sum::<u16>()
+        .copied()
+        .filter(|(name, _)| !disabled.iter().any(|d| d == name))
+        .collect()
+}
+fn default_agent_total(customs: &[String], disabled: &[String]) -> u16 {
+    AGENT_WIDTH * default_agents_on(disabled).len() as u16
+        + customs.iter().map(|n| custom_agent_width(n)).sum::<u16>()
 }
 /// Where the Default agent row and the integration cards start on Integrations, which
 /// scrolls whole where the window is short of room for every card.
@@ -1216,15 +1222,13 @@ impl SettingsPage {
                 let start = page
                     .right()
                     .saturating_sub(default_agent_total(&self.custom_agents, &self.disabled));
+                let on = default_agents_on(&self.disabled);
                 let mut x = start;
-                for (name, _) in DEFAULT_AGENTS
-                    .iter()
-                    .filter(|(name, _)| !self.disabled.iter().any(|d| d == *name))
-                {
+                for &(name, _) in &on {
                     spots.push((place(y, x, (AGENT_WIDTH, 1)), Control::DefaultAgent(name)));
                     x += AGENT_WIDTH;
                 }
-                let mut x = start + AGENT_WIDTH * 4;
+                let mut x = start + AGENT_WIDTH * on.len() as u16;
                 for (i, name) in self.custom_agents.iter().enumerate() {
                     let wide = custom_agent_width(name);
                     spots.push((place(y, x, (wide, 1)), Control::DefaultCustom(i)));
@@ -1317,16 +1321,14 @@ impl SettingsPage {
                     let start = page
                         .right()
                         .saturating_sub(default_agent_total(&self.custom_agents, &self.disabled));
+                    let on = default_agents_on(&self.disabled);
                     let mut x = start;
-                    for (name, _) in DEFAULT_AGENTS
-                        .iter()
-                        .filter(|(name, _)| !self.disabled.iter().any(|d| d == *name))
-                    {
+                    for &(name, _) in &on {
                         let rect = Rect::new(x, y, AGENT_WIDTH, 1);
                         spots.push((rect, Control::DefaultAgent(name)));
                         x += AGENT_WIDTH;
                     }
-                    let mut x = start + AGENT_WIDTH * 4;
+                    let mut x = start + AGENT_WIDTH * on.len() as u16;
                     for (i, name) in self.custom_agents.iter().enumerate() {
                         let wide = custom_agent_width(name);
                         let rect = Rect::new(x, y, wide, 1);
@@ -2493,7 +2495,13 @@ impl SettingsPage {
             heading(grid, at, "Integrations", note, theme);
         }
         if let Some(y) = self.integration_row(page, AGENT_ROW, 2) {
-            let room = page.right().saturating_sub(AGENT_WIDTH * 4 + 1);
+            let total = AGENT_WIDTH * default_agents_on(&self.disabled).len() as u16
+                + values
+                    .custom_agents
+                    .iter()
+                    .map(|n| custom_agent_width(n))
+                    .sum::<u16>();
+            let room = page.right().saturating_sub(total + 1);
             draw_text(grid, page, (y, room), DEFAULT_AGENT, theme);
         }
         let agents: Vec<(Rect, &str, bool)> = spots
@@ -3323,6 +3331,50 @@ mod tests {
             Some(Control::DefaultAgent(_))
         ));
         assert_eq!(settings.top, 0);
+    }
+
+    /// With agents turned off, the Default agent row offers only the ones left on, and the
+    /// person's runner follows the last of those: Codex and Gemini off, a runner's segment
+    /// was placed after a full track of four and ran off the page's right edge.
+    #[test]
+    fn a_runner_follows_the_agents_left_on() {
+        let mut settings = page(Section::Integrations);
+        settings.disabled = vec!["codex".to_string(), "gemini".to_string()];
+        settings.custom_agents = vec!["Claude Code (DeepSeek)".to_string()];
+        let page = SettingsPage::content(AREA);
+        let placed = |spots: &[(Rect, Control)], control: &Control| {
+            spots
+                .iter()
+                .find(|(_, c)| c == control)
+                .unwrap_or_else(|| panic!("{control:?} has no place"))
+                .0
+        };
+        let check = |spots: &[(Rect, Control)]| {
+            let auto = placed(spots, &Control::DefaultAgent("auto"));
+            let claude = placed(spots, &Control::DefaultAgent("claude"));
+            let runner = placed(spots, &Control::DefaultCustom(0));
+            assert!(
+                !spots
+                    .iter()
+                    .any(|(_, c)| matches!(c, Control::DefaultAgent("codex" | "gemini"))),
+                "the agents turned off are offered nowhere"
+            );
+            assert!(auto.x < claude.x);
+            assert_eq!(
+                runner.x,
+                claude.right(),
+                "the runner follows the agents left on"
+            );
+            assert_eq!(
+                runner.right(),
+                page.right(),
+                "and the row ends where the page's cards do"
+            );
+        };
+        check(&settings.controls(AREA));
+        // The filter's rows place it the same way.
+        settings.filter = TextBox::new("default");
+        check(&settings.controls(AREA));
     }
 
     #[test]
