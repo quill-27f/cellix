@@ -4782,3 +4782,9 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - `.cellix/.gitignore` learns every name Cellix keeps there, not only `tasks.jsonl`: the live repo's own ignore had missed `tasks.jsonl` as well.
 - Tests: `to_dos_are_read_from_a_log_that_skips_what_it_cant_read` (the feature), a mirror's ids and children, a group and Clear done, two writers at once, and `find`.
 - Unverified: nothing runs it yet — the view, the hook's mirror and `cellix todo` are next. Next: the crowded-width drawer, then the sidebar view.
+
+## To-dos: the drawer beside the agent (2026-11-26)
+
+- A view opened at 70 to 119 columns with the side pane open would leave the file and the agent too little, so the sidebar stands aside; it now comes as a drawer over the file's area, stopping at the pane's edge, with the rail where the cell tier has one. The palette's view commands, the rail and the tabs' button open it; a press elsewhere closes it, and it closes when the pane does or the window has room again. The drawer is closed before the pane takes a press, so a press on the agent closes it rather than being eaten under it.
+- Test: `a_view_opened_beside_the_agent_at_a_crowded_width_comes_as_a_drawer` (the drawer takes the main area exactly and not the pane; a press on the pane closes it; the rail opens it; closing the pane gives the sidebar back). The existing drawer, narrow and sidebar tests still pass.
+- Unverified: the To-dos view itself; this is the place it will appear. Next: the To-dos sidebar view.

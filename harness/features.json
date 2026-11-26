@@ -7859,5 +7859,12 @@
     "title": "To-dos are the replay of an append-only .cellix/todos.jsonl in order: a parent's state follows its children's, and a line that can't be read costs only itself",
     "test": "to_dos_are_read_from_a_log_that_skips_what_it_cant_read",
     "passes": true
+  },
+  {
+    "id": "sidebar-drawer-crowded",
+    "milestone": 16,
+    "title": "At 70 to 119 columns with the side pane open, a view opened from the palette or the rail comes as a drawer over the file's area, stopping at the pane's edge; a press elsewhere closes it, and closing the pane gives the sidebar back",
+    "test": "a_view_opened_beside_the_agent_at_a_crowded_width_comes_as_a_drawer",
+    "passes": true
   }
 ]

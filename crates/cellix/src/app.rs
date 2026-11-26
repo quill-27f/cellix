@@ -382,7 +382,8 @@ const RAIL_NAMES: [&str; 6] = [
     "Agent Context",
     "Settings",
 ];
-/// Below this width, opening the side pane puts the sidebar away.
+/// Below this width, opening the side pane puts the sidebar away, and a view opened there
+/// comes as a drawer over the file.
 const CROWDED_WIDTH: u16 = 120;
 const SIDEBAR_WIDTH: u16 = 28;
 /// The narrowest sidebar: what holds every view's icon, with a column clear at each end.
@@ -3275,7 +3276,7 @@ impl App {
         self.review = None;
         self.sidebar_view = SidebarView::Context;
         self.show_sidebar = true;
-        self.drawer = self.compact();
+        self.drawer = self.view_drawer();
         let mut running = self.dock.sessions.iter().filter(|s| s.agent());
         let found = running.find_map(|s| Some((ContextAgent::named(&s.name)?, s)));
         let agent = found.map_or(self.context.agent, |(agent, _)| agent);
@@ -4202,7 +4203,7 @@ impl App {
         self.search.show(word, found);
         self.sidebar_view = SidebarView::Search;
         self.show_sidebar = true;
-        self.drawer = self.compact();
+        self.drawer = self.view_drawer();
     }
 
     /// The word at the caret.
@@ -4583,6 +4584,22 @@ impl App {
         self.size.0 < DOCK_WIDTH
     }
 
+    /// Whether the sidebar can't stand beside the agent and isn't compact either: 70 to 119
+    /// columns with the pane open. A view opened there comes as a drawer over the file.
+    fn crowded(&self) -> bool {
+        !self.compact() && self.dock.open && self.size.0 < CROWDED_WIDTH
+    }
+
+    /// Whether a view opened now comes as a drawer.
+    fn view_drawer(&self) -> bool {
+        self.compact() || self.crowded()
+    }
+
+    /// Whether the sidebar is showing as a drawer over the file.
+    fn in_drawer(&self) -> bool {
+        self.drawer && self.view_drawer()
+    }
+
     /// Whether the views run across the top of the sidebar, level with the tabs. They do
     /// wherever there are pictures. Without them an icon is block art two rows tall, so the
     /// views stay down the left edge.
@@ -4732,9 +4749,20 @@ impl App {
                 .drawer
                 .then_some(Rect::new(0, 0, self.size.0, activity.h));
         }
-        // Beside an agent, a small window gives its room to the two things being compared.
-        if self.dock.open && self.size.0 < CROWDED_WIDTH {
-            return None;
+        // Beside an agent, a crowded window gives its room to the two things being compared:
+        // a view opened there comes as a drawer over the file, stopping at the pane's edge,
+        // and the rail stays where the cell tier has one.
+        if self.crowded() {
+            return self.drawer.then(|| {
+                let left = activity.right();
+                let height = self.size.1.saturating_sub(1);
+                let (right, bottom) = match self.dock_area() {
+                    Some(dock) if self.dock_under() => (self.size.0, dock.y),
+                    Some(dock) => (dock.x, height),
+                    None => (self.size.0, height),
+                };
+                Rect::new(left, 0, right.saturating_sub(left), bottom)
+            });
         }
         // Review uses the explorer's width: side-by-side code needs it more. Source Control
         // stays, since it's what the diff was opened from.
@@ -4748,11 +4776,15 @@ impl App {
         (self.size.0 / 4).clamp(SIDEBAR_MIN_WIDTH, SIDEBAR_WIDTH)
     }
 
-    /// Where the main area starts.
+    /// Where the main area starts. A drawer stands over the file and pushes nothing, so the
+    /// main area starts at the rail, as it does with the sidebar closed.
     fn main_left(&self) -> u16 {
+        if self.in_drawer() {
+            return self.rail().right();
+        }
         match self.sidebar_frame() {
-            Some(area) if !self.compact() => area.right(),
-            _ => self.rail().right(),
+            Some(area) => area.right(),
+            None => self.rail().right(),
         }
     }
 
@@ -5436,6 +5468,11 @@ impl App {
     }
 
     fn tick(&mut self) {
+        // A drawer belongs to a compact or crowded window; once the pane closes or the window
+        // has room again, the sidebar stands as it did.
+        if self.drawer && !self.view_drawer() {
+            self.drawer = false;
+        }
         // An agent killed without a word is no longer asking anything.
         for session in self.agents.prune() {
             self.inbox.drop_key(&format!("ask:{session}"));
@@ -10090,7 +10127,7 @@ impl App {
                 self.review = None;
                 self.sidebar_view = SidebarView::Source;
                 self.show_sidebar = true;
-                self.drawer = self.compact();
+                self.drawer = self.view_drawer();
                 self.source_age = 0;
                 self.source.refresh(self.workspace.root());
             }
@@ -10106,7 +10143,7 @@ impl App {
                 self.review = None;
                 self.sidebar_view = SidebarView::Outline;
                 self.show_sidebar = true;
-                self.drawer = self.compact();
+                self.drawer = self.view_drawer();
             }
             Command::SplitPane if self.compact() => self.say("Not enough room to split"),
             Command::Save => self.save(),
@@ -12686,7 +12723,7 @@ impl App {
     /// after what's on the sheets and before what floats over them, so nothing a sheet
     /// holds breaks its edge: a tab, a band of a diff, a block of a page.
     fn draw_sheet_edges(&self, grid: &mut Grid) {
-        if self.measure.in_cells() || (self.compact() && self.drawer) {
+        if self.measure.in_cells() || self.in_drawer() {
             return;
         }
         let frame = self.theme.activity;
@@ -13009,7 +13046,7 @@ impl App {
         self.review = None;
         self.sidebar_view = SidebarView::Search;
         self.show_sidebar = true;
-        self.drawer = self.compact();
+        self.drawer = self.view_drawer();
         self.search.focus = Some(field);
     }
 
@@ -13096,10 +13133,11 @@ impl App {
     }
 
     fn toggle_sidebar(&mut self) {
-        if self.compact() {
-            self.drawer = !self.drawer;
-        } else if self.sidebar_area().is_some() {
+        if self.sidebar_area().is_some() {
             self.hide_sidebar();
+        } else if self.view_drawer() {
+            self.show_sidebar = true;
+            self.drawer = true;
         } else {
             self.show_sidebar = true;
         }
@@ -16809,6 +16847,16 @@ impl App {
             self.run(command);
             return;
         }
+        // A press outside the drawer closes it, before the pane or anything under it takes
+        // the press.
+        if self.in_drawer()
+            && !self
+                .sidebar_frame()
+                .is_some_and(|area| area.contains(mouse.x, mouse.y))
+        {
+            self.drawer = false;
+            return;
+        }
         if mouse.x != u16::MAX && self.dock_mouse(mouse) {
             return;
         }
@@ -16848,11 +16896,6 @@ impl App {
                 self.drag = Drag::None;
                 self.autoscroll = None;
             }
-            return;
-        }
-        if self.compact() && self.drawer && !self.sidebar_frame().is_some_and(|a| a.contains(x, y))
-        {
-            self.drawer = false;
             return;
         }
         if self.activity_area().contains(x, y) {
@@ -18571,7 +18614,7 @@ impl App {
                 Command::ToggleSidebar => {
                     self.show_explorer();
                     self.show_sidebar = true;
-                    self.drawer = self.compact();
+                    self.drawer = self.view_drawer();
                 }
                 command => self.run(*command),
             }
@@ -18906,7 +18949,7 @@ impl App {
         let sheet = self.sheet_area();
         grid.fill(sheet, theme.text);
         self.draw_activity(grid);
-        let drawer_over_main = self.compact() && self.drawer;
+        let drawer_over_main = self.in_drawer();
         if drawer_over_main {
             self.draw_tabs(grid);
             // The views are the drawer's top row, over the tabs it covers.
@@ -40824,6 +40867,44 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         let text = screen(&app).text();
         assert!(text.contains("fn main"), "{text}");
         assert!(app.sidebar_area().is_none(), "the drawer closes on a pick");
+    }
+
+    /// Beside an agent at a crowded width the sidebar would leave the file too little room,
+    /// so a view opened there comes as a drawer over the file, stopping at the pane.
+    #[test]
+    fn a_view_opened_beside_the_agent_at_a_crowded_width_comes_as_a_drawer() {
+        let (_dir, mut app) = project();
+        app.run(Command::ListAgents);
+        assert!(app.dock.open, "the pane is open");
+        assert!(app.sidebar_area().is_none(), "the sidebar stands aside");
+        app.run(Command::ShowOutline);
+        assert!(app.sidebar_view == SidebarView::Outline);
+        assert!(app.drawer);
+        let main = app.main_area();
+        let frame = app.sidebar_frame().expect("a drawer");
+        assert_eq!(frame, main, "the drawer takes the file's area");
+        let pane = app.dock_area().expect("the pane");
+        assert!(
+            !pane.contains(frame.x + 1, frame.y + 2),
+            "not over the agent"
+        );
+
+        // A press on the agent closes it, and the view can come back.
+        app.handle(mouse(MouseKind::Left, pane.x + 2, pane.y + 2));
+        assert!(!app.drawer, "a press on the agent closes the drawer");
+        // The rail's Outline opens it too.
+        let rail = app.activity_area();
+        app.handle(mouse(MouseKind::Left, rail.x + 1, app.rail_row(2, rail)));
+        assert!(app.drawer);
+
+        // Closing the pane takes the drawer's reason away: the sidebar stands again.
+        app.run(Command::CloseDock);
+        app.tick();
+        assert!(!app.drawer);
+        assert!(
+            app.sidebar_area().is_some(),
+            "the sidebar shows beside nothing"
+        );
     }
 
     #[test]

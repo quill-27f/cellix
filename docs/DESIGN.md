@@ -2102,7 +2102,11 @@ Cellix often lives in a pane beside an agent, so width decides the layout. Under
 columns the activity bar goes, the sidebar becomes a drawer over the code, splits collapse
 to the focused pane, the status bar keeps only what fits, and review stacks changes.
 Under 80 columns, about what Claude Code leaves Cellix beside its chat, the layout is made
-for that width rather than squeezed. The five panel icons lead the side pane's header, as
+for that width rather than squeezed. Between 70 and 119 columns with the side pane open, the
+sidebar stands aside so the file and the pane keep their room; a view opened from the
+palette, the rail or the tabs' button comes as a drawer over the file, stopping at the pane's
+edge, and closes on a press elsewhere, when the pane closes, or when the window has room
+again. The five panel icons lead the side pane's header, as
 VS Code's panel shows its views, with the one showing named and no tab of its own. The top
 right keeps one icon that shows or hides the pane. Tabs out of view are
 counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs. A
