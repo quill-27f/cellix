@@ -4759,3 +4759,8 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - Scenes: 17-settings-integrations, 17b-top-agents-off and the switches' two retaken, the switches' wheel one notch further so all three agent rows stay in view with the heading; the ui-expert reviewed them twice. Its first pass measured the heading's air one row short and the divider even only by the row boxes, both fixed; its second confirmed 93/79 px against the Default agent's 94/80, the line at 47/46 px, the copy whole and unclipped, all five chips on their titles (dark and light), and accepted the segment-width trade below.
 - Left: a runner's segment in the Default agent row is its name's cells plus two, so where there are pixels its name shows more air each side than the built-ins' — a painted width would clip the name on the cell tier, which places a letter a column. A block card's state runs into its button in the pixel-tier scenes' screen text for the same reason (the pixel measure lets it fit its room; the cells under the paint clip it); on the cell tier the app measures in cells and the state ends with "…". The ON switch's knob is the button's ink, a cut-out look the canvas has; left as drawn.
 - Unverified: nothing new.
+
+## Release 0.16.2 (2026-11-26)
+
+- On the user's word: "go", after the ui-expert's list of what its 0.16.1 scene review left on Settings › Integrations. 0.16.2 is `bf7bbca`: the agents' switch list's heading, card actions on the title line, the divider even by the ink, a 4.5-to-1 ignored name in the tree in both themes, notes that end with an ellipsis rather than mid-word, and the Remote docs card's copy.
+- Unverified: nothing new (a real runner's Keychain prompt in background runs; a real doc tool's MCP server, as before).

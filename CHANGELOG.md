@@ -2,6 +2,13 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.16.2] - 2026-11-26
+
+### Fixed
+- Settings › Integrations' agents' switch list has a **Your agents** heading over it, its cards' actions stand on each card's title line as every other button does, the line under the Default agent sits evenly between the note and the cards, and the Remote docs card's copy reads cleanly.
+- A settings note too long for its room ends with "…" instead of stopping mid-word.
+- A gitignored file's name in the tree reads at 4.5 to 1 in both themes; it was 3.49 to 1 in the dark theme and 2.99 in the light.
+
 ## [0.16.1] - 2026-11-26
 
 ### Fixed
