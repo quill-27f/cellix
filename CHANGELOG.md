@@ -2,6 +2,11 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.16.1] - 2026-11-26
+
+### Fixed
+- Settings › Integrations' **Default agent** row keeps your runner's segment beside the agents left on. With agents turned off, the segment was placed after a full four-agent track: it began past where the choices ended and ran off the page, under the scrollbar, and the track stretched to the window's edge.
+
 ## [0.16.0] - 2026-11-25
 
 Your own agents, and the whole review at once.

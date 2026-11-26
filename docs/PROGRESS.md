@@ -4746,3 +4746,8 @@ Track W, fourth commit, on the user's word: "in comments, current edit delete wo
 - The ui-expert's review of the retaken picture measured the row right: the segments abut with no filler, each label centred in its rect, the track ending at x 2015 with the cards, the filter field and the divider, 24 px clear of the thumb, and the track's 39 px height matching the field's.
 - Left from that review, older than this change and not touched here: every integration card's action chip centres on the card's two text lines rather than its title line, while the agents' switches sit on the title line, so one of the two anchors should move (six cards); the line between the Default agent and the cards reads 39 px under its ink and 55 px over the next card; the agents' switch list has no heading above it, so its first row reads at first glance as a copy of the Claude Code plugin card; the dark theme's ignored grey (the tree's `target` row) is 3.49 to 1; and the cell tier cuts the Default agent's note at "Vali" where the pixel tier shows it whole.
 - Unverified: nothing new.
+
+## Release 0.16.1 (2026-11-26)
+
+- On the user's word: "Release it when you're done fixing". 0.16.1 is `ca378e2`: the Default agent row's runner follows the last agent left on, instead of being placed after a fixed four-agent track and running off the page. The ui-expert's review of the retaken scene measured it right; its findings elsewhere on the page are recorded in the entry above as left, not changed in this release.
+- Unverified: nothing new (a real runner's Keychain prompt in background runs; a real doc tool's MCP server, as in 0.16.0).
