@@ -2630,7 +2630,11 @@ fold under "Show N done", and Clear done takes only those.
 Claude Code's `TodoWrite` is mirrored by the PostToolUse hook as a replace for its session. New
 items match the old by text and then by list position, so a matched item keeps its id, its time
 and any children the person nested under it, and an unchanged list writes nothing. Each event
-carries Cellix's ids, so every reader of the log agrees on them.
+carries Cellix's ids, so every reader of the log agrees on them. The hook writes where its rule
+finds the project — the folder with a live socket, else the repository's top, else the folder
+when it is a repository — and the app reads its own workspace's log: a Cellix opened on the
+folder an agent runs in is the one the hook finds, and an agent working elsewhere in the
+repository writes at the top, which the app shows when that is the workspace it opened.
 
 ### Agents starting agents
 

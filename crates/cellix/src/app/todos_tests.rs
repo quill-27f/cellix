@@ -581,3 +581,76 @@ fn a_parent_is_done_only_when_all_its_children_are() {
     later.run(Command::ShowTodos);
     assert!(screen(&later).text().contains("No to-dos yet."));
 }
+
+/// Claude Code's `TodoWrite`, as its PostToolUse hook sees it, for the project at `root`.
+fn todo_write(root: &std::path::Path, session: &str, todos: serde_json::Value) {
+    let call = serde_json::json!({
+        "cwd": root,
+        "session_id": session,
+        "tool_name": "TodoWrite",
+        "tool_input": {"todos": todos},
+    });
+    cellix_agent::hook::handle("tool-done", &call.to_string());
+}
+
+#[test]
+fn claude_codes_to_dos_appear_and_change_as_it_works() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().to_path_buf();
+    // A repository's top: where the hook's rule keeps the log with no Cellix serving it.
+    std::fs::create_dir(root.join(".git")).unwrap();
+    let mut app = App::new(root.clone(), (160, 30));
+    app.run(Command::ShowTodos);
+    assert!(
+        screen(&app).text().contains("No to-dos yet."),
+        "{}",
+        screen(&app).text()
+    );
+
+    // The hook writes the whole list as Claude Code's session's own.
+    todo_write(
+        &root,
+        "s9",
+        serde_json::json!([
+            {"content": "Read the sort", "status": "completed", "activeForm": "Reading the sort"},
+            {"content": "Swap the lists", "status": "in_progress", "activeForm": "Swapping the lists"},
+            {"content": "Run the tests", "status": "pending", "activeForm": "Running the tests"},
+        ]),
+    );
+    assert!(app.poll(), "the log changed, so the view reads it again");
+    let grid = screen(&app);
+    let text = grid.text();
+    for words in [
+        "1 of 3",
+        "Swap the lists",
+        "Swapping the lists…",
+        "Run the tests",
+        "Show 1 done",
+        "✻",
+    ] {
+        assert!(text.contains(words), "{words:?} missing:\n{text}");
+    }
+
+    // The next call completes one and adds one: the rows change as the agent works, and the
+    // active form of the one it finished goes.
+    todo_write(
+        &root,
+        "s9",
+        serde_json::json!([
+            {"content": "Read the sort", "status": "completed", "activeForm": "Reading the sort"},
+            {"content": "Swap the lists", "status": "completed", "activeForm": "Swapping the lists"},
+            {"content": "Run the tests", "status": "pending", "activeForm": "Running the tests"},
+            {"content": "Write the notes", "status": "pending", "activeForm": "Writing the notes"},
+        ]),
+    );
+    assert!(app.poll());
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("2 of 4"), "{text}");
+    assert!(text.contains("Show 2 done"), "{text}");
+    assert!(text.contains("Write the notes"), "{text}");
+    assert!(
+        !text.contains("Swapping the lists…"),
+        "the finished item's form is gone:\n{text}"
+    );
+}

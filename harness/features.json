@@ -7894,5 +7894,12 @@
     "title": "A parent's children stand two columns in under an elbow and its state is theirs, so it is done only when all are; its box groups them, its chevron folds them, its progress says how far it has got, the + at its hovered row's end adds a child under it, and its × removes it with its children",
     "test": "a_parent_is_done_only_when_all_its_children_are",
     "passes": true
+  },
+  {
+    "id": "todos-mirror",
+    "milestone": 16,
+    "title": "Claude Code's TodoWrite is mirrored by its PostToolUse hook as a replace for its session, only when the call passed and the list is well formed and within its caps, so its items appear and change in the view as it works; a matched item keeps its id, time and the person's children, and an unchanged list writes nothing",
+    "test": "claude_codes_to_dos_appear_and_change_as_it_works",
+    "passes": true
   }
 ]

@@ -13,6 +13,9 @@ use crate::{AgentEvent, AgentState, TestRun, request, socket_path};
 
 /// Longest test output kept, from the end, where failures are.
 const MAX_OUTPUT: usize = 20_000;
+/// The most to-dos one `TodoWrite` may put in the list: a pasted list of thousands is cut,
+/// not written whole.
+const MAX_TODOS: usize = 200;
 const LABEL_LENGTH: usize = 60;
 /// The most of a prompt's first line a tab's tip shows as its name.
 const ASKED_LENGTH: usize = 120;
@@ -145,9 +148,13 @@ fn agent_of(input: &Value) -> String {
         .to_string()
 }
 
-/// Where the project's task log is: with the Cellix serving it, or else at the top of its
-/// repository. Outside both, as in a home folder, nothing is logged.
-fn task_root(roots: &[PathBuf]) -> Option<PathBuf> {
+/// Where the project's log is: the folder with the live socket, or else the top of its
+/// repository, or else the folder itself when it is a repository. Outside both, as in a home
+/// folder, nothing is logged. The hooks, `cellix todo` and the app read and write one file,
+/// `.cellix/todos.jsonl`, found by this rule; the app's own folder serves its socket, so the
+/// two agree, and an agent working elsewhere in the repository writes at its top unless a
+/// Cellix serves the folder it is in.
+pub fn project_root(roots: &[PathBuf]) -> Option<PathBuf> {
     roots
         .iter()
         .find(|r| socket_path(r).exists())
@@ -158,7 +165,7 @@ fn task_root(roots: &[PathBuf]) -> Option<PathBuf> {
 
 /// Adds to the task log of the project the hook is about. Never in the agent's way.
 fn log(roots: &[PathBuf], event: &Event) {
-    if let Some(root) = task_root(roots) {
+    if let Some(root) = project_root(roots) {
         let _ = tasks::record(&root, event);
     }
 }
@@ -421,7 +428,7 @@ fn on_prompt(roots: &[PathBuf], input: &Value) -> Option<String> {
     if let Some(root) = roots.first() {
         let prompt = input["prompt"].as_str().unwrap_or("Prompt");
         // The newest thread now, so the task view can tell which were made during this turn.
-        let event = task_root(roots).map(|log| {
+        let event = project_root(roots).map(|log| {
             let threads = threads::load(&log)
                 .map(|t| threads::next_id(&t) - 1)
                 .unwrap_or(0);
@@ -760,9 +767,58 @@ fn said_exit(text: &str) -> Option<i64> {
         })
 }
 
+/// Writes Claude Code's `TodoWrite` list as the whole of its session's to-dos: one replace,
+/// matched by the store so items the session already had keep their ids, times and any
+/// children the person nested under them, and an unchanged list writes nothing. A call whose
+/// list isn't what it should be is skipped, never in the agent's way.
+fn mirror_todos(roots: &[PathBuf], input: &Value) {
+    if agent_of(input) != "Claude Code" || input["tool_name"].as_str() != Some("TodoWrite") {
+        return;
+    }
+    let Some(todos) = input["tool_input"]["todos"].as_array() else {
+        return;
+    };
+    let mut items = Vec::with_capacity(todos.len().min(MAX_TODOS));
+    for todo in todos.iter().take(MAX_TODOS) {
+        let (Some(text), Some(state)) = (todo["content"].as_str(), todo["status"].as_str()) else {
+            // One bad item spoils the call: a replace with half the list would take away
+            // what the agent still has.
+            return;
+        };
+        let clip = |words: &str| -> String {
+            words
+                .chars()
+                .take(cellix_review::todos::TEXT_LENGTH)
+                .collect()
+        };
+        items.push(cellix_review::todos::Mirrored {
+            id: None,
+            text: clip(text),
+            state: cellix_review::todos::State::from_tool(state),
+            active: clip(todo["activeForm"].as_str().unwrap_or("")),
+        });
+    }
+    let Some(root) = project_root(roots) else {
+        return;
+    };
+    let source = format!("claude:{}", session_of(input));
+    let _ = cellix_review::todos::mirror(
+        &root,
+        &source,
+        "Claude Code",
+        &items,
+        cellix_review::todos::now(),
+    );
+}
+
 fn on_tool(roots: &[PathBuf], input: &Value, passed: bool) {
     // A tool ran, so whatever the agent asked leave for has been answered.
     tell(roots, input, AgentState::Working, "Working");
+    // Claude Code's own to-do list is the workspace's, as it stands after this call. Its newer
+    // TaskCreate and TaskUpdate tools have no schema here yet; follow them when one shows.
+    if passed {
+        mirror_todos(roots, input);
+    }
     let command = input["tool_input"]["command"].as_str().unwrap_or("");
     if !is_test_command(command) {
         return;
@@ -1687,6 +1743,56 @@ mod tests {
         handle("tool-done", &input(&root, edited));
         let event = next_event(&server, Duration::from_secs(5)).unwrap();
         assert_eq!(event.state, AgentState::Working);
+    }
+
+    #[test]
+    fn claude_codes_to_dos_are_written_as_a_replace() {
+        use cellix_review::todos::{self, State};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        // The rule finds a repository's top by `.git`: this is the folder a Cellix serving
+        // it would keep its log in.
+        std::fs::create_dir(root.join(".git")).unwrap();
+        let write = |todos: serde_json::Value| {
+            let call = json!({"tool_name": "TodoWrite", "tool_input": {"todos": todos}});
+            handle("tool-done", &input(&root, call));
+        };
+        write(json!([
+            {"content": "Read the sort", "status": "completed", "activeForm": "Reading the sort"},
+            {"content": "Swap the lists", "status": "in_progress", "activeForm": "Swapping the lists"},
+            {"content": "Run the tests", "status": "pending", "activeForm": "Running the tests"},
+        ]));
+        let items = todos::list(&root);
+        assert_eq!(items.len(), 3, "{items:?}");
+        assert_eq!(items[0].text, "Read the sort");
+        assert_eq!(items[0].state, State::Done);
+        assert_eq!(items[0].owner, "Claude Code");
+        assert_eq!(items[0].source, "claude:s1");
+        assert_eq!(items[1].state, State::Doing);
+        assert_eq!(items[1].active, "Swapping the lists");
+        assert_eq!(items[2].state, State::Todo);
+
+        // The next list keeps the item it still has, with its id; the one gone goes; a new
+        // one arrives.
+        let first = items[0].id.clone();
+        write(json!([
+            {"content": "Read the sort", "status": "pending", "activeForm": "Reading the sort"},
+            {"content": "Write the notes", "status": "pending", "activeForm": "Writing the notes"},
+        ]));
+        let items = todos::list(&root);
+        assert_eq!(items.len(), 2, "{items:?}");
+        assert_eq!(items[0].id, first);
+        assert_eq!(items[0].state, State::Todo);
+        assert_eq!(items[1].text, "Write the notes");
+
+        // A call that failed, and one whose list isn't what it should be, write nothing.
+        let log = root.join(".cellix/todos.jsonl");
+        let before = std::fs::read(&log).unwrap();
+        let failed = json!({"tool_name": "TodoWrite", "tool_input": {"todos": []}});
+        handle("tool-failed", &input(&root, failed));
+        assert_eq!(std::fs::read(&log).unwrap(), before);
+        write(json!([{"content": 3, "status": "pending"}]));
+        assert_eq!(std::fs::read(&log).unwrap(), before);
     }
 
     #[test]

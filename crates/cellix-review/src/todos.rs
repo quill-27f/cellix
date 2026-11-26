@@ -13,8 +13,9 @@ use serde::{Deserialize, Serialize};
 
 /// The log, one event a line, under the project.
 const FILE: &str = ".cellix/todos.jsonl";
-/// Longest item text kept. A pasted log can be megabytes; the start says what it's for.
-const TEXT_LENGTH: usize = 2000;
+/// Longest item text kept. A pasted log can be megabytes; the start says what it's for. The
+/// hook caps an agent's own words with it too.
+pub const TEXT_LENGTH: usize = 2000;
 /// The person's own name, as `owner` and `source`.
 pub const YOU: &str = "you";
 
