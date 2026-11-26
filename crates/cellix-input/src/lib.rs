@@ -247,6 +247,9 @@ pub enum Command {
     /// Shows what an agent works from in the sidebar: its instructions, skills, hooks and
     /// what its session read.
     ShowAgentContext,
+    /// Shows the workspace's shared to-dos in the sidebar: what agents and the person have
+    /// left to do.
+    ShowTodos,
     /// Brings a terminal up in the pane, starting one if there is none, or puts it away.
     ToggleTerminal,
     /// Starts another terminal in the pane.

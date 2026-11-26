@@ -58,6 +58,7 @@ mod terminal;
 mod theme;
 mod threads;
 mod timeline;
+mod todos;
 mod toolbar;
 mod transcript;
 mod wake;

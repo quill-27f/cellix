@@ -818,9 +818,15 @@ fn a_long_question_wraps_in_asks_field_and_stays_in_view() {
         .filter(|y| grid.row_text(*y).contains("word"))
         .collect();
     assert!(lines.len() >= 2, "{all}");
-    let second = grid.row_text(lines[1]);
-    let first_word = second.split_whitespace().next().unwrap().to_string();
-    let x = second.find(first_word.as_str()).unwrap() as u16;
+    // The row runs across the whole window, editor and sidebar included: the word pressed
+    // is the field's first, inside the card, not the first word anywhere on that row.
+    let row: Vec<char> = grid.row_text(lines[1]).chars().collect();
+    let to = (card.right() as usize).min(row.len());
+    let from = (card.x as usize).min(to);
+    let in_card: String = row[from..to].iter().collect();
+    let first_word = in_card.split_whitespace().next().unwrap().to_string();
+    let into = in_card.find(first_word.as_str()).unwrap();
+    let x = from as u16 + in_card[..into].chars().count() as u16;
     click(&mut app, x, lines[1]);
     let field = app.side.as_ref().unwrap().field.as_ref().unwrap();
     let at = field.text().find(first_word.as_str()).unwrap();

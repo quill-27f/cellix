@@ -156,12 +156,13 @@ const WELCOME_WIDTH: u16 = 44;
 const WELCOME_LEAD_ROWS: u16 = 4;
 const WELCOME_MIN_HEIGHT: u16 = 20;
 /// Activity bar buttons, with what each one runs.
-const ACTIVITY: [(Icon, Command); 6] = [
+const ACTIVITY: [(Icon, Command); 7] = [
     (Icon::Files, Command::ToggleSidebar),
     (Icon::Search, Command::FindInProject),
     (Icon::Outline, Command::ShowOutline),
     (Icon::Git, Command::ShowSourceControl),
     (Icon::Layers, Command::ShowAgentContext),
+    (Icon::ListTodo, Command::ShowTodos),
     (Icon::Settings, Command::OpenSettings),
 ];
 /// Cells each activity icon spans.
@@ -374,12 +375,13 @@ const FIND_NAMES: [&str; 6] = [
     "Replace (Enter)",
     "Replace All (Alt+Enter)",
 ];
-const RAIL_NAMES: [&str; 6] = [
+const RAIL_NAMES: [&str; 7] = [
     "Files",
     "Search",
     "Outline",
     "Source Control",
     "Agent Context",
+    "To-dos",
     "Settings",
 ];
 /// Below this width, opening the side pane puts the sidebar away, and a view opened there
@@ -389,9 +391,9 @@ const SIDEBAR_WIDTH: u16 = 28;
 /// The narrowest sidebar: what holds every view's icon, with a column clear at each end.
 const SIDEBAR_MIN_WIDTH: u16 = VIEW_INSET * 2 + VIEW_STEP * ACTIVITY.len() as u16;
 /// The narrowest sidebar whose views' row ends with the button that hides it. In a window
-/// whose quarter is narrower, as at 72 columns, the sidebar keeps the views' 20 columns and
+/// whose quarter is narrower, as at 72 columns, the sidebar keeps the views' 23 columns and
 /// the button stands at the start of the tabs, where the one that brings it back stands: a
-/// sidebar 23 columns wide for it took 50 px from the file there.
+/// sidebar 26 columns wide for it took another 50 px from the file there.
 const SIDEBAR_WITH_BUTTON: u16 = SIDEBAR_MIN_WIDTH + SIDEBAR_HIDE;
 /// The sidebar's own button, the side pane's mirrored: the window with its left part filled
 /// ends the views' row and hides it, and in outline it starts the tabs and brings it back.
@@ -600,6 +602,7 @@ enum SidebarView {
     Outline,
     Source,
     Context,
+    Todos,
 }
 
 /// Suggestions showing at the caret while typing.
@@ -1689,6 +1692,8 @@ pub struct App {
     timeline: crate::timeline::Timeline,
     /// What an agent works from, for the Agent Context view.
     context: ContextPanel,
+    /// The workspace's shared to-dos, for the To-dos view and the views' badge.
+    todos: crate::todos::Todos,
     /// Ticks since Source Control last read the repository.
     source_age: u32,
     /// The periodic look at the tree and git, on its way.
@@ -1934,6 +1939,9 @@ impl App {
         let settings = Settings::load(&root);
         let search = Search::new(root.clone());
         let workspace = Workspace::new(root);
+        // The list the views' row carries a count of, read before the first draw.
+        let mut todos = crate::todos::Todos::default();
+        todos.show(workspace.root());
         let side_kept = crate::ask::load(workspace.root());
         let mut explorer = Explorer::default();
         explorer.refresh(&workspace);
@@ -2139,6 +2147,7 @@ impl App {
             source: SourceControl::default(),
             timeline: crate::timeline::Timeline::default(),
             context: ContextPanel::default(),
+            todos,
             source_age: 0,
             disk_look: None,
             disk_seen: Arc::default(),
@@ -3287,6 +3296,16 @@ impl App {
         self.context.show(agent, self.workspace.root());
     }
 
+    /// Shows the workspace's shared to-dos, as the rail's checklist or View: Show To-dos does.
+    fn show_todos(&mut self) {
+        self.search.focus = None;
+        self.review = None;
+        self.sidebar_view = SidebarView::Todos;
+        self.show_sidebar = true;
+        self.drawer = self.view_drawer();
+        self.todos.show(self.workspace.root());
+    }
+
     fn click_context(&mut self, x: u16, y: u16) {
         let Some(area) = self.sidebar_area() else {
             return;
@@ -3616,6 +3635,7 @@ impl App {
             | self.poll_peek()
             | self.poll_side()
             | self.poll_remote()
+            | self.todos.poll(self.workspace.root())
             | self.poll_checks();
         let mut events = Vec::new();
         for client in self.servers.values() {
@@ -4972,6 +4992,7 @@ impl App {
             Command::FindInProject => shown && self.sidebar_view == SidebarView::Search,
             Command::ShowOutline => shown && self.sidebar_view == SidebarView::Outline,
             Command::ShowAgentContext => shown && self.sidebar_view == SidebarView::Context,
+            Command::ShowTodos => shown && self.sidebar_view == SidebarView::Todos,
             Command::ShowSourceControl => {
                 self.review.is_some() || (shown && self.sidebar_view == SidebarView::Source)
             }
@@ -9735,6 +9756,7 @@ impl App {
                 | Command::ShowOutline
                 | Command::ShowSourceControl
                 | Command::ShowAgentContext
+                | Command::ShowTodos
         );
         if sidebar && self.maximized.take().is_some() {
             self.fit_dock();
@@ -10135,6 +10157,10 @@ impl App {
                 self.hide_sidebar();
             }
             Command::ShowAgentContext => self.show_agent_context(),
+            Command::ShowTodos if self.rail_on(Command::ShowTodos) => {
+                self.hide_sidebar();
+            }
+            Command::ShowTodos => self.show_todos(),
             Command::ShowOutline if self.rail_on(Command::ShowOutline) => {
                 self.hide_sidebar();
             }
@@ -17022,6 +17048,8 @@ impl App {
                     self.source.scroll_by(delta);
                 } else if in_sidebar && self.sidebar_view == SidebarView::Context {
                     self.context.scroll_by(delta);
+                } else if in_sidebar && self.sidebar_view == SidebarView::Todos {
+                    self.todos.scroll_by(delta);
                 } else if in_sidebar {
                     self.explorer.scroll_by(delta);
                 } else if self.pane_at(x, y).is_some() {
@@ -17062,6 +17090,10 @@ impl App {
                 self.click_outline(y);
             }
             MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Outline => {}
+            // The to-dos are read here for now; their boxes and words take presses with the
+            // tick and rename that come next.
+            MouseKind::Left if in_sidebar && self.sidebar_view == SidebarView::Todos => {}
+            MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Todos => {}
             MouseKind::Right if in_sidebar && self.sidebar_view == SidebarView::Explorer => {
                 self.open_explorer_menu(x, y);
             }
@@ -18991,6 +19023,11 @@ impl App {
                     let root = self.workspace.root();
                     self.context.draw(grid, area, root, self.hover, theme);
                 }
+                SidebarView::Todos => {
+                    let measure = self.measure.clone();
+                    self.todos
+                        .draw(grid, area, self.hover, (theme, measure.as_ref()));
+                }
                 SidebarView::Source => {
                     let branch = self.branch.as_deref();
                     let measure = self.measure.clone();
@@ -20306,32 +20343,22 @@ impl App {
                 grid.panel(line, 0, Some(theme.accent), None);
             }
             let changed = self.changed_count();
-            if *command == Command::ShowSourceControl && changed > 0 {
-                let font = Font {
-                    bold: true,
-                    size: BADGE_SIZE,
-                    ..Font::default()
-                };
-                let count = changed.min(99).to_string();
-                let (least, tall) = BADGE_CHIP;
-                let text = self.measure.width(&count, font);
-                let width = (text + 0.6).max(least);
-                // At the icon's top right corner, ringed in the row's colour so it stands
-                // clear of the icon. Its right edge stays where one digit's is, so two grow
-                // over the icon and not into the next view's.
-                let right = left + VIEW_STEP as f32 / 2.0 + 0.3 + least;
-                let (left, top) = (right - width, top + VIEW_BADGE);
-                let ring = Bounds::cells(left - 0.12, top - 0.06, width + 0.24, tall + 0.12);
-                grid.panel(ring, PILL_RADIUS, Some(theme.activity.bg), None);
-                let chip = Bounds::cells(left, top, width, tall);
-                grid.panel(chip, PILL_RADIUS, Some(theme.accent), None);
-                grid.text_run(
-                    (left + (width - text) / 2.0, top + tall / 2.0 - 0.5),
-                    area.right() as f32,
-                    &count,
-                    (theme.button_text, false),
-                    font,
-                );
+            // Source Control's changed files, and the to-dos under way: one mark says
+            // something is waiting or moving wherever it stands.
+            let badge = if *command == Command::ShowSourceControl && changed > 0 {
+                Some(changed.min(99).to_string())
+            } else if *command == Command::ShowTodos && self.todos.in_progress() > 0 {
+                Some(self.todos.in_progress().min(99).to_string())
+            } else {
+                None
+            };
+            if let Some(count) = badge {
+                // At the icon's top right corner. Its right edge stays where one digit's is,
+                // so two grow over the icon and not into the next view's.
+                let right = left + VIEW_STEP as f32 / 2.0 + 0.3 + BADGE_CHIP.0;
+                let top = top + VIEW_BADGE;
+                let look = (theme.activity.bg, theme.accent, theme.button_text);
+                self.draw_badge(grid, (right, top), &count, look, area.right() as f32);
             }
         }
         if let Some(cell) = self.sidebar_hide() {
@@ -20358,6 +20385,40 @@ impl App {
             theme.activity.fg
         };
         toolbar::draw_icon(grid, (icon, ACTION_ICON), cell, color, ground);
+    }
+
+    /// A count on a chip whose right edge is at `right` and whose top is `top`: the chip in
+    /// `fill`, its digits in `ink`, ringed in `ground` so it stands clear of the icon under
+    /// it, and as wide as a digit at least. `clip` is the furthest right its letters may go
+    /// on the cell tier.
+    fn draw_badge(
+        &self,
+        grid: &mut Grid,
+        (right, top): (f32, f32),
+        count: &str,
+        (ground, fill, ink): (cellix_render::Rgb, cellix_render::Rgb, cellix_render::Rgb),
+        clip: f32,
+    ) {
+        let font = Font {
+            bold: true,
+            size: BADGE_SIZE,
+            ..Font::default()
+        };
+        let (least, tall) = BADGE_CHIP;
+        let text = self.measure.width(count, font);
+        let width = (text + 0.6).max(least);
+        let left = right - width;
+        let ring = Bounds::cells(left - 0.12, top - 0.06, width + 0.24, tall + 0.12);
+        grid.panel(ring, PILL_RADIUS, Some(ground), None);
+        let chip = Bounds::cells(left, top, width, tall);
+        grid.panel(chip, PILL_RADIUS, Some(fill), None);
+        grid.text_run(
+            (left + (width - text) / 2.0, top + tall / 2.0 - 0.5),
+            clip,
+            count,
+            (ink, false),
+            font,
+        );
     }
 
     /// How many files differ from HEAD, for the badge on the rail.
@@ -20433,37 +20494,17 @@ impl App {
             grid.put_icon(area.x + 1, y, *icon, ACTIVITY_ICON, style);
             let changed = self.changed_count();
             if *command == Command::ShowSourceControl && changed > 0 {
-                let color = self.theme.button_text;
-                let font = Font {
-                    bold: true,
-                    size: BADGE_SIZE,
-                    ..Font::default()
-                };
                 let count = changed.min(99).to_string();
                 // Over the icon's bottom right corner, as VS Code's is, and ending where the
                 // icon's tile does. Ringed in the rail's colour so it stands clear of the icon.
                 let (wide, high) = RAIL_PILL;
-                let (least, tall) = BADGE_CHIP;
                 let chip_right = area.x as f32 + (area.w as f32 + wide) / 2.0;
                 let chip_bottom = top + (1.0 + high) / 2.0;
-                let width = (self.measure.width(&count, font) + 0.6).max(least);
-                let (left, top) = (chip_right - width, chip_bottom - 0.12 - tall);
-                let ring = Bounds::cells(left - 0.12, top - 0.06, width + 0.24, tall + 0.12);
-                grid.panel(ring, PILL_RADIUS, Some(self.theme.activity.bg), None);
-                grid.panel(
-                    Bounds::cells(left, top, width, tall),
-                    PILL_RADIUS,
-                    Some(self.theme.accent),
-                    None,
-                );
-                let text = self.measure.width(&count, font);
-                grid.text_run(
-                    (left + (width - text) / 2.0, top + tall / 2.0 - 0.5),
-                    area.right() as f32 + 1.0,
-                    &count,
-                    (color, false),
-                    font,
-                );
+                let top = chip_bottom - 0.12 - BADGE_CHIP.1;
+                let theme = &self.theme;
+                let look = (theme.activity.bg, theme.accent, theme.button_text);
+                let clip = area.right() as f32 + 1.0;
+                self.draw_badge(grid, (chip_right, top), &count, look, clip);
             }
         }
         // The rail ends with the sidebar's button, which stays with it while the sidebar's
@@ -23074,6 +23115,8 @@ mod spacing_tests;
 mod strip_tests;
 #[cfg(test)]
 mod theme_tests;
+#[cfg(test)]
+mod todos_tests;
 #[cfg(test)]
 mod view_tests;
 #[cfg(test)]

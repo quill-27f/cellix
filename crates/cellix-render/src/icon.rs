@@ -125,6 +125,10 @@ pub enum Icon {
     Send = 95,
     /// Lucide's copy: two sheets, one over the other.
     Copy = 96,
+    /// A checklist: two boxes down the left, the first ticked, and the lines beside them.
+    /// The To-dos view, and not `ListTask`, which is a checked box and already means the Task
+    /// page's plan and the Inbox's.
+    ListTodo = 97,
 }
 
 /// One cell of an icon that is `width` by `height` cells.
@@ -150,7 +154,10 @@ impl Piece {
     pub fn decode(symbol: &str) -> Option<Self> {
         let mut chars = symbol.chars();
         let code = (chars.next()? as u32).checked_sub(BASE)?;
-        if chars.next().is_some() || code >= 1 << 12 {
+        // The icon's seven bits sit above the width, height, column and row's eight, and the
+        // plane holds codes up to its 15th bit: `ListTodo` is 97, past the four bits the
+        // first rail icons took.
+        if chars.next().is_some() || code >= 1 << 15 {
             return None;
         }
         let icon = match code >> 8 {
@@ -160,6 +167,7 @@ impl Piece {
             13 => Icon::Agents,
             14 => Icon::Outline,
             15 => Icon::Layers,
+            97 => Icon::ListTodo,
             _ => Icon::Settings,
         };
         Some(Self {
@@ -173,7 +181,7 @@ impl Piece {
 
     /// What the cell tier shows, since terminals can't draw the private plane.
     pub fn fallback(self) -> &'static str {
-        const ART: [[[&str; 3]; 2]; 7] = [
+        const ART: [[[&str; 3]; 2]; 8] = [
             [["▛", "▀", "▜"], ["▙", "▄", "▟"]],
             [["▞", "▀", "▚"], ["▚", "▄", "▟"]],
             [["●", "─", "●"], ["●", "─", "╯"]],
@@ -181,11 +189,13 @@ impl Piece {
             [["▗", "▄", "▖"], ["▐", "█", "▌"]],
             [["▪", "─", "─"], [" ", "▪", "─"]],
             [["▗", "▀", "▖"], ["▝", "▀", "▘"]],
+            [["☑", "─", " "], ["☐", "─", " "]],
         ];
         let art = match self.icon {
             Icon::Agents => 4,
             Icon::Outline => 5,
             Icon::Layers => 6,
+            Icon::ListTodo => 7,
             other => (other as usize).min(3),
         };
         if self.width == 1 || self.height == 1 {
@@ -199,6 +209,7 @@ impl Piece {
                 Icon::Agents => "◉",
                 Icon::Outline => "≡",
                 Icon::Layers => "≋",
+                Icon::ListTodo => "☐",
                 _ => "⚙",
             };
         }
@@ -310,6 +321,7 @@ fn half_stroke(icon: Icon) -> f32 {
         | Icon::ShowPane
         | Icon::HideSidebar
         | Icon::ShowSidebar
+        | Icon::ListTodo
         | Icon::ReplaceAll => 0.9,
         Icon::Agents => 0.8,
         Icon::AgentClaude => 1.3,
@@ -527,6 +539,14 @@ pub fn inked(icon: Icon, u: f32, v: f32) -> bool {
             .min(segment(p, (10.5, 16.8), (20.5, 16.8))),
         Icon::ListTask => rounded(p, (4.0, 4.0), (20.0, 20.0), 3.5)
             .min(path(p, &[(8.0, 12.2), (11.0, 15.2), (16.2, 9.0)])),
+        // Two boxes down the left, the first ticked, and two lines beside each.
+        Icon::ListTodo => rounded(p, (3.2, 4.0), (10.4, 11.2), 1.8)
+            .min(path(p, &[(5.1, 7.6), (6.5, 9.0), (8.8, 6.1)]))
+            .min(path(p, &[(13.4, 6.1), (20.6, 6.1)]))
+            .min(path(p, &[(13.4, 9.1), (18.6, 9.1)]))
+            .min(rounded(p, (3.2, 13.0), (10.4, 20.2), 1.8))
+            .min(path(p, &[(13.4, 15.4), (20.6, 15.4)]))
+            .min(path(p, &[(13.4, 18.4), (18.6, 18.4)])),
         Icon::Quote => segment(p, (4.5, 5.0), (4.5, 19.0))
             .min(segment(p, (9.5, 7.0), (20.5, 7.0)))
             .min(segment(p, (9.5, 12.0), (20.5, 12.0)))
@@ -1054,6 +1074,7 @@ mod tests {
             Icon::Git,
             Icon::Settings,
             Icon::Layers,
+            Icon::ListTodo,
         ] {
             let piece = Piece {
                 icon,
@@ -1117,6 +1138,7 @@ mod tests {
             Icon::Cloud,
             Icon::Send,
             Icon::Copy,
+            Icon::ListTodo,
         ] {
             let dots = (0..50)
                 .flat_map(|y| (0..50).map(move |x| (x, y)))

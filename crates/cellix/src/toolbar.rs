@@ -325,6 +325,7 @@ pub fn fallback(icon: Icon) -> &'static str {
         Icon::ListBullet => "•",
         Icon::ListNumber => "1",
         Icon::ListTask => "☐",
+        Icon::ListTodo => "☐",
         Icon::Quote => "▌",
         Icon::Sigma => "Σ",
         Icon::Table => "▦",

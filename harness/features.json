@@ -7866,5 +7866,12 @@
     "title": "At 70 to 119 columns with the side pane open, a view opened from the palette or the rail comes as a drawer over the file's area, stopping at the pane's edge; a press elsewhere closes it, and closing the pane gives the sidebar back",
     "test": "a_view_opened_beside_the_agent_at_a_crowded_width_comes_as_a_drawer",
     "passes": true
+  },
+  {
+    "id": "todos-sidebar",
+    "milestone": 16,
+    "title": "The To-dos view lists the workspace's log in progress first, then to do, then done, with a parent's children under it, marks for every state, its progress, and the owner's mark or a quiet you at the row's end, on cells and where there are pictures; the rail has a checklist icon with the count under way, and the log is read again on the next poll",
+    "test": "the_todos_view_lists_what_is_left_by_state_and_who_owns_it",
+    "passes": true
   }
 ]

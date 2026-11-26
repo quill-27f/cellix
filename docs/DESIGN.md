@@ -1569,12 +1569,13 @@ Settings, in three columns as a view has: a window with its left part filled, th
 icons at the top right and on their chip when pointed at, named "Hide Sidebar" with Ctrl+B
 quieter after it. Hidden, the button at the start of the tabs is the same window with its left
 part in outline, "Show Sidebar". The narrowest sidebar is what holds every view with a column
-clear at each end, 20 columns (`SIDEBAR_MIN_WIDTH`), and the button ends the views' row where the
-sidebar has the 23 that hold it too (`SIDEBAR_WITH_BUTTON`), a window of 92 columns or more. In a
-narrower one the sidebar keeps its 20 and the button stands at the start of the tabs, filled,
-"Hide Sidebar", in the place where the button that brings it back stands once it's hidden
-(decided after 0.11.0's review: a minimum of 23 for the button took a 72-column window's file
-50 px, and the Task page's details were cut short for it). Without pictures the rail ends with it, ◧ under Settings at the rail's foot, and keeps it
+clear at each end, 23 columns (`SIDEBAR_MIN_WIDTH`: seven views since To-dos), and the button
+ends the views' row where the sidebar has the 26 that hold it too (`SIDEBAR_WITH_BUTTON`), a
+window of 104 columns or more. In a narrower one the sidebar keeps its 23 and the button stands
+at the start of the tabs, filled, "Hide Sidebar", in the place where the button that brings it
+back stands once it's hidden (decided after 0.11.0's review: a minimum of 26 for the button at
+the views' row took a 72-column window's file 50 px, and the Task page's details were cut short
+for it; the 72-column window keeps 49 columns for the file). Without pictures the rail ends with it, ◧ under Settings at the rail's foot, and keeps it
 as ◫ while the sidebar is hidden, since there the tabs have no button. Ctrl+B does the same.
 Both themes are two surfaces: the frame (the views, the sidebar, the status bar) and the
 sheets on it (the file and the side pane, whatever it shows, a terminal too, each with its
