@@ -41,6 +41,8 @@ const CHILD_WORDS_LEFT: f32 = 110.0 / CELL;
 const INDENT: u16 = 2;
 const MARK_CELL: u16 = 3;
 const WORDS_CELL: u16 = 4;
+/// The column a parent's chevron stands in, one before its box.
+const CHEVRON: u16 = 2;
 
 /// One column clear at the sidebar's far edge, and three for the owner at a row's end.
 const RIGHT: u16 = 1;
@@ -61,6 +63,7 @@ const CLEAR: &str = "Clear done";
 const CLEAR_CELLS: &str = "Clear";
 /// The control at the list's end that opens a box for a new to-do.
 const ADD: &str = "+ Add a To-do";
+const ADD_CHILD: &str = "+ Add a Sub-task";
 /// The room a field stands in from the words' column, in columns: the canvas's 8 px.
 const FIELD_LEAD: f32 = 8.0 / 17.0;
 
@@ -69,26 +72,39 @@ const FIELD_LEAD: f32 = 8.0 / 17.0;
 enum Line {
     Section(&'static str, usize),
     Item(ItemRow),
-    Active { at: usize },
-    Fold { count: usize, open: bool },
+    Active {
+        at: usize,
+    },
+    /// The box a child is written in, under the parent the + was pressed on.
+    ChildAdd {
+        parent: String,
+    },
+    Fold {
+        count: usize,
+        open: bool,
+    },
     Add,
 }
 
 /// What a press in the view found: a box to tick, a row's words to rename, its remove mark,
-/// the fold, Clear done, or the add control.
+/// its chevron for its children, the + that adds a child, the fold, Clear done, or the add
+/// control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Hit {
     Box { at: usize },
     Words { at: usize },
     Remove { at: usize },
+    Children { at: usize },
+    AddChild { at: usize },
     Fold,
     Clear,
     Add,
 }
 
-/// The box the view has open: a new to-do at the list's end, or one being renamed.
+/// The box the view has open: a new to-do, at the list's end or under a parent when `parent`
+/// names one, or one being renamed.
 enum Editing {
-    Add,
+    Add { parent: Option<String> },
     Rename(String),
 }
 
@@ -162,7 +178,21 @@ impl Todos {
 
     /// Opens a box for a new to-do at the list's end.
     pub fn start_add(&mut self) {
-        self.field = Some((Editing::Add, TextBox::default()));
+        self.field = Some((Editing::Add { parent: None }, TextBox::default()));
+    }
+
+    /// Opens a box for a new child under `parent`, unfolding it first if it was folded.
+    pub fn start_child(&mut self, parent: &str) {
+        self.folded.remove(parent);
+        let parent = Some(parent.to_string());
+        self.field = Some((Editing::Add { parent }, TextBox::default()));
+    }
+
+    /// Turns a parent's children away, or back.
+    pub fn toggle_children(&mut self, parent: &str) {
+        if !self.folded.remove(parent) {
+            self.folded.insert(parent.to_string());
+        }
     }
 
     /// Opens the box that renames the item at `at`, its words in it and the caret after them.
@@ -187,10 +217,11 @@ impl Todos {
         };
         let text = field.text().trim().to_string();
         let written = match &editing {
-            Editing::Add if !text.is_empty() => {
-                store::add(root, &text, store::YOU, store::YOU, None, "").map(|_| ())
+            Editing::Add { parent } if !text.is_empty() => {
+                let parent = parent.as_deref();
+                store::add(root, &text, store::YOU, store::YOU, parent, "").map(|_| ())
             }
-            Editing::Add => Ok(()),
+            Editing::Add { .. } => Ok(()),
             Editing::Rename(id) if !text.is_empty() => store::edit(root, id, &text),
             Editing::Rename(_) => Ok(()),
         };
@@ -198,8 +229,9 @@ impl Todos {
             self.field = Some((editing, field));
             return Err(e);
         }
-        if matches!(editing, Editing::Add) {
-            self.field = Some((Editing::Add, TextBox::default()));
+        // The add box stays open for another, under the same parent if it was one's child.
+        if let Editing::Add { parent } = editing {
+            self.field = Some((Editing::Add { parent }, TextBox::default()));
         }
         Ok(())
     }
@@ -244,14 +276,27 @@ impl Todos {
                 let (words_x, words_cell) = words_left(depth);
                 (area.y + 1 + row as u16, words_x, words_cell)
             }
-            Editing::Add if self.counts().is_some() => {
+            Editing::Add { parent: Some(id) } => {
+                let at = lines
+                    .iter()
+                    .position(|line| matches!(line, Line::ChildAdd { parent } if parent == id))?;
+                let row = at.checked_sub(top)?;
+                if row >= visible {
+                    return None;
+                }
+                let (words_x, words_cell) = words_left(1);
+                (area.y + 1 + row as u16, words_x, words_cell)
+            }
+            Editing::Add { parent: None } if self.counts().is_some() => {
                 let row = lines.len().checked_sub(1)?.checked_sub(top)?;
                 if row >= visible {
                     return None;
                 }
                 (area.y + 1 + row as u16, WORDS_LEFT, WORDS_CELL)
             }
-            Editing::Add => (self.empty_parts(area, measure).1, WORDS_LEFT, WORDS_CELL),
+            Editing::Add { parent: None } => {
+                (self.empty_parts(area, measure).1, WORDS_LEFT, WORDS_CELL)
+            }
         };
         Some(field_rect(area, y, words_x, words_cell, measure))
     }
@@ -272,13 +317,19 @@ impl Todos {
         let line = lines.get(top + row)?;
         match line {
             Line::Item(item) => {
+                if item.progress.is_some() && x == area.x + CHEVRON {
+                    return Some(Hit::Children { at: item.at });
+                }
                 let (_, mark_cell) = mark_left(area, item.depth);
                 if x >= mark_cell && x < mark_cell + 1 {
                     return Some(Hit::Box { at: item.at });
                 }
                 let right = area.right().saturating_sub(RIGHT);
-                if x >= right.saturating_sub(OWNER) {
+                if x >= right.saturating_sub(1) {
                     return Some(Hit::Remove { at: item.at });
+                }
+                if item.depth == 0 && x == right.saturating_sub(OWNER) {
+                    return Some(Hit::AddChild { at: item.at });
                 }
                 let (_, words_cell) = words_left(item.depth);
                 let words = words_right(area, measure, item.progress);
@@ -304,7 +355,7 @@ impl Todos {
                 })
             }
             Line::Add => self.add_hit(area, x, measure),
-            Line::Section(..) | Line::Active { .. } => None,
+            Line::Section(..) | Line::Active { .. } | Line::ChildAdd { .. } => None,
         }
     }
 
@@ -434,7 +485,16 @@ impl Todos {
         if active {
             lines.push(Line::Active { at });
         }
-        if progress.is_some() && self.folded.contains(&item.id) {
+        let folded = progress.is_some() && self.folded.contains(&item.id);
+        if !folded
+            && depth == 0
+            && matches!(&self.field, Some((Editing::Add { parent: Some(id) }, _)) if id == &item.id)
+        {
+            lines.push(Line::ChildAdd {
+                parent: item.id.clone(),
+            });
+        }
+        if folded {
             return;
         }
         for (index, &child) in children.iter().enumerate() {
@@ -491,6 +551,12 @@ impl Todos {
                 }
                 Line::Active { at } => {
                     self.draw_active(grid, area, y, *at, (theme, measure));
+                }
+                Line::ChildAdd { .. } => {
+                    let (mark_x, _) = mark_left(area, 1);
+                    draw_elbow(grid, area, y, (mark_x, false), (theme, measure));
+                    let (words_x, words_cell) = words_left(1);
+                    self.draw_field(grid, area, y, words_x, words_cell, (theme, measure));
                 }
                 Line::Fold { count, open } => {
                     self.draw_fold(grid, area, y, (*count, *open), hover, (theme, measure));
@@ -556,7 +622,7 @@ impl Todos {
         hover: Option<(u16, u16)>,
         (theme, measure): (&Theme, &dyn Measure),
     ) {
-        if let Some((Editing::Add, _)) = &self.field {
+        if let Some((Editing::Add { parent: None }, _)) = &self.field {
             self.draw_field(grid, area, y, WORDS_LEFT, WORDS_CELL, (theme, measure));
             return;
         }
@@ -632,10 +698,10 @@ impl Todos {
         let Some((editing, field)) = &self.field else {
             return;
         };
-        let hint = if matches!(editing, Editing::Add) {
-            ADD
-        } else {
-            ""
+        let hint = match editing {
+            Editing::Add { parent: None } => ADD,
+            Editing::Add { parent: Some(_) } => ADD_CHILD,
+            Editing::Rename(_) => "",
         };
         let rect = field_rect(area, y, words_x, words_cell, measure);
         let shown = crate::palette::Input::of(field, hint, true, theme.sidebar.bg);
@@ -675,6 +741,15 @@ impl Todos {
                 None,
             );
         }
+        if progress.is_some() {
+            self.draw_chevron(
+                grid,
+                area,
+                y,
+                self.folded.contains(&item.id),
+                (theme, measure),
+            );
+        }
         let (mark_x, mark_cell) = mark_left(area, depth);
         if depth > 0 {
             draw_elbow(grid, area, y, (mark_x, last), (theme, measure));
@@ -707,8 +782,12 @@ impl Todos {
             WORD_SIZE,
         );
         if hovered {
-            // Under the pointer the owner gives way to the × that removes the row; on cells
-            // the progress gives way too, there being one column at the row's end.
+            // Under the pointer the owner gives way to the + that adds a child, on a top-level
+            // row, and the × that removes it; on cells the progress gives way too, there being
+            // only the one column at the row's end.
+            if depth == 0 {
+                self.draw_add_child(grid, right, y, (theme, measure));
+            }
             self.draw_remove(grid, right, y, (theme, measure));
             if !measure.in_cells()
                 && let Some((done, total)) = progress
@@ -747,6 +826,63 @@ impl Todos {
             icon: Icon::Close,
             color: colour,
         });
+    }
+
+    /// The + that adds a child to the row under the pointer, one column in from its ×.
+    fn draw_add_child(
+        &self,
+        grid: &mut Grid,
+        right: u16,
+        y: u16,
+        (theme, measure): (&Theme, &dyn Measure),
+    ) {
+        let colour = theme.tab.fg;
+        let cell = right.saturating_sub(OWNER);
+        let shown = Style {
+            fg: colour,
+            painted: true,
+            ..theme.sidebar
+        };
+        if measure.in_cells() {
+            grid.put_str(cell, y, "+", shown, cell + 1);
+            return;
+        }
+        let x = f32::from(cell) + 0.15;
+        let middle = y as f32 + 0.5;
+        grid.hairline(Bounds::cells(x, middle, 0.55, 0.0), colour);
+        grid.hairline(Bounds::cells(x + 0.27, middle - 0.18, 0.0, 0.36), colour);
+    }
+
+    /// A parent's chevron: down while its children show, turned right while they don't.
+    fn draw_chevron(
+        &self,
+        grid: &mut Grid,
+        area: Rect,
+        y: u16,
+        folded: bool,
+        (theme, measure): (&Theme, &dyn Measure),
+    ) {
+        let colour = theme.gutter.fg;
+        let cell = area.x + CHEVRON;
+        let fallback = if folded { "▸" } else { "▾" };
+        let shown = Style {
+            fg: colour,
+            painted: true,
+            ..theme.sidebar
+        };
+        grid.put_str(cell, y, fallback, shown, cell + 1);
+        if !measure.in_cells() {
+            let x = f32::from(cell);
+            grid.paint.push(Paint::Icon {
+                bounds: Bounds::cells(x, y as f32 + (1.0 - FOLD_MARK) / 2.0, FOLD_MARK, FOLD_MARK),
+                icon: if folded {
+                    Icon::ChevronRight
+                } else {
+                    Icon::ChevronDown
+                },
+                color: colour,
+            });
+        }
     }
 
     fn draw_active(

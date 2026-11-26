@@ -450,3 +450,134 @@ fn a_to_do_can_be_added_renamed_and_removed() {
     assert!(!text.contains("Write notes"), "{text}");
     assert!(text.contains("1 of 3"), "{text}");
 }
+
+/// A parent with two children, one of them done.
+fn parented() -> (TempDir, App) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let parent = todos::add(root, "Ship the release", "you", "you", None, "").unwrap();
+    let notes = todos::add(root, "Write the notes", "you", "you", Some(&parent), "").unwrap();
+    todos::set(root, &notes, State::Done).unwrap();
+    todos::add(root, "Run the checks", "you", "you", Some(&parent), "").unwrap();
+    let mut app = App::new(root.to_path_buf(), (160, 30));
+    app.run(Command::ShowTodos);
+    (dir, app)
+}
+
+#[test]
+fn a_parent_is_done_only_when_all_its_children_are() {
+    let (dir, mut app) = parented();
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(
+        text.contains("Ship the release") && text.contains("0 of 1"),
+        "{text}"
+    );
+    let parent = row_of(&grid, "Ship the release");
+    assert!(
+        grid.row_text(parent).contains('◐'),
+        "the parent part done: {}",
+        grid.row_text(parent)
+    );
+    assert!(
+        grid.row_text(parent).contains("1/2"),
+        "{}",
+        grid.row_text(parent)
+    );
+    assert!(
+        grid.row_text(row_of(&grid, "Write the notes"))
+            .contains('☑'),
+        "{}",
+        grid.row_text(row_of(&grid, "Write the notes"))
+    );
+    assert!(
+        grid.row_text(row_of(&grid, "Run the checks")).contains('☐'),
+        "{}",
+        grid.row_text(row_of(&grid, "Run the checks"))
+    );
+
+    // The chevron folds the children away and brings them back where it stands.
+    let area = app.sidebar_area().unwrap();
+    click(&mut app, area.x + 2, parent);
+    let grid = screen(&app);
+    assert!(
+        !grid.text().contains("Write the notes"),
+        "folded:\n{}",
+        grid.text()
+    );
+    assert!(grid.text().contains("Ship the release"), "{}", grid.text());
+    click(&mut app, area.x + 2, row_of(&grid, "Ship the release"));
+    let grid = screen(&app);
+    assert!(grid.text().contains("Write the notes"), "{}", grid.text());
+
+    // The box groups: every child done makes the parent done, so it folds away.
+    click(&mut app, area.x + 3, row_of(&grid, "Ship the release"));
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("1 of 1"), "{text}");
+    assert!(text.contains("Show 1 done"), "{text}");
+    let fold = row_of(&grid, "Show 1 done");
+    click(&mut app, area.x + 5, fold);
+    let grid = screen(&app);
+    let parent = row_of(&grid, "Ship the release");
+    assert!(
+        grid.row_text(parent).contains('☑'),
+        "the parent ticked: {}",
+        grid.row_text(parent)
+    );
+    assert!(
+        grid.row_text(parent).contains("2/2"),
+        "{}",
+        grid.row_text(parent)
+    );
+    assert!(
+        grid.row_text(row_of(&grid, "Write the notes"))
+            .contains('☑'),
+        "{}",
+        grid.row_text(row_of(&grid, "Write the notes"))
+    );
+
+    // A second press makes the whole group to do again, and the parent is not done.
+    click(&mut app, area.x + 3, parent);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("0 of 1"), "{text}");
+    assert!(
+        grid.row_text(row_of(&grid, "Ship the release"))
+            .contains('☐'),
+        "{}",
+        grid.row_text(row_of(&grid, "Ship the release"))
+    );
+
+    // The + under the pointer adds a child, under the parent, and the progress follows.
+    let parent = row_of(&grid, "Ship the release");
+    click(&mut app, area.right() - 4, parent);
+    typed(&mut app, "Check the docs");
+    key(&mut app, Key::Enter);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("Check the docs"), "{text}");
+    let parent = row_of(&grid, "Ship the release");
+    assert!(
+        grid.row_text(parent).contains("0/3"),
+        "a third child: {}",
+        grid.row_text(parent)
+    );
+    key(&mut app, Key::Esc);
+
+    // The × removes the parent, and its children with it.
+    let parent = row_of(&grid, "Ship the release");
+    click(&mut app, area.right() - 2, parent);
+    let grid = screen(&app);
+    let text = grid.text();
+    assert!(text.contains("No to-dos yet."), "{text}");
+    assert!(
+        !text.contains("Write the notes") && !text.contains("Check the docs"),
+        "the children went with it:\n{text}"
+    );
+
+    // And the log says the same to the next Cellix.
+    let mut later = App::new(dir.path().to_path_buf(), (160, 30));
+    later.run(Command::ShowTodos);
+    assert!(screen(&later).text().contains("No to-dos yet."));
+}

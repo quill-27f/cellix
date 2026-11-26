@@ -7887,5 +7887,12 @@
     "title": "The To-dos view adds one at the list's end (and on an empty list's button), renames one on a press on its words with a press in its box placing the caret, and removes one with the × that comes at the hovered row's end; Enter writes, Escape leaves it as it was, and the add box stays open for the next, all written to .cellix/todos.jsonl",
     "test": "a_to_do_can_be_added_renamed_and_removed",
     "passes": true
+  },
+  {
+    "id": "todos-subtasks",
+    "milestone": 16,
+    "title": "A parent's children stand two columns in under an elbow and its state is theirs, so it is done only when all are; its box groups them, its chevron folds them, its progress says how far it has got, the + at its hovered row's end adds a child under it, and its × removes it with its children",
+    "test": "a_parent_is_done_only_when_all_its_children_are",
+    "passes": true
   }
 ]

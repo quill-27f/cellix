@@ -3356,6 +3356,22 @@ impl App {
                     return;
                 }
             }
+            crate::todos::Hit::Children { at } => {
+                let Some(item) = self.todos.items.get(at) else {
+                    return;
+                };
+                let id = item.id.clone();
+                self.todos.toggle_children(&id);
+                return;
+            }
+            crate::todos::Hit::AddChild { at } => {
+                let Some(item) = self.todos.items.get(at) else {
+                    return;
+                };
+                let id = item.id.clone();
+                self.todos.start_child(&id);
+                return;
+            }
             crate::todos::Hit::Add => {
                 self.todos.start_add();
                 return;
