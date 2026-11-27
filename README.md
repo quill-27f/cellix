@@ -178,6 +178,34 @@ words and Comment as you go, then press **Check My Review** in the Comments pane
 
 ![Source Control, with a diff beside it](docs/images/source-control.png)
 
+## What is left
+
+The To-dos view is one list per workspace, shared by you and every agent. The checklist in the
+views row, or **View: Show To-dos**, shows what is under way first, then what is to do, and folds
+what is done under **Show 2 done**:
+
+- A row is its state's mark, its words, its progress while it has children, and its owner: the
+  agent's own mark, or a quiet **you**. A press on the box ticks it, a press on the words renames
+  it in place, and the × at its end under the pointer removes it. **+ Add a To-do** ends the list.
+- One level of sub-tasks. The + on a top-level row adds a child under it; a parent's box ticks all
+  of them, its chevron folds them away, and it is done only when all of them are. An item under
+  way shows the agent's own active form, quiet under its words.
+- Claude Code's to-dos appear and change by themselves as it works. Any other agent keeps the
+  list with `cellix todo`, which writes the same project log with no Cellix running:
+
+```bash
+cellix todo add "Read the sort code" --active "Reading the sort code"
+cellix todo add "Swap the lists" --parent <id>
+cellix todo set <id|text> doing
+cellix todo set <id|text> done
+cellix todo list
+```
+
+The list is per workspace, in `.cellix/todos.jsonl`, which git ignores. Beside an agent in a
+crowded window, To-dos opens as a drawer over the file, as every sidebar view does.
+
+![To-dos, with a parent's children, an item under way, and the done folded away](docs/images/todos.png)
+
 ## On its own
 
 Cellix is also a full editor you can run alone: `cellix` in a project, or `cellix src/lib.rs` for a
@@ -192,7 +220,7 @@ only their names, never their contents. Every agent has a switch there: turned o
 nowhere new, and what's already running keeps its tab.
 
 The window is your terminal's own colour, and the file and the side pane are sheets on it. The
-views (files, search, outline, source control, agent context, and Settings at the end) run across
+views (files, search, outline, source control, agent context, To-dos, and Settings at the end) run across
 the top of the sidebar, and the button after them hides it; the same mark at the start of the tabs
 brings it back. Every file has an icon of its kind, in the tree and on its tab. One bar at
 the foot holds your workspaces, the branch, the file's details, the bell, and the button that

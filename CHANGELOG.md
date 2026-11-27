@@ -2,6 +2,18 @@
 
 All notable changes to Cellix. Versions follow semver; each one is on the [releases page](https://github.com/quill-27f/cellix/releases).
 
+## [0.17.0] - 2026-11-27
+
+A shared list of what is left, for you and your agents.
+
+### Added
+- **To-dos.** A seventh view in the sidebar, and **View: Show To-dos**: one list per workspace, shared by you and every agent. In progress first, then to do, with done folded under **Show 2 done**. A row has its state's mark, its words, a parent's progress and its owner — the agent's own mark or a quiet **you**; a press on the box ticks it, on the words renames it in place, the × under the pointer removes it, and **+ Add a To-do** ends the list. One level of sub-tasks: the + on a top-level row adds a child, a parent's box ticks them all, its chevron folds them, and it is done only when all of them are. An item under way shows the agent's active form under its words. The list is `.cellix/todos.jsonl`, one event a line, so writers needn't coordinate and a line that can't be read costs only itself.
+- **Your agents' lists.** Claude Code's `TodoWrite` appears and changes by itself through its PostToolUse hook. Other agents keep theirs with `cellix todo add|set|active|edit|rm|list`, which writes the log directly, with no Cellix running; the shared Claude Code, Codex and Gemini skill tells them how. A write from an agent or the CLI shows in a running Cellix on its next tick.
+- **The drawer.** At 70 to 119 columns with the side pane open, any sidebar view, To-dos included, opens as a drawer over the file, stopping at the pane's edge; a press elsewhere closes it. The sidebar's minimum is 23 columns, seven views wide, so a 72-column window keeps 49 for the file.
+
+### Fixed
+- The file's tab row no longer shows through a drawer's views row.
+
 ## [0.16.3] - 2026-11-26
 
 ### Added
