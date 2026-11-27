@@ -2106,8 +2106,9 @@ Under 80 columns, about what Claude Code leaves Cellix beside its chat, the layo
 for that width rather than squeezed. Between 70 and 119 columns with the side pane open, the
 sidebar stands aside so the file and the pane keep their room; a view opened from the
 palette, the rail or the tabs' button comes as a drawer over the file, stopping at the pane's
-edge, and closes on a press elsewhere, when the pane closes, or when the window has room
-again. The five panel icons lead the side pane's header, as
+edge. The drawer is a panel of the frame's own, from under its views row to its foot, with the
+pane's edge and its own 2 px rule showing where it stops; it closes on a press elsewhere, when
+the pane closes, or when the window has room again. The five panel icons lead the side pane's header, as
 VS Code's panel shows its views, with the one showing named and no tab of its own. The top
 right keeps one icon that shows or hides the pane. Tabs out of view are
 counted at the ends of the strip ("‹ 2 more", "3 more ›"), and each count lists its tabs. A
@@ -2626,6 +2627,18 @@ One level of sub-tasks: a parent's state is its children's — done when all are
 any is, to do when none is — and its own state is ignored while it has children. A press on its
 box groups them; a done child under an unfinished parent stays visible. Done top-level groups
 fold under "Show N done", and Clear done takes only those.
+
+The view: what is under way first, then what is to do, and done folded away. A mark is one 16 px
+column where there are pictures and the glyphs ☐ / ◐ / ☑ on cells; the words start 76 px in —
+4.47 columns, the next cell on cells — and a parent's children stand two columns further under
+an elbow, as the Agents list draws one. A parent's progress and every row's owner — an agent's
+own mark, or a quiet "you" — end at the right; on cells a parent's progress takes the owner's
+place. A Doing row with an active form is two cells tall, the form quiet under it. A list ends
+with a quiet "Add a To-do" and an empty one offers it as a chip; a press on a row's words renames
+it in place, the row under the pointer shows + (add a child) and × (remove), and the views'
+checklist carries the count under way where there are pictures — at a 28-column views row or a
+drawer. At 23 to 27 columns the badge would sit on the checklist's right lines or the Settings
+icon, so the title and section counts carry it there.
 
 Claude Code's `TodoWrite` is mirrored by the PostToolUse hook as a replace for its session. New
 items match the old by text and then by list position, so a matched item keeps its id, its time

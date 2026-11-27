@@ -654,3 +654,31 @@ fn claude_codes_to_dos_appear_and_change_as_it_works() {
         "the finished item's form is gone:\n{text}"
     );
 }
+
+#[test]
+fn a_drawer_beside_the_pane_is_a_panel_with_an_edge() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut app = App::new(dir.path().to_path_buf(), (100, 30));
+    app.set_measure(Rc::new(FontMeasure::new(17, 37)));
+    app.run(Command::ListAgents);
+    app.run(Command::ShowTodos);
+    let frame = app.sidebar_frame().expect("the drawer");
+    let grid = screen(&app);
+    let border = app.theme.border;
+    let edge = cellix_render::units(f32::from(frame.right()));
+    assert!(
+        grid.paint.iter().any(|paint| matches!(
+            paint,
+            Paint::Panel {
+                bounds,
+                fill: Some(fill),
+                ..
+            } if *fill == border
+                && bounds.x == edge
+                && bounds.h >= cellix_render::units(20.0)
+        )),
+        "the drawer's right edge, at {}: {:?}",
+        frame.right(),
+        grid.paint
+    );
+}

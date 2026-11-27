@@ -141,6 +141,10 @@ EXPECT = {
     "26-light-settings": "Changes apply",
     "30-hover-menu": "Rename Symbol",
     "31-hover-palette": "Search files",
+    "160-todos": "IN PROGRESS",
+    "161-todos-drawer": "TO-DOS",
+    "162-todos-empty": "No to-dos yet.",
+    "163-todos-light": "IN PROGRESS",
     "35-hover-review": "Accept",
     "36-hover-accept": "Accept",
     "37-hover-settings": "files save",
@@ -234,7 +238,7 @@ EXPECT = {
 # About how many scenes there are, to cut the tour into parts of a size. Count them with
 # TOUR_LIST=1 when scenes are added: too low a count puts every scene past it in the last part,
 # which then runs out of the guard's time (0.11.0's tour lost ten scenes that way).
-SCENES_IN_ALL = 305
+SCENES_IN_ALL = 354
 # Scenes come to, shot, and those that never reached their surface.
 SEEN, SHOT, FAILED = [0], [], []
 # The scene shot last, with its picture's digest and what it was taken from; and this one's.
@@ -2841,6 +2845,40 @@ with tempfile.TemporaryDirectory() as made:
     shoot("81-context-open", [*show_context, *fold_checks, ["click", *ON("↳ AGENTS.md", 3)], ["wait", 1.0]], cwd=ctx, size="150x44")
     # The agent's name at the head of the view, which lists the others.
     shoot("81-context-codex", [*show_context, ["click", *ON("Claude Cod")], ["wait", 1.2]], cwd=ctx, size="150x44")
+
+    # The workspace's shared to-dos: a parent with its children, one item under way with its
+    # active form, owners' marks and the done folded away, in the sidebar and in the drawer
+    # beside an agent at a crowded width.
+    def seed_todos():
+        shutil.rmtree(f"{ROOT}/.cellix", ignore_errors=True)
+        os.makedirs(f"{ROOT}/.cellix", exist_ok=True)
+        events = [
+            {"kind": "add", "at": 1, "id": "t1", "text": "Fix the comment order", "owner": "you", "source": "you"},
+            {"kind": "add", "at": 2, "id": "t2", "text": "Read the sort code", "owner": "you", "source": "you", "parent": "t1"},
+            {"kind": "set", "at": 3, "id": "t2", "state": "done"},
+            {"kind": "add", "at": 4, "id": "t3", "text": "Swap the two lists", "owner": "you", "source": "you", "parent": "t1"},
+            {"kind": "add", "at": 5, "id": "t4", "text": "Run the tests", "owner": "you", "source": "you", "parent": "t1"},
+            {"kind": "add", "at": 6, "id": "t5", "text": "Run the tour", "owner": "Claude Code", "source": "claude:s1", "active": "Running the tour"},
+            {"kind": "set", "at": 7, "id": "t5", "state": "doing"},
+            {"kind": "add", "at": 8, "id": "t6", "text": "Add the export button", "owner": "Codex", "source": "codex:s2"},
+            {"kind": "add", "at": 9, "id": "t7", "text": "Write the release notes", "owner": "you", "source": "you"},
+            {"kind": "add", "at": 10, "id": "t8", "text": "Read the existing tests", "owner": "you", "source": "you"},
+            {"kind": "set", "at": 11, "id": "t8", "state": "done"},
+            {"kind": "add", "at": 12, "id": "t9", "text": "Ask Claude about the sort", "owner": "Claude Code", "source": "claude:s1"},
+            {"kind": "set", "at": 13, "id": "t9", "state": "done"},
+        ]
+        with open(f"{ROOT}/.cellix/todos.jsonl", "w") as f:
+            for event in events:
+                f.write(json.dumps(event) + "\n")
+    seed_todos()
+    shoot("160-todos", [*command("Show To-dos"), ["wait", 0.5]], CODE_FILE, cellix=True)
+    seed_todos()
+    shoot("161-todos-drawer", [*LIST_AGENTS, *command("Show To-dos"), ["wait", 0.5]], CODE_FILE,
+          size="100x30", cellix=True)
+    shoot("162-todos-empty", [*command("Show To-dos")], CODE_FILE)
+    seed_todos()
+    shoot("163-todos-light", [*command("Show To-dos"), ["wait", 0.5]], CODE_FILE, cellix=True,
+          background="eff1f5")
 
 if FAILED:
     print(f"{len(FAILED)} of {len(SHOT) + len(FAILED)} scenes failed: {', '.join(FAILED)}", flush=True)

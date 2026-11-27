@@ -12865,7 +12865,7 @@ impl App {
     /// after what's on the sheets and before what floats over them, so nothing a sheet
     /// holds breaks its edge: a tab, a band of a diff, a block of a page.
     fn draw_sheet_edges(&self, grid: &mut Grid) {
-        if self.measure.in_cells() || self.in_drawer() {
+        if self.measure.in_cells() {
             return;
         }
         let frame = self.theme.activity;
@@ -12892,8 +12892,33 @@ impl App {
             }
             pane => [Some(sheet(main)), pane],
         };
+        // A drawer stands where the file's sheet was, a panel of the frame's own: where it
+        // stops at the pane, the pane's edge shows and the file's is under the drawer; the
+        // compact drawer covers the pane and the window, so neither does.
+        let sheets = if self.in_drawer() {
+            if self.crowded() {
+                [None, sheets[1]]
+            } else {
+                [None, None]
+            }
+        } else {
+            sheets
+        };
         for bounds in sheets.into_iter().flatten() {
             sheet_edge(grid, bounds, frame.bg, self.theme.border);
+        }
+        // The drawer's own right edge, where it stops at the pane: the rule the file sheet's
+        // edge gives a sidebar beside it.
+        if self.in_drawer()
+            && self.crowded()
+            && let Some(drawer) = self.sidebar_frame()
+        {
+            let across = self
+                .measure
+                .cell_pixels()
+                .map_or(2.0 / 17.0, |(width, _)| 2.0 / width as f32);
+            let edge = Bounds::cells(f32::from(drawer.right()), 0.0, across, f32::from(drawer.h));
+            grid.panel(edge, 0, Some(self.theme.border), None);
         }
     }
 
@@ -19134,7 +19159,15 @@ impl App {
         let drawer_over_main = self.in_drawer();
         if drawer_over_main {
             self.draw_tabs(grid);
-            // The views are the drawer's top row, over the tabs it covers.
+            // The drawer is a panel of the frame's own, from under its views row to its foot:
+            // the sheet it stands over mustn't show at its top or beside it.
+            if let Some(frame) = self.sidebar_frame() {
+                let under = Rect::new(frame.x, frame.y + 1, frame.w, frame.h.saturating_sub(1));
+                grid.fill(under, theme.activity);
+            }
+            // The views are the drawer's top row, over the tabs it covers: what the tabs
+            // painted there goes, or their words show through the views' ground.
+            grid.clear_paint_in(self.activity_area());
             self.draw_activity(grid);
         }
         if let Some(area) = self.sidebar_area() {
@@ -19284,6 +19317,9 @@ impl App {
             return;
         }
         if drawer_over_main {
+            // The drawer's own edge, and the pane's where the drawer stops, stand over the
+            // file it covers.
+            self.draw_sheet_edges(grid);
             self.draw_status(grid);
             self.draw_overlay(grid);
             return;
@@ -20495,17 +20531,29 @@ impl App {
             let changed = self.changed_count();
             // Source Control's changed files, and the to-dos under way: one mark says
             // something is waiting or moving wherever it stands.
+            // The To-dos count stands only where the views' row is at its widest: at 23 to
+            // 27 columns there is no room for it clear of the checklist's right lines and
+            // the Settings icon, and the title and section counts carry it there.
+            let todos_badge = *command == Command::ShowTodos
+                && self.todos.in_progress() > 0
+                && area.w >= SIDEBAR_WIDTH;
             let badge = if *command == Command::ShowSourceControl && changed > 0 {
                 Some(changed.min(99).to_string())
-            } else if *command == Command::ShowTodos && self.todos.in_progress() > 0 {
+            } else if todos_badge {
                 Some(self.todos.in_progress().min(99).to_string())
             } else {
                 None
             };
             if let Some(count) = badge {
                 // At the icon's top right corner. Its right edge stays where one digit's is,
-                // so two grow over the icon and not into the next view's.
-                let right = left + VIEW_STEP as f32 / 2.0 + 0.3 + BADGE_CHIP.0;
+                // so two grow over the icon and not into the next view's. The To-dos count
+                // stands a little further right, clear of the checklist's own right lines.
+                let inset = if *command == Command::ShowTodos {
+                    0.75
+                } else {
+                    0.0
+                };
+                let right = left + VIEW_STEP as f32 / 2.0 + 0.3 + BADGE_CHIP.0 + inset;
                 let top = top + VIEW_BADGE;
                 let look = (theme.activity.bg, theme.accent, theme.button_text);
                 self.draw_badge(grid, (right, top), &count, look, area.right() as f32);
@@ -41066,7 +41114,8 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
     /// so a view opened there comes as a drawer over the file, stopping at the pane.
     #[test]
     fn a_view_opened_beside_the_agent_at_a_crowded_width_comes_as_a_drawer() {
-        let (_dir, mut app) = project();
+        let (dir, mut app) = project();
+        app.open(&dir.path().join("alpha.txt")).unwrap();
         app.run(Command::ListAgents);
         assert!(app.dock.open, "the pane is open");
         assert!(app.sidebar_area().is_none(), "the sidebar stands aside");
@@ -41080,6 +41129,13 @@ long/way/past/the/edge/of/any/page/there/could/ever/be/in/a/window/this/size.htm
         assert!(
             !pane.contains(frame.x + 1, frame.y + 2),
             "not over the agent"
+        );
+        // The drawer's views row covers the tabs it stands over, words and all.
+        let grid = screen(&app);
+        assert!(
+            !grid.row_text(0).contains("alpha.txt"),
+            "the tabs show through the views:\n{}",
+            grid.text()
         );
 
         // A press on the agent closes it, and the view can come back.

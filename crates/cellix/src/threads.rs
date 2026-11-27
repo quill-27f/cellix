@@ -931,7 +931,11 @@ fn stretch(advances: &[f32], from: usize, count: usize) -> f32 {
 /// comments then held more strings than the measure remembers, so every frame shaped all
 /// of them afresh: two thirds of a second for three hundred comments.
 pub fn wrap(text: &str, width: f32, measure: &dyn Measure) -> Vec<String> {
-    let font = Font::default();
+    wrap_in(text, width, Font::default(), measure)
+}
+
+/// The same for words set in `font`, as a quiet paragraph smaller than the interface's is.
+pub fn wrap_in(text: &str, width: f32, font: Font, measure: &dyn Measure) -> Vec<String> {
     let mut rows = Vec::new();
     for paragraph in text.lines() {
         let advances = measure.advances(paragraph, font);

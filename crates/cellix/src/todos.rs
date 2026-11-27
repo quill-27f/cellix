@@ -608,7 +608,18 @@ impl Todos {
         let right = area.right().saturating_sub(RIGHT);
         let x = area.x + WORDS_CELL;
         let space = words_room(measure, right, x, area.x as f32 + WORDS_LEFT);
-        let lines = crate::threads::wrap("An agent's plan shows here as it works.", space, measure);
+        // Wrapped in the size it's drawn in, not the interface's: measured in the row words'
+        // size, the paragraph broke a line short and left its last two words alone.
+        let font = cellix_render::Font {
+            size: ACTIVE_SIZE,
+            ..cellix_render::Font::default()
+        };
+        let lines = crate::threads::wrap_in(
+            "An agent's plan shows here as it works.",
+            space,
+            font,
+            measure,
+        );
         let button = area.y + 2 + lines.len() as u16;
         (lines, button)
     }
@@ -634,6 +645,31 @@ impl Todos {
                 hy == y && (hx as f32) >= left && (hx as f32) < left + wide
             }
         });
+        // An empty list has one action, and it's a chip, as the canvas draws its button; in
+        // a list of rows the fold stays the one filled pill and adding is quiet words, so a
+        // disclosure and a create action don't read as a pair of buttons.
+        let empty = self.counts().is_none();
+        if !empty {
+            let style = Style {
+                fg: if over { theme.sidebar.fg } else { theme.tab.fg },
+                ..theme.sidebar
+            };
+            let right = area.right().saturating_sub(RIGHT);
+            if measure.in_cells() {
+                grid.put_str(cell, y, ADD, style, right);
+            } else {
+                grid.label_at(
+                    left,
+                    cell,
+                    y,
+                    ADD,
+                    style,
+                    right,
+                    crate::measures::BUTTON_TEXT,
+                );
+            }
+            return;
+        }
         let quiet = theme.quiet_button(theme.sidebar.bg);
         let fill = if over {
             theme.quiet_button(quiet)
